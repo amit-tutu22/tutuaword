@@ -1,16 +1,31 @@
-use tw_model::{Alignment, LineSpacing, Paragraph, RevisionType};
+use tw_model::{Alignment, LineSpacing, Paragraph, RevisionType, TabStop};
 use tw_shape::{AtlasKey, GlyphAtlas, TextShaper};
 use unicode_linebreak::{linebreaks, BreakOpportunity};
 
 const MARKER_GUTTER: f32 = 24.0;
 
 /// Word's default tab grid (`w:defaultTabStop` of 720 twips), measured from the
-/// paragraph's text origin. Explicit `w:tabs` stops are not modelled yet.
-/// Word's default tab grid (`w:defaultTabStop` of 720 twips).
+/// paragraph's text origin. Explicit `w:tabs` stops override the grid when set.
 pub const DEFAULT_TAB_INTERVAL: f32 = 36.0;
 
-/// Next tab stop strictly after `cursor_x`, so a tab always advances.
-fn next_tab_stop(cursor_x: f32, origin_x: f32, tab_interval: f32) -> f32 {
+/// Next tab stop strictly after `cursor_x`, preferring explicit stops over the
+/// default grid.
+fn next_tab_stop(
+    cursor_x: f32,
+    origin_x: f32,
+    tab_interval: f32,
+    tab_stops: &[TabStop],
+) -> f32 {
+    let mut explicit = None;
+    for stop in tab_stops {
+        let pos = origin_x + stop.position;
+        if pos > cursor_x + 0.01 {
+            explicit = Some(explicit.map_or(pos, |best: f32| best.min(pos)));
+        }
+    }
+    if let Some(pos) = explicit {
+        return pos;
+    }
     let interval = tab_interval.max(1.0);
     let offset = cursor_x - origin_x;
     let stops = (offset / interval).floor() + 1.0;
@@ -23,7 +38,7 @@ fn with_opacity(argb: u32, factor: f32) -> u32 {
 }
 
 /// Where a paragraph is placed and how wide it may run.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ParagraphFrame {
     /// Left edge of the paragraph's text, including any indent.
     pub x: f32,
@@ -34,6 +49,8 @@ pub struct ParagraphFrame {
     pub tab_origin: f32,
     /// Distance between default tab stops (`DocumentSettings.default_tab_stop`).
     pub tab_interval: f32,
+    /// Explicit tab stops from paragraph formatting.
+    pub tab_stops: Vec<TabStop>,
 }
 
 impl ParagraphFrame {
@@ -46,11 +63,17 @@ impl ParagraphFrame {
             max_width,
             tab_origin: x,
             tab_interval: DEFAULT_TAB_INTERVAL,
+            tab_stops: Vec::new(),
         }
     }
 
     pub fn with_tab_interval(mut self, tab_interval: f32) -> Self {
         self.tab_interval = tab_interval.max(1.0);
+        self
+    }
+
+    pub fn with_tab_stops(mut self, tab_stops: Vec<TabStop>) -> Self {
+        self.tab_stops = tab_stops;
         self
     }
 
@@ -61,6 +84,7 @@ impl ParagraphFrame {
             max_width: column_width - indent,
             tab_origin: column_x,
             tab_interval: DEFAULT_TAB_INTERVAL,
+            tab_stops: Vec::new(),
         }
     }
 }
@@ -78,6 +102,7 @@ pub fn layout_paragraph(
         max_width,
         tab_origin,
         tab_interval,
+        tab_stops,
     } = frame;
     let font_id = shaper.default_font();
     let mut lines = Vec::new();
@@ -143,6 +168,7 @@ pub fn layout_paragraph(
                     current_y + ascent,
                     tab_origin,
                     tab_interval,
+                    &tab_stops,
                 ),
                 font_id,
                 default_color,
@@ -163,6 +189,7 @@ pub fn layout_paragraph(
             candidate,
             tab_origin - x,
             tab_interval,
+            &tab_stops,
             font_id,
         );
 
@@ -188,6 +215,7 @@ pub fn layout_paragraph(
                 current_y + ascent,
                 tab_origin,
                 tab_interval,
+                &tab_stops,
             ),
             font_id,
             default_color,
@@ -218,6 +246,7 @@ pub fn layout_paragraph(
                 current_y + ascent,
                 tab_origin,
                 tab_interval,
+                &tab_stops,
             ),
             font_id,
             default_color,
@@ -276,6 +305,7 @@ struct LineContext<'a> {
     baseline_y: f32,
     tab_origin: f32,
     tab_interval: f32,
+    tab_stops: &'a [TabStop],
 }
 
 fn atlas_ctx<'a>(
@@ -287,6 +317,7 @@ fn atlas_ctx<'a>(
     baseline_y: f32,
     tab_origin: f32,
     tab_interval: f32,
+    tab_stops: &'a [TabStop],
 ) -> LineContext<'a> {
     LineContext {
         para,
@@ -297,6 +328,7 @@ fn atlas_ctx<'a>(
         baseline_y,
         tab_origin,
         tab_interval,
+        tab_stops,
     }
 }
 
@@ -325,6 +357,7 @@ fn emit_line(
         ctx.baseline_y,
         ctx.tab_origin,
         ctx.tab_interval,
+        ctx.tab_stops,
         font_id,
         default_color,
     );
@@ -356,6 +389,7 @@ fn measure_range(
     end_byte: usize,
     tab_origin_offset: f32,
     tab_interval: f32,
+    tab_stops: &[TabStop],
     font_id: Option<tw_shape::FontId>,
 ) -> f32 {
     let Some(fid) = font_id.or_else(|| shaper.default_font()) else {
@@ -368,15 +402,20 @@ fn measure_range(
         if segment_text.is_empty() {
             continue;
         }
+        let base_size = run.format.font_size.unwrap_or(12.0);
+        let (size_scale, _) = script_scale(&run.format);
+        let size = base_size * size_scale;
         let run_font = font_for(shaper, &run.format, fid);
+        let mut shape_format = run.format.clone();
+        shape_format.font_size = Some(size);
         for (piece_index, piece) in segment_text.split('\t').enumerate() {
             if piece_index > 0 {
-                width = next_tab_stop(width, tab_origin_offset, tab_interval);
+                width = next_tab_stop(width, tab_origin_offset, tab_interval, tab_stops);
             }
             if piece.is_empty() {
                 continue;
             }
-            let shaped = shaper.shape(piece, &run.format, run_font);
+            let shaped = shaper.shape(piece, &shape_format, run_font);
             width += shaped.glyphs.iter().map(|g| g.x_advance).sum::<f32>();
         }
     }
@@ -391,13 +430,20 @@ pub fn apply_list_markers(
     marker: &str,
     marker_x: f32,
     default_color: u32,
+    marker_format: &tw_model::CharFormat,
 ) {
     if lines.is_empty() || marker.is_empty() {
         return;
     }
     let marker_para = Paragraph::with_text(marker.to_string());
     let baseline = lines[0].y;
-    let font_id = shaper.default_font();
+    let font_id = shaper
+        .default_font()
+        .map(|fallback| font_for(shaper, marker_format, fallback));
+    let marker_color = marker_format
+        .color
+        .map(|c| c.to_argb())
+        .unwrap_or(default_color);
     let (mut marker_line, _) = shape_line(
         shaper,
         atlas,
@@ -408,12 +454,23 @@ pub fn apply_list_markers(
         baseline,
         marker_x,
         DEFAULT_TAB_INTERVAL,
+        &[],
         font_id,
-        default_color,
+        marker_color,
     );
     lines[0].glyphs.append(&mut marker_line.glyphs);
     lines[0].list_marker = Some(marker.to_string());
     let _ = MARKER_GUTTER;
+}
+
+fn script_scale(format: &tw_model::CharFormat) -> (f32, f32) {
+    if format.superscript == Some(true) {
+        (0.65, -0.35)
+    } else if format.subscript == Some(true) {
+        (0.65, 0.15)
+    } else {
+        (1.0, 0.0)
+    }
 }
 
 fn shape_line(
@@ -426,6 +483,7 @@ fn shape_line(
     baseline_y: f32,
     tab_origin: f32,
     tab_interval: f32,
+    tab_stops: &[TabStop],
     font_id: Option<tw_shape::FontId>,
     default_color: u32,
 ) -> (super::types::TextLine, f32) {
@@ -447,11 +505,14 @@ fn shape_line(
         if segment_text.is_empty() {
             continue;
         }
-        let size = run.format.font_size.unwrap_or(default_size);
+        let base_size = run.format.font_size.unwrap_or(default_size);
+        let (size_scale, baseline_frac) = script_scale(&run.format);
+        let size = base_size * size_scale;
+        let baseline_shift = baseline_frac * base_size;
         let run_font = font_for(shaper, &run.format, fid);
         let (run_ascent, run_descent, run_gap) = shaper.vertical_metrics(run_font, size);
-        line_ascent = line_ascent.max(run_ascent);
-        line_descent = line_descent.max(run_descent);
+        line_ascent = line_ascent.max(run_ascent + baseline_shift.abs());
+        line_descent = line_descent.max(run_descent + baseline_shift.max(0.0));
         line_gap = line_gap.max(run_gap);
         let mut color = run
             .format
@@ -471,14 +532,16 @@ fn shape_line(
         // render them as `.notdef` boxes.
         for (piece_index, piece) in segment_text.split('\t').enumerate() {
             if piece_index > 0 {
-                cursor_x = next_tab_stop(cursor_x, tab_origin, tab_interval);
+                cursor_x = next_tab_stop(cursor_x, tab_origin, tab_interval, tab_stops);
             }
             if piece.is_empty() {
                 continue;
             }
 
             let piece_chars: Vec<char> = piece.chars().collect();
-            let shaped = shaper.shape(piece, &run.format, run_font);
+            let mut shape_format = run.format.clone();
+            shape_format.font_size = Some(size);
+            let shaped = shaper.shape(piece, &shape_format, run_font);
             for g in &shaped.glyphs {
                 let codepoint = piece_chars
                     .get(g.cluster as usize)
@@ -507,7 +570,7 @@ fn shape_line(
                         glyph_id: g.glyph_id,
                         codepoint,
                         x: cursor_x + g.x_offset + entry.bearing_x,
-                        y: baseline_y + g.y_offset - entry.bearing_y,
+                        y: baseline_y + baseline_shift + g.y_offset - entry.bearing_y,
                         width: entry.width as f32,
                         height: entry.height as f32,
                         atlas_x: entry.x as f32,
@@ -519,9 +582,7 @@ fn shape_line(
                     });
                 }
                 cursor_x += g.x_advance;
-            }
-            for ch in piece.chars() {
-                if ch == ' ' {
+                if codepoint == ' ' {
                     justify_stops.push(cursor_x);
                 }
             }

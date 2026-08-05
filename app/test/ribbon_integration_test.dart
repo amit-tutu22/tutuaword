@@ -8,6 +8,7 @@ import 'package:tutuaword/ui/ribbon_tabs/design_tab.dart';
 import 'package:tutuaword/ui/ribbon_tabs/home_tab.dart';
 import 'package:tutuaword/ui/ribbon_tabs/review_tab.dart';
 import 'package:tutuaword/ui/ribbon_tabs/view_tab.dart';
+import 'package:tutuaword/ui/ribbon_widgets.dart';
 import 'package:tutuaword/ui/status_bar.dart';
 import 'package:tutuaword/ui/title_bar.dart';
 import 'package:tutuaword/ui/word_theme.dart';
@@ -122,6 +123,37 @@ void main() {
       expect(find.text('Document Formatting'), findsOneWidget);
     });
 
+    testWidgets('Home tab font dropdown shows choices and updates controller', (tester) async {
+      await pumpWide(tester, HomeTab(controller: controller));
+
+      expect(find.text('Calibri'), findsOneWidget);
+      await tester.tap(find.text('Calibri'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Arial'), findsOneWidget);
+      expect(find.text('Times New Roman'), findsOneWidget);
+
+      await tester.tap(find.text('Arial').last);
+      await tester.pumpAndSettle();
+
+      expect(controller.fontFamily, 'Arial');
+    });
+
+    testWidgets('Home tab font size dropdown shows choices and updates controller', (tester) async {
+      await pumpWide(tester, HomeTab(controller: controller));
+
+      await tester.tap(find.text('11'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('14'), findsOneWidget);
+      expect(find.text('12'), findsOneWidget);
+
+      await tester.tap(find.text('14').last);
+      await tester.pumpAndSettle();
+
+      expect(controller.fontSize, 14);
+    });
+
     testWidgets('Home tab italic and underline toggles update controller', (tester) async {
       await pumpWide(tester, HomeTab(controller: controller));
 
@@ -156,6 +188,24 @@ void main() {
       await tester.pump();
 
       expect(controller.zoom, greaterThan(1.0));
+    });
+
+    testWidgets('Design tab disabled controls show Coming soon tooltip', (tester) async {
+      await pumpWide(tester, const DesignTab());
+
+      final tooltip = find.byTooltip(kComingSoonTooltip);
+      expect(tooltip, findsWidgets);
+
+      await tester.longPress(find.text('Office'));
+      await tester.pumpAndSettle();
+      expect(find.text(kComingSoonTooltip), findsOneWidget);
+    });
+
+    testWidgets('Review tab shows Export PDF and accept/reject placeholders', (tester) async {
+      await pumpWide(tester, ReviewTab(controller: controller));
+
+      expect(find.text('Export\nPDF'), findsOneWidget);
+      expect(find.byTooltip(kTrackChangeReviewTooltip), findsWidgets);
     });
 
     testWidgets('Switching tabs via ribbon strip updates visible content', (tester) async {

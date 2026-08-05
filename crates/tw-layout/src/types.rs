@@ -87,6 +87,8 @@ pub struct TableLayout {
     pub table_id: NodeId,
     pub cells: Vec<TableCellLayout>,
     pub grid_lines: Vec<f32>,
+    /// ARGB color per grid line segment (parallel to `grid_lines` chunks of 4).
+    pub grid_line_colors: Vec<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -209,6 +211,17 @@ impl LineMap {
         self.lines
             .first()
             .map(|line| (line.x, line.y, line.ascent + line.descent))
+    }
+
+    /// Last editable position on this page's final line.
+    pub fn tail_hit(&self, page: u32) -> Option<HitTestResult> {
+        let line = self.lines.last()?;
+        let (run_id, char_offset) = line_end_offset(line)?;
+        Some(HitTestResult {
+            page,
+            run_id,
+            char_offset,
+        })
     }
 }
 

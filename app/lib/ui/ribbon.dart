@@ -8,6 +8,7 @@ import 'package:tutuaword/ui/ribbon_tabs/mailings_tab.dart';
 import 'package:tutuaword/ui/ribbon_tabs/references_tab.dart';
 import 'package:tutuaword/ui/ribbon_tabs/review_tab.dart';
 import 'package:tutuaword/ui/ribbon_tabs/view_tab.dart';
+import 'package:tutuaword/ui/ribbon_widgets.dart';
 import 'package:tutuaword/ui/word_theme.dart';
 
 enum RibbonTab {
@@ -113,7 +114,7 @@ class _TabStrip extends StatelessWidget {
               ),
             ),
           ),
-          _ShareButton(onPressed: () {}),
+          _ShareButton(onPressed: null, tooltip: kComingSoonTooltip),
           const SizedBox(width: 12),
         ],
       ),
@@ -168,9 +169,10 @@ class _TabItemState extends State<_TabItem> {
 }
 
 class _ShareButton extends StatefulWidget {
-  const _ShareButton({this.onPressed});
+  const _ShareButton({this.onPressed, this.tooltip});
 
   final VoidCallback? onPressed;
+  final String? tooltip;
 
   @override
   State<_ShareButton> createState() => _ShareButtonState();
@@ -181,24 +183,39 @@ class _ShareButtonState extends State<_ShareButton> {
 
   @override
   Widget build(BuildContext context) {
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
-      child: GestureDetector(
-        onTap: widget.onPressed,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-          decoration: BoxDecoration(
-            color: _hovered ? WordTheme.ribbonHover : Colors.transparent,
-            borderRadius: BorderRadius.circular(3),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.share_outlined, size: 16, color: WordTheme.ribbonText),
-              const SizedBox(width: 4),
-              Text('Share', style: WordTheme.tabLabel),
-            ],
+    final enabled = widget.onPressed != null;
+    final tooltip = widget.tooltip ?? (enabled ? null : kComingSoonTooltip);
+
+    return wrapRibbonTooltip(
+      tooltip,
+      MouseRegion(
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() => _hovered = false),
+        child: GestureDetector(
+          onTap: widget.onPressed,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            decoration: BoxDecoration(
+              color: _hovered && enabled ? WordTheme.ribbonHover : Colors.transparent,
+              borderRadius: BorderRadius.circular(3),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.share_outlined,
+                  size: 16,
+                  color: enabled ? WordTheme.ribbonText : WordTheme.ribbonTextDisabled,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  'Share',
+                  style: WordTheme.tabLabel.copyWith(
+                    color: enabled ? WordTheme.ribbonText : WordTheme.ribbonTextDisabled,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),

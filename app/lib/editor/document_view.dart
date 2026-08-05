@@ -190,16 +190,23 @@ class _DocumentViewState extends State<DocumentView> {
           child: Transform.scale(
             scale: controller.zoom,
             alignment: Alignment.topCenter,
-            child: GestureDetector(
-              onTap: readOnly ? () => controller.setCurrentPage(index) : null,
-              child: _PageCanvas(
-                key: ValueKey('page-$index-${controller.displayVersion}'),
-                controller: controller,
-                pageIndex: index,
-                snapshot: _snapshots[index],
-                atlasImage: _atlasImage,
-                images: _images,
-                readOnly: readOnly,
+            child: ClipRect(
+              clipBehavior: Clip.hardEdge,
+              child: SizedBox(
+                width: controller.pageWidth,
+                height: controller.pageHeight,
+                child: GestureDetector(
+                  onTap: readOnly ? () => controller.setCurrentPage(index) : null,
+                  child: _PageCanvas(
+                    key: ValueKey('page-$index-${controller.displayVersion}'),
+                    controller: controller,
+                    pageIndex: index,
+                    snapshot: _snapshots[index],
+                    atlasImage: _atlasImage,
+                    images: _images,
+                    readOnly: readOnly,
+                  ),
+                ),
               ),
             ),
           ),
@@ -340,71 +347,74 @@ class _PageCanvasState extends State<_PageCanvas> {
   Widget build(BuildContext context) {
     final pageText = widget.controller.textForPage(widget.pageIndex);
 
-    return Container(
-      width: widget.controller.pageWidth,
-      height: widget.controller.pageHeight,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.15),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Stack(
-        children: [
-          if (_wantGlyphEditor)
-            GlyphEditorSurface(
-              controller: widget.controller,
-              pageIndex: widget.pageIndex,
-              snapshot: widget.snapshot ?? DisplayListSnapshot.empty(),
-              atlasImage: widget.atlasImage,
-              images: widget.images,
-            )
-          else if (_canPaintDisplayList && widget.snapshot != null)
-            CustomPaint(
-              size: Size(widget.controller.pageWidth, widget.controller.pageHeight),
-              painter: DocumentPainter(
-                snapshot: widget.snapshot!,
+    return ClipRect(
+      clipBehavior: Clip.hardEdge,
+      child: Container(
+        width: widget.controller.pageWidth,
+        height: widget.controller.pageHeight,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.15),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Stack(
+          children: [
+            if (_wantGlyphEditor)
+              GlyphEditorSurface(
+                controller: widget.controller,
+                pageIndex: widget.pageIndex,
+                snapshot: widget.snapshot ?? DisplayListSnapshot.empty(),
                 atlasImage: widget.atlasImage,
                 images: widget.images,
-              ),
-            )
-          else if (_useTextEditor && !widget.readOnly && _textController != null)
-            Padding(
-              padding: const EdgeInsets.all(72),
-              child: TextField(
-                controller: _textController,
-                focusNode: _focusNode,
-                maxLines: null,
-                style: _textStyle,
-                textAlign: widget.controller.alignment,
-                decoration: const InputDecoration(
-                  border: InputBorder.none,
-                  isCollapsed: true,
-                  contentPadding: EdgeInsets.zero,
+              )
+            else if (_canPaintDisplayList && widget.snapshot != null)
+              CustomPaint(
+                size: Size(widget.controller.pageWidth, widget.controller.pageHeight),
+                painter: DocumentPainter(
+                  snapshot: widget.snapshot!,
+                  atlasImage: widget.atlasImage,
+                  images: widget.images,
                 ),
-                cursorColor: Colors.black,
-                selectionControls: materialTextSelectionControls,
+              )
+            else if (_useTextEditor && !widget.readOnly && _textController != null)
+              Padding(
+                padding: const EdgeInsets.all(72),
+                child: TextField(
+                  controller: _textController,
+                  focusNode: _focusNode,
+                  maxLines: null,
+                  style: _textStyle,
+                  textAlign: widget.controller.alignment,
+                  decoration: const InputDecoration(
+                    border: InputBorder.none,
+                    isCollapsed: true,
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                  cursorColor: Colors.black,
+                  selectionControls: materialTextSelectionControls,
+                ),
+              )
+            else if (_useTextEditor && widget.readOnly)
+              Padding(
+                padding: const EdgeInsets.all(72),
+                child: Text(
+                  pageText,
+                  style: _textStyle,
+                  textAlign: widget.controller.alignment,
+                ),
+              )
+            else
+              const Padding(
+                padding: EdgeInsets.all(72),
+                child: Text('Start typing…', style: TextStyle(fontSize: 12)),
               ),
-            )
-          else if (_useTextEditor && widget.readOnly)
-            Padding(
-              padding: const EdgeInsets.all(72),
-              child: Text(
-                pageText,
-                style: _textStyle,
-                textAlign: widget.controller.alignment,
-              ),
-            )
-          else
-            const Padding(
-              padding: EdgeInsets.all(72),
-              child: Text('Start typing…', style: TextStyle(fontSize: 12)),
-            ),
-        ],
+          ],
+        ),
       ),
     );
   }

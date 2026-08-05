@@ -72,6 +72,9 @@ pub struct Table {
     pub id: NodeId,
     pub format: TableFormat,
     pub rows: Vec<TableRow>,
+    /// Imported OOXML table style id, if any.
+    #[serde(default)]
+    pub style_id: Option<crate::ids::StyleId>,
 }
 
 impl Table {
@@ -90,6 +93,7 @@ impl Table {
                 border: Some(BorderSpec::default()),
             },
             rows: table_rows,
+            style_id: None,
         }
     }
 }

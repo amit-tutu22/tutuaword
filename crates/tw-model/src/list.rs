@@ -16,6 +16,19 @@ pub struct ListLevel {
     /// How far left of the text the marker hangs, in points.
     pub hanging: f32,
     pub suffix: ListSuffix,
+    /// OOXML `w:lvlText` template (`%1`, `%2`, or a literal bullet glyph).
+    #[serde(default)]
+    pub marker_text: Option<String>,
+    /// First value for this level (`w:start`).
+    #[serde(default = "default_list_start")]
+    pub start: u32,
+    /// Character formatting for the list marker (`w:lvl/w:rPr`).
+    #[serde(default)]
+    pub char_format: crate::format::CharFormat,
+}
+
+fn default_list_start() -> u32 {
+    1
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -54,6 +67,9 @@ impl NumberingDefinition {
                     indent: 36.0,
                     hanging: 18.0,
                     suffix: ListSuffix::Tab,
+                    marker_text: None,
+                    start: 1,
+                    char_format: crate::format::CharFormat::default(),
                 },
                 ListLevel {
                     level: 1,
@@ -61,6 +77,9 @@ impl NumberingDefinition {
                     indent: 72.0,
                     hanging: 18.0,
                     suffix: ListSuffix::Tab,
+                    marker_text: None,
+                    start: 1,
+                    char_format: crate::format::CharFormat::default(),
                 },
             ],
         }
@@ -77,6 +96,9 @@ impl NumberingDefinition {
                     indent: 36.0,
                     hanging: 18.0,
                     suffix: ListSuffix::Tab,
+                    marker_text: None,
+                    start: 1,
+                    char_format: crate::format::CharFormat::default(),
                 },
                 ListLevel {
                     level: 1,
@@ -84,6 +106,9 @@ impl NumberingDefinition {
                     indent: 72.0,
                     hanging: 18.0,
                     suffix: ListSuffix::Tab,
+                    marker_text: None,
+                    start: 1,
+                    char_format: crate::format::CharFormat::default(),
                 },
             ],
         }
@@ -121,20 +146,49 @@ pub fn format_list_marker(def: &NumberingDefinition, level: u32, index: u32) -> 
         return String::new();
     };
 
+    let number = index + lvl.start;
+
+    if let Some(ref template) = lvl.marker_text {
+        if template.contains('%') {
+            return expand_lvl_text(template, number, lvl.format);
+        }
+        return template.clone();
+    }
+
     match lvl.format {
         ListMarkerFormat::Bullet => "•".into(),
-        ListMarkerFormat::Decimal => format!("{}.", index + 1),
+        ListMarkerFormat::Decimal => format!("{}.", number),
         ListMarkerFormat::LowerAlpha => {
-            let c = (b'a' + (index % 26) as u8) as char;
+            let c = (b'a' + ((number.saturating_sub(1)) % 26) as u8) as char;
             format!("{}.", c)
         }
         ListMarkerFormat::UpperAlpha => {
-            let c = (b'A' + (index % 26) as u8) as char;
+            let c = (b'A' + ((number.saturating_sub(1)) % 26) as u8) as char;
             format!("{}.", c)
         }
-        ListMarkerFormat::LowerRoman => format!("{}.", to_roman(index + 1).to_lowercase()),
-        ListMarkerFormat::UpperRoman => format!("{}.", to_roman(index + 1)),
+        ListMarkerFormat::LowerRoman => format!("{}.", to_roman(number).to_lowercase()),
+        ListMarkerFormat::UpperRoman => format!("{}.", to_roman(number)),
     }
+}
+
+fn expand_lvl_text(template: &str, number: u32, format: ListMarkerFormat) -> String {
+    let mut out = template.to_string();
+    if out.contains("%1") {
+        let replacement = match format {
+            ListMarkerFormat::Bullet => "•".to_string(),
+            ListMarkerFormat::Decimal => number.to_string(),
+            ListMarkerFormat::LowerAlpha => {
+                ((b'a' + ((number.saturating_sub(1)) % 26) as u8) as char).to_string()
+            }
+            ListMarkerFormat::UpperAlpha => {
+                ((b'A' + ((number.saturating_sub(1)) % 26) as u8) as char).to_string()
+            }
+            ListMarkerFormat::LowerRoman => to_roman(number).to_lowercase(),
+            ListMarkerFormat::UpperRoman => to_roman(number),
+        };
+        out = out.replace("%1", &replacement);
+    }
+    out
 }
 
 fn to_roman(mut n: u32) -> String {

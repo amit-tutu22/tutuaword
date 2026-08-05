@@ -2,6 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
 import 'package:tutuaword/ui/ribbon_widgets.dart';
 
+/// Tooltip for Review tab accept/reject until edit commands exist.
+const kTrackChangeReviewTooltip =
+    'Coming soon — accept/reject track-change commands are not yet in the engine';
+
 class ReviewTab extends StatelessWidget {
   const ReviewTab({super.key, required this.controller});
 
@@ -46,9 +50,28 @@ class ReviewTab extends StatelessWidget {
                   selected: controller.trackChanges,
                   onPressed: controller.toggleTrackChanges,
                 ),
-                RibbonIconButton(icon: Icons.check, label: 'Accept', onPressed: null),
-                RibbonIconButton(icon: Icons.close, label: 'Reject', onPressed: null),
+                RibbonIconButton(
+                  icon: Icons.check,
+                  label: 'Accept',
+                  tooltip: kTrackChangeReviewTooltip,
+                  onPressed: null,
+                ),
+                RibbonIconButton(
+                  icon: Icons.close,
+                  label: 'Reject',
+                  tooltip: kTrackChangeReviewTooltip,
+                  onPressed: null,
+                ),
               ],
+            ),
+          ),
+          RibbonGroup(
+            label: 'Export',
+            child: RibbonLargeButton(
+              icon: Icons.picture_as_pdf_outlined,
+              label: 'Export\nPDF',
+              tooltip: 'Export as PDF (basic layout; font embedding still in progress)',
+              onPressed: () => controller.exportPdf(),
             ),
           ),
           RibbonGroup(

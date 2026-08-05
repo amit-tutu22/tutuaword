@@ -42,6 +42,7 @@ pub struct FontDatabase {
     /// Resolved face per family, indexed by [`style_slot`]. Every run asks for
     /// its font, so the database query has to be paid only once per style.
     family_cache: HashMap<String, [Option<Option<FontId>>; 4]>,
+    document_fallbacks: Vec<String>,
 }
 
 /// Index into a family's cached regular/bold/italic/bold-italic faces.
@@ -68,7 +69,25 @@ impl FontDatabase {
             coverage_cache: HashMap::new(),
             face_data_cache: HashMap::new(),
             family_cache: HashMap::new(),
+            document_fallbacks: Vec::new(),
         }
+    }
+
+    /// Word theme + common Office families used before scanning the whole OS.
+    pub fn configure_document(&mut self, minor_font: &str, major_font: &str) {
+        self.default_family = minor_font.to_string();
+        self.document_fallbacks = vec![
+            minor_font.to_string(),
+            major_font.to_string(),
+            "Calibri".into(),
+            "Cambria".into(),
+            "Aptos".into(),
+            "Times New Roman".into(),
+            "Arial".into(),
+            "Helvetica".into(),
+        ];
+        self.family_cache.clear();
+        self.fallback_cache.clear();
     }
 
     fn assign_key(&mut self, id: ID) -> u32 {
@@ -107,6 +126,7 @@ impl FontDatabase {
 
         let resolved = self
             .query_family(&family, bold, italic)
+            .or_else(|| self.query_aliases(&family, bold, italic))
             .or_else(|| {
                 let default = self.default_family.clone();
                 (family != default).then(|| self.query_family(&default, bold, italic))?
@@ -200,8 +220,14 @@ impl FontDatabase {
     }
 
     fn search_fallback(&mut self, ch: char) -> Option<FontId> {
-        for family in FALLBACK_FAMILIES {
-            if let Some(id) = self.resolve(Some(family)) {
+        let families: Vec<String> = self
+            .document_fallbacks
+            .iter()
+            .cloned()
+            .chain(FALLBACK_FAMILIES.iter().map(|s| s.to_string()))
+            .collect();
+        for family in &families {
+            if let Some(id) = self.resolve(Some(family.as_str())) {
                 if self.covers(id, ch) {
                     return Some(id);
                 }
@@ -213,6 +239,15 @@ impl FontDatabase {
         let found = ids.into_iter().find(|id| self.face_covers(*id, ch))?;
         let key = self.assign_key(found);
         Some(FontId { id: found, key })
+    }
+
+    fn query_aliases(&mut self, family: &str, bold: bool, italic: bool) -> Option<FontId> {
+        for alias in family_aliases(family) {
+            if let Some(id) = self.query_family(alias, bold, italic) {
+                return Some(id);
+            }
+        }
+        None
     }
 
     pub fn load_face_data(&self, font_id: FontId) -> Option<Vec<u8>> {
@@ -251,5 +286,16 @@ impl AtlasKey {
             glyph_id,
             size_bits: size.to_bits(),
         }
+    }
+}
+
+fn family_aliases(family: &str) -> &'static [&'static str] {
+    match family.to_ascii_lowercase().as_str() {
+        s if s == "calibri" => &["Carlito", "Helvetica Neue", "Arial"],
+        s if s == "cambria" => &["Caladea", "Georgia", "Times New Roman"],
+        s if s == "arial" => &["Helvetica", "Liberation Sans"],
+        s if s == "times new roman" => &["Times", "Liberation Serif", "Georgia"],
+        s if s == "aptos" => &["Segoe UI", "Calibri", "Arial"],
+        _ => &[],
     }
 }

@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::ops::Range;
 use tw_model::NodeId;
 
+#[derive(Clone, Debug)]
 pub struct TextBuffer {
     ropes: HashMap<NodeId, Rope>,
 }

@@ -11,7 +11,7 @@ use crate::styles::{
 };
 use crate::table::{parse_image_block, parse_table, MediaResolver};
 use crate::xml_util::{
-    extract_body_xml, extract_plain_text, iter_body_blocks, read_attr_value, read_own_attr,
+    extract_body_xml, extract_plain_text, iter_body_blocks, read_own_attr,
     split_elements, BlockKind,
 };
 use crate::{DocxError, DocxPackage, ImportResult};
@@ -63,10 +63,18 @@ pub fn import_docx(source: &[u8]) -> Result<ImportResult, DocxError> {
 
     let xml = document_xml.ok_or(DocxError::MissingDocumentPart)?;
     let media = PackageMedia::new(&package);
+    let relationships = media.relationships.clone();
     let mut document =
         parse_document_xml(&xml, &styles_xml, &numbering_xml, &theme_xml, &media);
 
-    apply_headers_footers(&mut document, &xml, &header_parts, &footer_parts);
+    apply_headers_footers(
+        &mut document,
+        &xml,
+        &header_parts,
+        &footer_parts,
+        &relationships,
+        &media,
+    );
     package.source_fingerprint = Some(crate::fingerprint::document_fingerprint(&document));
 
     Ok(ImportResult { document, package })
@@ -102,13 +110,14 @@ impl MediaResolver for PackageMedia<'_> {
         if bytes.is_empty() {
             return None;
         }
-        Some(tw_model::ImageData {
+        let data = tw_model::ImageData {
             asset_id: part_name.clone(),
             mime_type: mime_for(&part_name).to_string(),
             width_px: 0,
             height_px: 0,
             bytes: bytes.clone(),
-        })
+        };
+        Some(crate::image_convert::normalize_image(data))
     }
 }
 
@@ -136,6 +145,7 @@ fn mime_for(part_name: &str) -> &'static str {
         Some("tif") | Some("tiff") => "image/tiff",
         Some("emf") => "image/x-emf",
         Some("wmf") => "image/x-wmf",
+        Some("svg") => "image/svg+xml",
         _ => "application/octet-stream",
     }
 }
@@ -160,34 +170,7 @@ fn parse_document_xml(
     }
 
     let body = extract_body_xml(xml);
-    let mut blocks = Vec::new();
-    let mut section_format = None;
-
-    for (chunk, kind) in iter_body_blocks(body) {
-        match kind {
-            BlockKind::Paragraph => {
-                let image = parse_image_block(chunk, media);
-                if let Some(para) = parse_paragraph(&doc, chunk) {
-                    blocks.push(Block::Paragraph(para));
-                } else if image.is_none() {
-                    // A paragraph holding only a drawing contributes the image
-                    // alone, but an empty one still occupies its own line.
-                    let mut para = Paragraph::new();
-                    para.format = parse_para_properties(paragraph_properties_xml(chunk));
-                    blocks.push(Block::Paragraph(para));
-                }
-                if let Some(img) = image {
-                    blocks.push(Block::ImageBlock(img));
-                }
-            }
-            BlockKind::Table => {
-                blocks.push(Block::Table(parse_table(chunk)));
-            }
-            BlockKind::SectionProps => {
-                section_format = Some(parse_section_properties(chunk));
-            }
-        }
-    }
+    let (mut blocks, section_format) = parse_body_blocks(body, &doc, media);
 
     if blocks.is_empty() {
         blocks.push(Block::Paragraph(Paragraph::new()));
@@ -204,32 +187,126 @@ fn parse_document_xml(
     doc
 }
 
+fn parse_body_blocks(
+    body: &str,
+    doc: &Document,
+    media: &dyn MediaResolver,
+) -> (Vec<Block>, Option<tw_model::SectionFormat>) {
+    let mut blocks = Vec::new();
+    let mut section_format = None;
+
+    for (chunk, kind) in iter_body_blocks(body) {
+        match kind {
+            BlockKind::Paragraph => {
+                let image = parse_image_block(chunk, media);
+                if let Some(para) = parse_paragraph(doc, chunk) {
+                    blocks.push(Block::Paragraph(para));
+                } else if image.is_none() {
+                    let mut para = Paragraph::new();
+                    para.format = parse_para_properties(paragraph_properties_xml(chunk));
+                    blocks.push(Block::Paragraph(para));
+                }
+                if let Some(img) = image {
+                    blocks.push(Block::ImageBlock(img));
+                }
+            }
+            BlockKind::Table => {
+                blocks.push(Block::Table(parse_table(chunk, doc)));
+            }
+            BlockKind::SectionProps => {
+                section_format = Some(parse_section_properties(chunk));
+            }
+        }
+    }
+
+    (blocks, section_format)
+}
+
 fn apply_headers_footers(
     doc: &mut Document,
     document_xml: &str,
     headers: &HashMap<String, String>,
     footers: &HashMap<String, String>,
+    relationships: &HashMap<String, String>,
+    media: &dyn MediaResolver,
 ) {
     let body = extract_body_xml(document_xml);
     if let Some((sect_chunk, _)) = iter_body_blocks(body)
         .into_iter()
         .find(|(_, k)| *k == BlockKind::SectionProps)
     {
-        if let Some(header_ref) = read_attr_value(sect_chunk, "w:headerReference", "r:id") {
-            if let Some((_, text)) = headers.iter().find(|(k, _)| k.contains(&header_ref)) {
-                if let Some(section) = doc.sections.first_mut() {
-                    section.format.header_text = Some(extract_header_footer_text(text));
+        for element in split_elements(sect_chunk, "w:headerReference") {
+            let ref_type = read_own_attr(element, "w:type").unwrap_or_else(|| "default".into());
+            if ref_type != "default" {
+                continue;
+            }
+            let Some(ref_id) = read_own_attr(element, "r:id") else {
+                continue;
+            };
+            if let Some(part) = part_for_relationship(relationships, &ref_id) {
+                if let Some(xml) = headers.get(&part) {
+                    let (blocks, _) = parse_body_blocks(extract_part_body(xml), doc, media);
+                    if let Some(section) = doc.sections.first_mut() {
+                        if blocks.is_empty() {
+                            section.format.header_text =
+                                Some(extract_header_footer_text(xml));
+                        } else {
+                            section.format.header_blocks = blocks;
+                            section.format.header_text = None;
+                        }
+                    }
                 }
             }
         }
-        if let Some(footer_ref) = read_attr_value(sect_chunk, "w:footerReference", "r:id") {
-            if let Some((_, text)) = footers.iter().find(|(k, _)| k.contains(&footer_ref)) {
-                if let Some(section) = doc.sections.first_mut() {
-                    section.format.footer_text = Some(extract_header_footer_text(text));
+        for element in split_elements(sect_chunk, "w:footerReference") {
+            let ref_type = read_own_attr(element, "w:type").unwrap_or_else(|| "default".into());
+            if ref_type != "default" {
+                continue;
+            }
+            let Some(ref_id) = read_own_attr(element, "r:id") else {
+                continue;
+            };
+            if let Some(part) = part_for_relationship(relationships, &ref_id) {
+                if let Some(xml) = footers.get(&part) {
+                    let (blocks, _) = parse_body_blocks(extract_part_body(xml), doc, media);
+                    if let Some(section) = doc.sections.first_mut() {
+                        if blocks.is_empty() {
+                            section.format.footer_text =
+                                Some(extract_header_footer_text(xml));
+                        } else {
+                            section.format.footer_blocks = blocks;
+                            section.format.footer_text = None;
+                        }
+                    }
                 }
             }
         }
     }
+}
+
+fn part_for_relationship(relationships: &HashMap<String, String>, ref_id: &str) -> Option<String> {
+    relationships.get(ref_id).map(|target| {
+        if target.starts_with("word/") {
+            target.clone()
+        } else {
+            format!("word/{}", target.trim_start_matches("./"))
+        }
+    })
+}
+
+fn extract_part_body(xml: &str) -> &str {
+    for tag in ["w:hdr", "w:ftr", "w:body"] {
+        if let Some(start) = xml.find(&format!("<{tag}")) {
+            let after = &xml[start..];
+            if let Some(gt) = after.find('>') {
+                let body = &after[gt + 1..];
+                if let Some(end) = body.find(&format!("</{tag}>")) {
+                    return &body[..end];
+                }
+            }
+        }
+    }
+    xml
 }
 
 fn extract_header_footer_text(xml: &str) -> String {

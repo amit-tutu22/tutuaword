@@ -57,6 +57,22 @@ impl CharFormat {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum TabAlignment {
+    #[default]
+    Left,
+    Center,
+    Right,
+    Decimal,
+    Bar,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TabStop {
+    pub position: f32,
+    pub alignment: TabAlignment,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ParaFormat {
     pub alignment: Option<Alignment>,
@@ -69,6 +85,10 @@ pub struct ParaFormat {
     pub numbering: Option<crate::list::NumberingRef>,
     pub page_break_before: Option<bool>,
     pub keep_together: Option<bool>,
+    pub keep_with_next: Option<bool>,
+    pub widow_orphan_control: Option<bool>,
+    #[serde(default)]
+    pub tab_stops: Vec<TabStop>,
 }
 
 impl ParaFormat {
@@ -103,10 +123,19 @@ impl ParaFormat {
         if other.keep_together.is_some() {
             self.keep_together = other.keep_together;
         }
+        if other.keep_with_next.is_some() {
+            self.keep_with_next = other.keep_with_next;
+        }
+        if other.widow_orphan_control.is_some() {
+            self.widow_orphan_control = other.widow_orphan_control;
+        }
+        if !other.tab_stops.is_empty() {
+            self.tab_stops = other.tab_stops.clone();
+        }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SectionFormat {
     pub page_width: f32,
     pub page_height: f32,
@@ -118,6 +147,12 @@ pub struct SectionFormat {
     pub header_text: Option<String>,
     /// Plain-text footer shown in the bottom margin band on every page.
     pub footer_text: Option<String>,
+    /// Rich header blocks imported from `word/header*.xml`.
+    #[serde(default)]
+    pub header_blocks: Vec<crate::nodes::Block>,
+    /// Rich footer blocks imported from `word/footer*.xml`.
+    #[serde(default)]
+    pub footer_blocks: Vec<crate::nodes::Block>,
 }
 
 impl Default for SectionFormat {
@@ -131,6 +166,8 @@ impl Default for SectionFormat {
             margin_right: 72.0,
             header_text: None,
             footer_text: None,
+            header_blocks: Vec::new(),
+            footer_blocks: Vec::new(),
         }
     }
 }

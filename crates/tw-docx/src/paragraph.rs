@@ -1,6 +1,6 @@
 use tw_model::{BreakType, Document, Paragraph, Run, RunContent};
 
-use crate::styles::{parse_char_properties, parse_para_properties};
+use crate::styles::{parse_char_properties, parse_para_default_char_format, parse_para_properties};
 use crate::xml_util::{extract_plain_text, extract_run_text, next_run_level_tag, read_attr_on_element, read_attr_value, take_element, RunLevelTag};
 
 /// The `<w:pPr>` slice of a paragraph, or the whole element when it has none.
@@ -24,6 +24,7 @@ pub fn parse_paragraph(doc: &Document, para_xml: &str) -> Option<Paragraph> {
     if para_xml.contains("<w:pPr") {
         let ppr = paragraph_properties_xml(para_xml);
         para.format = parse_para_properties(ppr);
+        let para_defaults = parse_para_default_char_format(ppr);
 
         if let Some(style_id_str) = read_attr_value(ppr, "w:pStyle", "w:val") {
             if let Some(style) = doc.styles.find_style_by_ooxml_id(&style_id_str) {
@@ -39,6 +40,37 @@ pub fn parse_paragraph(doc: &Document, para_xml: &str) -> Option<Paragraph> {
                 }
             }
         }
+
+        // Run properties live in `<w:pPr>` too; only body runs become content.
+        let body_xml = match para_xml.find("</w:pPr>") {
+            Some(end) => &para_xml[end..],
+            None => para_xml,
+        };
+        let mut runs = parse_paragraph_runs(doc, body_xml, 0);
+        for run in &mut runs {
+            let direct = run.format.clone();
+            run.format = para_defaults.clone();
+            run.format.merge(&direct);
+        }
+
+        if runs.is_empty() {
+            let text = extract_plain_text(para_xml);
+            if !text.is_empty() {
+                runs.push(Run::new_text(text));
+            }
+        }
+
+        let has_spacing = para.format.space_before.is_some() || para.format.space_after.is_some();
+        if runs.is_empty() && !has_spacing {
+            return None;
+        }
+
+        if runs.is_empty() {
+            runs.push(Run::new_text(String::new()));
+        }
+
+        para.runs = runs;
+        return Some(para);
     }
 
     // Run properties live in `<w:pPr>` too; only body runs become content.

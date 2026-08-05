@@ -4,7 +4,7 @@ use tw_model::Table;
 use tw_shape::{GlyphAtlas, TextShaper};
 
 const CELL_PADDING: f32 = 4.0;
-const MIN_ROW_HEIGHT: f32 = 18.0;
+pub const MIN_ROW_HEIGHT: f32 = 18.0;
 
 /// A run of table rows placed on one page.
 pub struct TableSlice {
@@ -137,7 +137,8 @@ pub fn layout_table_slice(
         }
 
         // Defer the row to the next page rather than letting it overflow,
-        // unless it is the first row of the slice and has nowhere else to go.
+        // unless it is the first row of the slice (placed even if oversized;
+        // the page clip hides anything past the bottom margin).
         if rows_placed > 0 && row_y + row_height - y > max_height {
             break;
         }
@@ -150,17 +151,37 @@ pub fn layout_table_slice(
     }
 
     let placed_end = start_row + rows_placed;
-    // Stretch every cell to the band it occupies so borders align.
-    for (cell, (ri, rowspan)) in cells.iter_mut().zip(cell_spans) {
+    // Stretch every cell to the band it occupies so borders align, then clip
+    // glyph lines that extend past the cell band (wrapped text can exceed the
+    // row height estimate before reconciliation).
+    for (cell, (ri, rowspan)) in cells.iter_mut().zip(cell_spans.iter()) {
         cell.height = row_heights[ri..(ri + rowspan).min(placed_end)]
             .iter()
             .sum::<f32>()
             .max(MIN_ROW_HEIGHT);
+        let bottom = cell.y + cell.height;
+        cell.lines.retain(|line| line.y < bottom + 0.5);
     }
 
     let mut grid_lines = Vec::new();
-    for cell in &cells {
-        push_cell_border(&mut grid_lines, cell.x, cell.y, cell.width, cell.height);
+    let mut grid_line_colors = Vec::new();
+    let default_border = table.format.border.unwrap_or_default();
+    for (cell, (ri, _)) in cells.iter().zip(cell_spans.iter()) {
+        let row = &table.rows[*ri];
+        let cell_idx = row.cells.iter().position(|c| c.id == cell.cell_id);
+        let border = cell_idx
+            .and_then(|i| row.cells.get(i))
+            .and_then(|c| c.format.border)
+            .unwrap_or(default_border);
+        push_cell_border(
+            &mut grid_lines,
+            &mut grid_line_colors,
+            cell.x,
+            cell.y,
+            cell.width,
+            cell.height,
+            border,
+        );
     }
 
     TableSlice {
@@ -172,6 +193,7 @@ pub fn layout_table_slice(
             table_id: table.id,
             cells,
             grid_lines,
+            grid_line_colors,
         },
         rows_placed,
     }
@@ -238,7 +260,16 @@ fn prefix_offsets(widths: &[f32]) -> Vec<f32> {
     offsets
 }
 
-fn push_cell_border(lines: &mut Vec<f32>, x: f32, y: f32, w: f32, h: f32) {
+fn push_cell_border(
+    lines: &mut Vec<f32>,
+    colors: &mut Vec<u32>,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    border: tw_model::BorderSpec,
+) {
+    let color = border.color.to_argb();
     for segment in [
         (x, y, x + w, y),
         (x, y, x, y + h),
@@ -249,5 +280,6 @@ fn push_cell_border(lines: &mut Vec<f32>, x: f32, y: f32, w: f32, h: f32) {
         lines.push(segment.1);
         lines.push(segment.2);
         lines.push(segment.3);
+        colors.push(color);
     }
 }

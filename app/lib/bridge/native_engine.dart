@@ -63,14 +63,61 @@ typedef TwSaveDocumentDart = int Function(Pointer<Pointer<Uint8>>, Pointer<IntPt
 typedef TwSetCurrentPageNative = Int32 Function(Uint32);
 typedef TwSetCurrentPageDart = int Function(int);
 
-typedef TwApplyHeading1Native = Int32 Function();
-typedef TwApplyHeading1Dart = int Function();
+typedef TwApplyHeading1Native = Int32 Function(Pointer<Utf8>);
+typedef TwApplyHeading1Dart = int Function(Pointer<Utf8>);
 
-typedef TwApplyBulletListNative = Int32 Function();
-typedef TwApplyBulletListDart = int Function();
+typedef TwApplyNormalStyleNative = Int32 Function(Pointer<Utf8>);
+typedef TwApplyNormalStyleDart = int Function(Pointer<Utf8>);
 
-typedef TwApplyNumberedListNative = Int32 Function();
-typedef TwApplyNumberedListDart = int Function();
+typedef TwGetTextRangeNative = Int32 Function(
+  Pointer<Utf8>,
+  Uint32,
+  Pointer<Utf8>,
+  Uint32,
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwGetTextRangeDart = int Function(
+  Pointer<Utf8>,
+  int,
+  Pointer<Utf8>,
+  int,
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+
+typedef TwGetCaretFormatNative = Int32 Function(
+  Pointer<Utf8>,
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwGetCaretFormatDart = int Function(
+  Pointer<Utf8>,
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+
+typedef TwClearFormatNative = Int32 Function(
+  Pointer<Utf8>,
+  Uint32,
+  Pointer<Utf8>,
+  Uint32,
+);
+typedef TwClearFormatDart = int Function(
+  Pointer<Utf8>,
+  int,
+  Pointer<Utf8>,
+  int,
+);
+
+typedef TwInsertPageBreakNative = Int32 Function(Pointer<Utf8>);
+typedef TwInsertPageBreakDart = int Function(Pointer<Utf8>);
+
+typedef TwApplyBulletListNative = Int32 Function(Pointer<Utf8>);
+typedef TwApplyBulletListDart = int Function(Pointer<Utf8>);
+
+typedef TwApplyNumberedListNative = Int32 Function(Pointer<Utf8>);
+typedef TwApplyNumberedListDart = int Function(Pointer<Utf8>);
 
 typedef TwApplyCharFormatNative = Int32 Function(
   Pointer<Utf8>,
@@ -104,6 +151,19 @@ typedef TwApplyParaFormatDart = int Function(
 
 typedef TwApplyDeleteRangeNative = Int32 Function(Pointer<Utf8>, Uint32, Uint32);
 typedef TwApplyDeleteRangeDart = int Function(Pointer<Utf8>, int, int);
+
+typedef TwApplyDeleteDocRangeNative = Int32 Function(
+  Pointer<Utf8>,
+  Uint32,
+  Pointer<Utf8>,
+  Uint32,
+);
+typedef TwApplyDeleteDocRangeDart = int Function(
+  Pointer<Utf8>,
+  int,
+  Pointer<Utf8>,
+  int,
+);
 
 typedef TwApplySplitParagraphNative = Int32 Function(Pointer<Utf8>, Uint32);
 typedef TwApplySplitParagraphDart = int Function(Pointer<Utf8>, int);
@@ -183,14 +243,20 @@ class NativeEngine {
   late final TwApplyCharFormatDart applyCharFormat;
   late final TwApplyParaFormatDart applyParaFormat;
   late final TwApplyDeleteRangeDart applyDeleteRange;
+  late final TwApplyDeleteDocRangeDart applyDeleteDocRange;
   late final TwApplySplitParagraphDart applySplitParagraph;
   late final TwGetDisplayListDart getDisplayList;
   late final TwGetPageDisplayListDart getPageDisplayList;
   late final TwGetDocumentTextDart getDocumentText;
+  late final TwGetTextRangeDart getTextRange;
+  late final TwGetCaretFormatDart getCaretFormat;
+  late final TwClearFormatDart clearFormatNative;
+  late final TwInsertPageBreakDart insertPageBreak;
   late final TwOpenDocumentWithPathDart openDocumentWithPath;
   late final TwSaveDocumentDart saveDocument;
   late final TwSetCurrentPageDart setCurrentPage;
   late final TwApplyHeading1Dart applyHeading1;
+  late final TwApplyNormalStyleDart applyNormalStyle;
   late final TwApplyBulletListDart applyBulletList;
   late final TwApplyNumberedListDart applyNumberedList;
   late final TwInsertTableDart insertTable;
@@ -222,6 +288,8 @@ class NativeEngine {
           lib.lookupFunction<TwApplyParaFormatNative, TwApplyParaFormatDart>('tw_apply_para_format');
       engine.applyDeleteRange =
           lib.lookupFunction<TwApplyDeleteRangeNative, TwApplyDeleteRangeDart>('tw_apply_delete_range');
+      engine.applyDeleteDocRange = lib.lookupFunction<TwApplyDeleteDocRangeNative,
+          TwApplyDeleteDocRangeDart>('tw_apply_delete_doc_range');
       engine.applySplitParagraph = lib.lookupFunction<TwApplySplitParagraphNative,
           TwApplySplitParagraphDart>('tw_apply_split_paragraph');
       engine.getDisplayList =
@@ -230,6 +298,14 @@ class NativeEngine {
           TwGetPageDisplayListDart>('tw_get_page_display_list');
       engine.getDocumentText =
           lib.lookupFunction<TwGetDocumentTextNative, TwGetDocumentTextDart>('tw_get_document_text');
+      engine.getTextRange =
+          lib.lookupFunction<TwGetTextRangeNative, TwGetTextRangeDart>('tw_get_text_range');
+      engine.getCaretFormat = lib.lookupFunction<TwGetCaretFormatNative, TwGetCaretFormatDart>(
+          'tw_get_caret_format');
+      engine.clearFormatNative =
+          lib.lookupFunction<TwClearFormatNative, TwClearFormatDart>('tw_clear_format');
+      engine.insertPageBreak = lib.lookupFunction<TwInsertPageBreakNative, TwInsertPageBreakDart>(
+          'tw_insert_page_break');
       engine.openDocumentWithPath = lib.lookupFunction<TwOpenDocumentWithPathNative,
           TwOpenDocumentWithPathDart>('tw_open_document_with_path');
       engine.saveDocument =
@@ -238,6 +314,8 @@ class NativeEngine {
           lib.lookupFunction<TwSetCurrentPageNative, TwSetCurrentPageDart>('tw_set_current_page');
       engine.applyHeading1 =
           lib.lookupFunction<TwApplyHeading1Native, TwApplyHeading1Dart>('tw_apply_heading1');
+      engine.applyNormalStyle = lib.lookupFunction<TwApplyNormalStyleNative, TwApplyNormalStyleDart>(
+          'tw_apply_normal_style');
       engine.applyBulletList = lib.lookupFunction<TwApplyBulletListNative, TwApplyBulletListDart>(
           'tw_apply_bullet_list');
       engine.applyNumberedList = lib.lookupFunction<TwApplyNumberedListNative, TwApplyNumberedListDart>(
@@ -432,6 +510,85 @@ extension NativeEngineOps on NativeEngine {
     }
   }
 
+  String? fetchTextRange(
+    String startRunId,
+    int startOffset,
+    String endRunId,
+    int endOffset,
+  ) {
+    final startPtr = startRunId.toNativeUtf8();
+    final endPtr = endRunId.toNativeUtf8();
+    final outPtr = calloc<Pointer<Uint8>>();
+    final outLen = calloc<IntPtr>();
+    try {
+      final result = getTextRange(
+        startPtr,
+        startOffset,
+        endPtr,
+        endOffset,
+        outPtr,
+        outLen,
+      );
+      if (result != 0) return null;
+      final len = outLen.value;
+      final ptr = outPtr.value;
+      if (ptr == nullptr || len == 0) return '';
+      final text = ptr.cast<Utf8>().toDartString(length: len);
+      freeBuffer(ptr, len);
+      return text;
+    } finally {
+      calloc.free(startPtr);
+      calloc.free(endPtr);
+      calloc.free(outPtr);
+      calloc.free(outLen);
+    }
+  }
+
+  String? fetchCaretFormat(String runId) {
+    final runPtr = runId.toNativeUtf8();
+    final outPtr = calloc<Pointer<Uint8>>();
+    final outLen = calloc<IntPtr>();
+    try {
+      final result = getCaretFormat(runPtr, outPtr, outLen);
+      if (result != 0) return null;
+      final len = outLen.value;
+      final ptr = outPtr.value;
+      if (ptr == nullptr || len == 0) return null;
+      final json = ptr.cast<Utf8>().toDartString(length: len);
+      freeBuffer(ptr, len);
+      return json;
+    } finally {
+      calloc.free(runPtr);
+      calloc.free(outPtr);
+      calloc.free(outLen);
+    }
+  }
+
+  bool clearFormat(
+    String startRunId,
+    int startOffset,
+    String endRunId,
+    int endOffset,
+  ) {
+    final startPtr = startRunId.toNativeUtf8();
+    final endPtr = endRunId.toNativeUtf8();
+    try {
+      return clearFormatNative(startPtr, startOffset, endPtr, endOffset) == 0;
+    } finally {
+      calloc.free(startPtr);
+      calloc.free(endPtr);
+    }
+  }
+
+  bool insertPageBreakAt({String? caretRunId}) {
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return insertPageBreak(ptr) == 0;
+    } finally {
+      if (caretRunId != null) calloc.free(ptr);
+    }
+  }
+
   bool openDocumentBytes(Uint8List bytes, {String? path}) {
     final ptr = calloc<Uint8>(bytes.length);
     final pathPtr = path?.toNativeUtf8();
@@ -471,7 +628,21 @@ extension NativeEngineOps on NativeEngine {
     final runPtr = runId.toNativeUtf8();
     final textPtr = text.toNativeUtf8();
     try {
-      applyInsertText(runPtr, offset, textPtr);
+      if (applyInsertText(runPtr, offset, textPtr) != 0) {
+        throw StateError('insertText failed for run $runId at $offset');
+      }
+    } finally {
+      calloc.free(runPtr);
+      calloc.free(textPtr);
+    }
+  }
+
+  /// Like [insertText] but returns false instead of throwing on failure.
+  bool tryInsertText(String runId, int offset, String text) {
+    final runPtr = runId.toNativeUtf8();
+    final textPtr = text.toNativeUtf8();
+    try {
+      return applyInsertText(runPtr, offset, textPtr) == 0;
     } finally {
       calloc.free(runPtr);
       calloc.free(textPtr);
@@ -527,6 +698,22 @@ extension NativeEngineOps on NativeEngine {
     }
   }
 
+  bool deleteDocRange(
+    String startRunId,
+    int startOffset,
+    String endRunId,
+    int endOffset,
+  ) {
+    final startPtr = startRunId.toNativeUtf8();
+    final endPtr = endRunId.toNativeUtf8();
+    try {
+      return applyDeleteDocRange(startPtr, startOffset, endPtr, endOffset) == 0;
+    } finally {
+      calloc.free(startPtr);
+      calloc.free(endPtr);
+    }
+  }
+
   bool splitParagraphAt(String runId, int offset) {
     final runPtr = runId.toNativeUtf8();
     try {
@@ -538,10 +725,41 @@ extension NativeEngineOps on NativeEngine {
 
   bool setCurrentPageIndex(int page) => setCurrentPage(page) == 0;
 
-  bool applyHeading1Style() => applyHeading1() == 0;
+  bool applyHeading1Style({String? caretRunId}) {
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return applyHeading1(ptr) == 0;
+    } finally {
+      if (caretRunId != null) calloc.free(ptr);
+    }
+  }
 
-  bool applyBulletListStyle() => applyBulletList() == 0;
-  bool applyNumberedListStyle() => applyNumberedList() == 0;
+  bool applyNormalStyleAt({String? caretRunId}) {
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return applyNormalStyle(ptr) == 0;
+    } finally {
+      if (caretRunId != null) calloc.free(ptr);
+    }
+  }
+
+  bool applyBulletListStyle({String? caretRunId}) {
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return applyBulletList(ptr) == 0;
+    } finally {
+      if (caretRunId != null) calloc.free(ptr);
+    }
+  }
+
+  bool applyNumberedListStyle({String? caretRunId}) {
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return applyNumberedList(ptr) == 0;
+    } finally {
+      if (caretRunId != null) calloc.free(ptr);
+    }
+  }
 
   bool insertTableBlock(int rows, int cols) => insertTable(rows, cols) == 0;
 

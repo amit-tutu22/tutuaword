@@ -110,7 +110,14 @@ impl DisplayListBuilder {
                     for chunk in table.grid_lines.chunks(4) {
                         if chunk.len() == 4 {
                             path_batch.points.extend_from_slice(chunk);
-                            path_batch.colors.push(0xFF000000);
+                            let color_idx = path_batch.colors.len();
+                            path_batch.colors.push(
+                                table
+                                    .grid_line_colors
+                                    .get(color_idx)
+                                    .copied()
+                                    .unwrap_or(0xFF000000),
+                            );
                         }
                     }
                 }

@@ -6,9 +6,11 @@
 
 use tw_model::{
     Alignment, Block, BorderSpec, CellFormat, CharFormat, Color, Document, ImageBlock, LineSpacing,
-    Paragraph, ParaFormat, Run, RunContent, SectionFormat, StyleId, Table, TableCell, TableRow,
-    TextWrap, UnderlineStyle, VerticalAlign,
+    NodeId, Paragraph, ParaFormat, Run, RunContent, SectionFormat, StyleId, TabAlignment, Table,
+    TableCell, TableRow, TextWrap, UnderlineStyle, VerticalAlign,
 };
+
+use std::collections::HashMap;
 
 use crate::media::MediaWriter;
 use crate::{DocxError, DocxPackage, MINIMAL_CONTENT_TYPES};
@@ -102,11 +104,12 @@ fn ensure_numbering_relationship(pkg: &mut DocxPackage) {
 fn serialize_document_xml(doc: &Document, source: &DocxPackage, media: &mut MediaWriter) -> String {
     let original_sect_pr = original_section_properties(source);
     let mut body = String::new();
+    let mut revision_ids = RevisionIdAllocator::new();
 
     let last = doc.sections.len().saturating_sub(1);
     for (index, section) in doc.sections.iter().enumerate() {
         for block in &section.blocks {
-            body.push_str(&serialize_block(block, doc, media));
+            body.push_str(&serialize_block(block, doc, media, &mut revision_ids));
         }
         let sect_pr = serialize_section_properties(&section.format, original_sect_pr.as_deref());
         if index == last {
@@ -126,21 +129,30 @@ fn serialize_document_xml(doc: &Document, source: &DocxPackage, media: &mut Medi
     )
 }
 
-fn serialize_block(block: &Block, doc: &Document, media: &mut MediaWriter) -> String {
+fn serialize_block(
+    block: &Block,
+    doc: &Document,
+    media: &mut MediaWriter,
+    revision_ids: &mut RevisionIdAllocator,
+) -> String {
     match block {
-        Block::Paragraph(para) => serialize_paragraph(para, doc),
-        Block::Table(table) => serialize_table(table, doc, media),
+        Block::Paragraph(para) => serialize_paragraph(para, doc, revision_ids),
+        Block::Table(table) => serialize_table(table, doc, media, revision_ids),
         Block::ImageBlock(image) => serialize_image_paragraph(image, media),
     }
 }
 
 // -- paragraphs ---------------------------------------------------------------
 
-fn serialize_paragraph(para: &Paragraph, doc: &Document) -> String {
+fn serialize_paragraph(
+    para: &Paragraph,
+    doc: &Document,
+    revision_ids: &mut RevisionIdAllocator,
+) -> String {
     let mut xml = String::from("<w:p>");
     xml.push_str(&serialize_paragraph_properties(para, doc));
     for run in &para.runs {
-        xml.push_str(&serialize_run(run));
+        xml.push_str(&serialize_run(run, revision_ids));
     }
     xml.push_str("</w:p>");
     xml
@@ -159,6 +171,16 @@ fn serialize_paragraph_properties(para: &Paragraph, doc: &Document) -> String {
     if format.keep_together == Some(true) {
         props.push_str("<w:keepLines/>");
     }
+    if format.keep_with_next == Some(true) {
+        props.push_str("<w:keepNext/>");
+    }
+    if let Some(widow) = format.widow_orphan_control {
+        if widow {
+            props.push_str("<w:widowControl/>");
+        } else {
+            props.push_str(r#"<w:widowControl w:val="0"/>"#);
+        }
+    }
     if format.page_break_before == Some(true) {
         props.push_str("<w:pageBreakBefore/>");
     }
@@ -170,6 +192,7 @@ fn serialize_paragraph_properties(para: &Paragraph, doc: &Document) -> String {
     }
     props.push_str(&serialize_spacing(format));
     props.push_str(&serialize_indent(format));
+    props.push_str(&serialize_tab_stops(format));
     if let Some(alignment) = format.alignment {
         props.push_str(&format!(
             r#"<w:jc w:val="{}"/>"#,
@@ -241,6 +264,28 @@ fn serialize_indent(format: &ParaFormat) -> String {
     }
 }
 
+fn serialize_tab_stops(format: &ParaFormat) -> String {
+    if format.tab_stops.is_empty() {
+        return String::new();
+    }
+    let mut xml = String::from("<w:tabs>");
+    for stop in &format.tab_stops {
+        let align = match stop.alignment {
+            TabAlignment::Center => "center",
+            TabAlignment::Right => "right",
+            TabAlignment::Decimal => "decimal",
+            TabAlignment::Bar => "bar",
+            TabAlignment::Left => "left",
+        };
+        xml.push_str(&format!(
+            r#"<w:tab w:val="{align}" w:pos="{}"/>"#,
+            to_twips(stop.position)
+        ));
+    }
+    xml.push_str("</w:tabs>");
+    xml
+}
+
 /// The `w:styleId` the style was imported under, so a saved document keeps
 /// referring to the style definition already in `styles.xml`.
 fn ooxml_style_id(doc: &Document, style_id: StyleId) -> Option<String> {
@@ -260,7 +305,7 @@ fn ooxml_style_id(doc: &Document, style_id: StyleId) -> Option<String> {
 
 // -- runs ---------------------------------------------------------------------
 
-fn serialize_run(run: &Run) -> String {
+fn serialize_run(run: &Run, revision_ids: &mut RevisionIdAllocator) -> String {
     let deleted = matches!(
         run.revision.as_ref().map(|r| r.revision_type),
         Some(tw_model::RevisionType::Delete)
@@ -286,7 +331,7 @@ fn serialize_run(run: &Run) -> String {
             let tag = if deleted { "w:del" } else { "w:ins" };
             format!(
                 r#"<{tag} w:id="{}" w:author="{}" w:date="{}">{xml}</{tag}>"#,
-                revision_numeric_id(&rev.id),
+                revision_ids.id_for(&rev.id),
                 escape_xml(&rev.author),
                 rev.timestamp.to_rfc3339()
             )
@@ -333,10 +378,29 @@ fn serialize_text(text: &str, deleted: bool) -> String {
     out
 }
 
-fn revision_numeric_id(id: &tw_model::NodeId) -> u32 {
-    let bytes = id.as_uuid().as_bytes();
-    let value = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-    value.max(1)
+struct RevisionIdAllocator {
+    next: u32,
+    ids: HashMap<NodeId, u32>,
+}
+
+impl RevisionIdAllocator {
+    fn new() -> Self {
+        Self {
+            next: 1,
+            ids: HashMap::new(),
+        }
+    }
+
+    fn id_for(&mut self, node_id: &NodeId) -> u32 {
+        *self
+            .ids
+            .entry(*node_id)
+            .or_insert_with(|| {
+                let id = self.next;
+                self.next += 1;
+                id
+            })
+    }
 }
 
 fn serialize_run_properties(format: &CharFormat) -> String {
@@ -397,7 +461,12 @@ fn toggle(tag: &str, value: Option<bool>) -> String {
 
 // -- tables -------------------------------------------------------------------
 
-fn serialize_table(table: &Table, doc: &Document, media: &mut MediaWriter) -> String {
+fn serialize_table(
+    table: &Table,
+    doc: &Document,
+    media: &mut MediaWriter,
+    revision_ids: &mut RevisionIdAllocator,
+) -> String {
     let widths = &table.format.column_widths;
     let mut xml = String::from("<w:tbl><w:tblPr>");
 
@@ -419,7 +488,7 @@ fn serialize_table(table: &Table, doc: &Document, media: &mut MediaWriter) -> St
     xml.push_str("</w:tblGrid>");
 
     for row in &table.rows {
-        xml.push_str(&serialize_table_row(row, widths, doc, media));
+        xml.push_str(&serialize_table_row(row, widths, doc, media, revision_ids));
     }
     xml.push_str("</w:tbl>");
     xml
@@ -447,6 +516,7 @@ fn serialize_table_row(
     widths: &[f32],
     doc: &Document,
     media: &mut MediaWriter,
+    revision_ids: &mut RevisionIdAllocator,
 ) -> String {
     let mut xml = String::from("<w:tr>");
     if let Some(height) = row.height {
@@ -465,7 +535,7 @@ fn serialize_table_row(
             .take(span)
             .copied()
             .sum::<f32>();
-        xml.push_str(&serialize_table_cell(cell, width, doc, media));
+        xml.push_str(&serialize_table_cell(cell, width, doc, media, revision_ids));
         column += span;
     }
     xml.push_str("</w:tr>");
@@ -477,6 +547,7 @@ fn serialize_table_cell(
     width: f32,
     doc: &Document,
     media: &mut MediaWriter,
+    revision_ids: &mut RevisionIdAllocator,
 ) -> String {
     let mut xml = String::from("<w:tc>");
     xml.push_str(&serialize_cell_properties(&cell.format, width));
@@ -484,7 +555,7 @@ fn serialize_table_cell(
     let mut has_paragraph = false;
     for block in &cell.blocks {
         has_paragraph |= matches!(block, Block::Paragraph(_));
-        xml.push_str(&serialize_block(block, doc, media));
+        xml.push_str(&serialize_block(block, doc, media, revision_ids));
     }
     // A cell must end with a paragraph or Word treats the file as corrupt.
     if !has_paragraph {

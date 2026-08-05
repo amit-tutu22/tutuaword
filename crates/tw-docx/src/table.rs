@@ -1,24 +1,51 @@
-use tw_model::{Block, ImageBlock, Paragraph, Table, TableCell, TableRow, BorderSpec, NodeId, TableFormat};
+use tw_model::{
+    Block, BorderSpec, Color, Document, ImageBlock, Paragraph, Table, TableCell, TableRow,
+    VerticalAlign, NodeId, TableFormat,
+};
 
-use crate::paragraph::parse_paragraph_xml;
+use crate::paragraph::parse_paragraph;
 use crate::xml_util::{
-    read_attr_value, read_int_attr, read_tag_text, split_elements, twips_to_points,
+    read_attr_value, read_int_attr, split_elements, twips_to_points,
 };
 
 const FALLBACK_COLUMN_WIDTH: f32 = 100.0;
 
-pub fn parse_table(tbl_xml: &str) -> Table {
-    let mut rows = Vec::new();
-    for chunk in split_elements(tbl_xml, "w:tr") {
-        if let Some(row) = parse_table_row(chunk) {
-            rows.push(row);
-        }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VMergeKind {
+    None,
+    Restart,
+    Continue,
+}
+
+#[derive(Clone)]
+struct RawCell {
+    cell: TableCell,
+    vmerge: VMergeKind,
+}
+
+pub fn parse_table(tbl_xml: &str, doc: &Document) -> Table {
+    let raw_rows: Vec<(String, Vec<RawCell>)> = split_elements(tbl_xml, "w:tr")
+        .into_iter()
+        .filter_map(|chunk| {
+            parse_table_row(chunk, doc).map(|cells| (chunk.to_string(), cells))
+        })
+        .collect();
+
+    let mut rows = finalize_vertical_merges(raw_rows.iter().map(|(_, cells)| cells.clone()).collect());
+    for (row, (chunk, _)) in rows.iter_mut().zip(raw_rows.iter()) {
+        row.height = read_int_attr(chunk, "w:trHeight", "w:val")
+            .filter(|v| *v > 0)
+            .map(|v| twips_to_points(v as f32));
     }
 
-    // Widest row wins: the first row may merge cells via gridSpan.
     let cols = rows
         .iter()
-        .map(|r| r.cells.iter().map(|c| c.format.colspan.max(1) as usize).sum::<usize>())
+        .map(|r| {
+            r.cells
+                .iter()
+                .map(|c| c.format.colspan.max(1) as usize)
+                .sum::<usize>()
+        })
         .max()
         .unwrap_or(0)
         .max(1);
@@ -30,15 +57,47 @@ pub fn parse_table(tbl_xml: &str) -> Table {
         column_widths.resize(cols, FALLBACK_COLUMN_WIDTH);
     }
 
-    tw_model::Table {
+    let border = parse_table_border(tbl_xml);
+
+    let mut table = Table {
         id: NodeId::new(),
         format: TableFormat {
             width: Some(column_widths.iter().sum()),
             column_widths,
-            border: Some(BorderSpec::default()),
+            border,
         },
         rows,
+        style_id: None,
+    };
+    apply_table_style(doc, &mut table, tbl_xml);
+    table
+}
+
+fn apply_table_style(doc: &Document, table: &mut Table, tbl_xml: &str) {
+    let tbl_pr = split_elements(tbl_xml, "w:tblPr")
+        .into_iter()
+        .next()
+        .unwrap_or("");
+    let Some(style_str) = read_attr_value(tbl_pr, "w:tblStyle", "w:val") else {
+        return;
+    };
+    let Some(&style_id) = doc.styles.ooxml_table_style_ids.get(&style_str) else {
+        return;
+    };
+    table.style_id = Some(style_id);
+    if table.format.border.is_none() {
+        if let Some(style) = doc.styles.table_styles.get(&style_id) {
+            table.format.border = style.border;
+        }
     }
+}
+
+fn parse_table_border(tbl_xml: &str) -> Option<BorderSpec> {
+    let tcpr = split_elements(tbl_xml, "w:tblPr")
+        .into_iter()
+        .next()
+        .unwrap_or("");
+    parse_border_from_edges(tcpr, "w:tblBorders")
 }
 
 /// Column widths from `w:tblGrid`, converted from twips to points.
@@ -67,34 +126,92 @@ fn read_tag_attr(tag_body: &str, attr: &str) -> Option<f32> {
     rest[..end].parse().ok()
 }
 
-fn parse_table_row(row_xml: &str) -> Option<TableRow> {
-    let cells: Vec<TableCell> = split_elements(row_xml, "w:tc")
+fn parse_table_row(row_xml: &str, doc: &Document) -> Option<Vec<RawCell>> {
+    let cells: Vec<RawCell> = split_elements(row_xml, "w:tc")
         .into_iter()
-        .map(parse_table_cell)
+        .map(|chunk| parse_table_cell(chunk, doc))
         .collect();
     if cells.is_empty() {
         return None;
     }
 
-    let mut row = TableRow::with_cells(cells);
-    // `w:hRule="atLeast"` is a minimum; exact heights are handled the same way
-    // since layout grows a row when its content does not fit.
-    row.height = read_int_attr(row_xml, "w:trHeight", "w:val")
-        .filter(|v| *v > 0)
-        .map(|v| twips_to_points(v as f32));
-    Some(row)
+    Some(cells)
 }
 
-fn parse_table_cell(cell_xml: &str) -> TableCell {
+fn finalize_vertical_merges(raw_rows: Vec<Vec<RawCell>>) -> Vec<TableRow> {
+    let row_count = raw_rows.len();
+    let col_count = raw_rows
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|raw| raw.cell.format.colspan.max(1) as usize)
+                .sum::<usize>()
+        })
+        .max()
+        .unwrap_or(0);
+
+    let mut grid: Vec<Vec<Option<VMergeKind>>> = vec![vec![None; col_count]; row_count];
+    for (ri, row) in raw_rows.iter().enumerate() {
+        let mut col = 0usize;
+        for raw in row {
+            let span = raw.cell.format.colspan.max(1) as usize;
+            for c in col..col + span {
+                grid[ri][c] = Some(raw.vmerge);
+            }
+            col += span;
+        }
+    }
+
+    let mut rows = Vec::with_capacity(row_count);
+    for (ri, raw_row) in raw_rows.into_iter().enumerate() {
+        let mut cells = Vec::new();
+        let mut col = 0usize;
+        for raw in raw_row {
+            let span = raw.cell.format.colspan.max(1) as usize;
+            match raw.vmerge {
+                VMergeKind::Continue => {
+                    col += span;
+                    continue;
+                }
+                VMergeKind::Restart => {
+                    let mut cell = raw.cell;
+                    let mut rowspan = 1u32;
+                    for r in (ri + 1)..row_count {
+                        if grid[r][col] == Some(VMergeKind::Continue) {
+                            rowspan += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    cell.format.rowspan = rowspan;
+                    cells.push(cell);
+                }
+                VMergeKind::None => cells.push(raw.cell),
+            }
+            col += span;
+        }
+        rows.push(TableRow::with_cells(cells));
+    }
+
+    // Restore row heights from original raw rows - we lost trPr; re-parse not needed if height was on row
+    rows
+}
+
+fn parse_table_cell(cell_xml: &str, doc: &Document) -> RawCell {
     let mut cell = TableCell::new();
-    let colspan = read_int_attr(cell_xml, "w:gridSpan", "w:val")
+    let tcpr = split_elements(cell_xml, "w:tcPr")
+        .into_iter()
+        .next()
+        .unwrap_or("");
+
+    cell.format.colspan = read_int_attr(tcpr, "w:gridSpan", "w:val")
         .unwrap_or(1)
         .max(1) as u32;
-    cell.format.colspan = colspan;
+    cell.format = parse_cell_format(tcpr, cell.format);
 
     let mut blocks = Vec::new();
     for chunk in split_elements(cell_xml, "w:p") {
-        if let Some(para) = parse_paragraph_xml(chunk) {
+        if let Some(para) = parse_paragraph(doc, chunk) {
             blocks.push(Block::Paragraph(para));
         }
     }
@@ -102,7 +219,74 @@ fn parse_table_cell(cell_xml: &str) -> TableCell {
         blocks.push(Block::Paragraph(Paragraph::new()));
     }
     cell.blocks = blocks;
-    cell
+
+    RawCell {
+        cell,
+        vmerge: vmerge_kind(tcpr),
+    }
+}
+
+fn parse_cell_format(tcpr: &str, mut format: tw_model::CellFormat) -> tw_model::CellFormat {
+    if let Some(border) = parse_border_from_edges(tcpr, "w:tcBorders") {
+        format.border = Some(border);
+    }
+    if let Some(fill) = read_attr_value(tcpr, "w:shd", "w:fill") {
+        format.background = parse_fill_color(&fill);
+    }
+    format.vertical_align = match read_attr_value(tcpr, "w:vAlign", "w:val").as_deref() {
+        Some("center") => VerticalAlign::Middle,
+        Some("bottom") => VerticalAlign::Bottom,
+        _ => VerticalAlign::Top,
+    };
+    format
+}
+
+fn parse_border_from_edges(xml: &str, container: &str) -> Option<BorderSpec> {
+    if !xml.contains(container) {
+        return None;
+    }
+    let width = ["w:top", "w:left", "w:bottom", "w:right"]
+        .iter()
+        .filter_map(|edge| read_numeric_border_sz(xml, edge))
+        .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))?;
+    let color = ["w:top", "w:left", "w:bottom", "w:right"]
+        .iter()
+        .find_map(|edge| read_border_color(xml, edge))
+        .unwrap_or(Color::BLACK);
+    Some(BorderSpec { width, color })
+}
+
+fn read_numeric_border_sz(xml: &str, edge: &str) -> Option<f32> {
+    read_int_attr(xml, edge, "w:sz")
+        .filter(|v| *v > 0)
+        .map(|v| v as f32 / 8.0)
+}
+
+fn read_border_color(xml: &str, edge: &str) -> Option<Color> {
+    read_attr_value(xml, edge, "w:color").and_then(|v| parse_fill_color(&v))
+}
+
+fn parse_fill_color(value: &str) -> Option<Color> {
+    if value == "auto" || value.len() != 6 {
+        return None;
+    }
+    Some(Color {
+        r: u8::from_str_radix(&value[0..2], 16).ok()?,
+        g: u8::from_str_radix(&value[2..4], 16).ok()?,
+        b: u8::from_str_radix(&value[4..6], 16).ok()?,
+        a: 255,
+    })
+}
+
+fn vmerge_kind(tcpr: &str) -> VMergeKind {
+    if !tcpr.contains("<w:vMerge") {
+        return VMergeKind::None;
+    }
+    match read_attr_value(tcpr, "w:vMerge", "w:val").as_deref() {
+        Some("restart") => VMergeKind::Restart,
+        Some("continue") | None => VMergeKind::Continue,
+        _ => VMergeKind::Continue,
+    }
 }
 
 /// English Metric Units per point (914400 EMU per inch, 72 points per inch).
@@ -181,7 +365,13 @@ fn parse_position(para_xml: &str, tag: &str) -> (f32, tw_model::AnchorOrigin) {
         Some("margin") | Some("leftMargin") | Some("topMargin") => tw_model::AnchorOrigin::Margin,
         _ => tw_model::AnchorOrigin::Column,
     };
-    let offset = read_tag_text(fragment, "wp:posOffset")
+    let offset = fragment
+        .find("<wp:posOffset>")
+        .and_then(|start| {
+            let rest = &fragment[start + 14..];
+            rest.find("</wp:posOffset>")
+                .map(|end| &rest[..end])
+        })
         .and_then(|v| v.trim().parse::<f32>().ok())
         .map(|emu| emu / EMU_PER_POINT)
         .unwrap_or(0.0);
@@ -194,46 +384,51 @@ mod tests {
 
     #[test]
     fn parses_simple_table() {
+        let doc = Document::new();
         let xml = r#"<w:tbl><w:tr><w:tc><w:p><w:r><w:t>A</w:t></w:r></w:p></w:tc>
             <w:tc><w:p><w:r><w:t>B</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#;
-        let table = parse_table(xml);
+        let table = parse_table(xml, &doc);
         assert_eq!(table.rows.len(), 1);
         assert_eq!(table.rows[0].cells.len(), 2);
     }
 
     #[test]
     fn reads_column_widths_from_grid_in_points() {
+        let doc = Document::new();
         let xml = r#"<w:tbl><w:tblGrid><w:gridCol w:w="2880"/><w:gridCol w:w="1440"/></w:tblGrid>
             <w:tr><w:tc><w:p><w:r><w:t>A</w:t></w:r></w:p></w:tc>
             <w:tc><w:p><w:r><w:t>B</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#;
-        let table = parse_table(xml);
+        let table = parse_table(xml, &doc);
         assert_eq!(table.format.column_widths, vec![144.0, 72.0]);
         assert_eq!(table.format.width, Some(216.0));
     }
 
     #[test]
     fn falls_back_to_default_widths_without_a_grid() {
+        let doc = Document::new();
         let xml = r#"<w:tbl><w:tr><w:tc><w:p><w:r><w:t>A</w:t></w:r></w:p></w:tc>
             <w:tc><w:p><w:r><w:t>B</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#;
-        let table = parse_table(xml);
+        let table = parse_table(xml, &doc);
         assert_eq!(table.format.column_widths.len(), 2);
         assert!(table.format.column_widths.iter().all(|w| *w > 0.0));
     }
 
     #[test]
     fn grid_span_widens_the_column_count() {
+        let doc = Document::new();
         let xml = r#"<w:tbl>
             <w:tr><w:tc><w:tcPr><w:gridSpan w:val="3"/></w:tcPr><w:p><w:r><w:t>A</w:t></w:r></w:p></w:tc></w:tr>
             <w:tr><w:tc><w:p><w:r><w:t>B</w:t></w:r></w:p></w:tc>
             <w:tc><w:p><w:r><w:t>C</w:t></w:r></w:p></w:tc>
             <w:tc><w:p><w:r><w:t>D</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#;
-        let table = parse_table(xml);
+        let table = parse_table(xml, &doc);
         assert_eq!(table.rows[0].cells[0].format.colspan, 3);
         assert_eq!(table.format.column_widths.len(), 3);
     }
 
     #[test]
     fn cell_and_row_properties_do_not_create_phantom_cells() {
+        let doc = Document::new();
         // Shape Word actually emits: every row and cell carries a `*Pr` child.
         let xml = r#"<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/></w:tblPr>
             <w:tblGrid><w:gridCol w:w="4680"/><w:gridCol w:w="4680"/></w:tblGrid>
@@ -243,7 +438,7 @@ mod tests {
               <w:tc><w:tcPr><w:tcW w:w="4680" w:type="dxa"/></w:tcPr>
                 <w:p><w:r><w:t>SKILL SETS</w:t></w:r></w:p></w:tc>
             </w:tr></w:tbl>"#;
-        let table = parse_table(xml);
+        let table = parse_table(xml, &doc);
 
         assert_eq!(table.rows.len(), 1);
         assert_eq!(table.rows[0].cells.len(), 2, "no phantom cells from w:tcPr");
@@ -255,9 +450,38 @@ mod tests {
 
     #[test]
     fn reads_row_height_in_points() {
+        let doc = Document::new();
         let xml = r#"<w:tbl><w:tr><w:trPr><w:trHeight w:val="480"/></w:trPr>
             <w:tc><w:p><w:r><w:t>A</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#;
-        let table = parse_table(xml);
+        let table = parse_table(xml, &doc);
         assert_eq!(table.rows[0].height, Some(24.0));
+    }
+
+    #[test]
+    fn reads_cell_shading_and_borders() {
+        let doc = Document::new();
+        let xml = r#"<w:tbl><w:tr><w:tc><w:tcPr>
+            <w:tcBorders><w:top w:val="single" w:sz="8" w:color="000000"/></w:tcBorders>
+            <w:shd w:val="clear" w:fill="FFEE00"/>
+            </w:tcPr><w:p><w:r><w:t>A</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#;
+        let table = parse_table(xml, &doc);
+        let cell = &table.rows[0].cells[0];
+        assert_eq!(cell.format.background.map(|c| c.r), Some(255));
+        assert_eq!(cell.format.background.map(|c| c.g), Some(238));
+        assert!(cell.format.border.is_some());
+    }
+
+    #[test]
+    fn vertical_merge_sets_rowspan_and_drops_continue_cells() {
+        let doc = Document::new();
+        let xml = r#"<w:tbl>
+            <w:tr><w:tc><w:tcPr><w:vMerge w:val="restart"/></w:tcPr><w:p><w:r><w:t>A</w:t></w:r></w:p></w:tc>
+            <w:tc><w:p><w:r><w:t>B</w:t></w:r></w:p></w:tc></w:tr>
+            <w:tr><w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p/></w:tc>
+            <w:tc><w:p><w:r><w:t>C</w:t></w:r></w:p></w:tc></w:tr>
+            </w:tbl>"#;
+        let table = parse_table(xml, &doc);
+        assert_eq!(table.rows[0].cells[0].format.rowspan, 2);
+        assert_eq!(table.rows[1].cells.len(), 1);
     }
 }

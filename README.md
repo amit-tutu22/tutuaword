@@ -17,6 +17,7 @@ Full engineering reference: **[docs/README.md](docs/README.md)**
 | [Vision](docs/vision.md) | Product goals, principles, non-goals |
 | [Roadmap](docs/roadmap.md) | 6-phase development plan with exit criteria |
 | [Long-Tail Gaps](docs/long-tail-gaps.md) | Partial features: PDF fonts, Hunspell, parsers, plugins, AI |
+| [UI Functionality Audit](docs/ui-functionality-audit.md) | Ribbon/menu wiring: what works vs placeholders |
 | [Architecture Overview](docs/architecture/overview.md) | Layers, process model, data flow |
 | [Crate Map](docs/architecture/crate-map.md) | Rust crate boundaries |
 | [ADRs](docs/adr/) | Architecture Decision Records |

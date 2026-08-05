@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -22,6 +23,7 @@ class EditorController extends ChangeNotifier {
     if (_engine != null) {
       _refreshFromEngine();
       _ensureGlyphCaret();
+      _syncRibbonFromCaret();
     }
     _recomputePageCount();
   }
@@ -56,6 +58,8 @@ class EditorController extends ChangeNotifier {
   double _zoom = 1.0;
   bool _showRuler = false;
   bool _showNavigationPane = false;
+  String _activeParagraphStyle = 'Normal';
+  double _indentLeft = 0;
   String? _infoMessage;
   String? _caretRunId;
   int _caretOffset = 0;
@@ -89,11 +93,30 @@ class EditorController extends ChangeNotifier {
   TextEditingController? get textController => _textController;
 
   String get selectedText {
+    if (usesGlyphRendering && _engine != null && hasGlyphSelection) {
+      return _glyphSelectedText();
+    }
     final editor = _textController;
     if (editor == null || !editor.selection.isValid || editor.selection.isCollapsed) {
       return '';
     }
     return editor.text.substring(editor.selection.start, editor.selection.end);
+  }
+
+  String _glyphSelectedText() {
+    if (_engine == null ||
+        _selAnchorRunId == null ||
+        _selFocusRunId == null ||
+        !hasGlyphSelection) {
+      return '';
+    }
+    return _engine!.fetchTextRange(
+          _selAnchorRunId!,
+          _selAnchorOffset,
+          _selFocusRunId!,
+          _selFocusOffset,
+        ) ??
+        '';
   }
 
   bool get canCutOrCopy => selectedText.isNotEmpty;
@@ -108,6 +131,11 @@ class EditorController extends ChangeNotifier {
     if (!canCutOrCopy) return;
     final text = selectedText;
     await Clipboard.setData(ClipboardData(text: text));
+    if (usesGlyphRendering && _engine != null) {
+      _deleteGlyphSelection();
+      notifyListeners();
+      return;
+    }
     _replaceSelection('');
   }
 
@@ -115,11 +143,59 @@ class EditorController extends ChangeNotifier {
     final data = await Clipboard.getData(Clipboard.kTextPlain);
     final text = data?.text;
     if (text == null || text.isEmpty) return;
+    if (usesGlyphRendering && _engine != null) {
+      if (hasGlyphSelection) {
+        _deleteGlyphSelection();
+      }
+      final runId = _caretRunId ?? _defaultRunId();
+      if (runId == null) return;
+      if (!_engine!.tryInsertText(runId, _caretOffset, text)) return;
+      _caretOffset += text.length;
+      _selAnchorRunId = runId;
+      _selAnchorOffset = _caretOffset;
+      _selFocusRunId = runId;
+      _selFocusOffset = _caretOffset;
+      _selectionRects = const [];
+      _refreshFromEngine();
+      notifyListeners();
+      return;
+    }
     _replaceSelection(plainText ? text : text);
     _textFocusNode?.requestFocus();
   }
 
   void selectAll() {
+    if (usesGlyphRendering && _engine != null) {
+      final start = _engine!.hitTestPage(0, _pageMargin, _pageMargin + _fontSize);
+      if (start == null) return;
+      final lastPage = _pageCount - 1;
+      final end = _engine!.hitTestPage(
+        lastPage,
+        _pageWidth - _pageMargin,
+        _pageHeight - _pageMargin,
+      );
+      if (end == null) return;
+      _selPage = lastPage;
+      _selAnchorRunId = start.runId;
+      _selAnchorOffset = start.charOffset;
+      _selFocusRunId = end.runId;
+      _selFocusOffset = end.charOffset;
+      _caretRunId = end.runId;
+      _caretOffset = end.charOffset;
+      _selAnchorX = _pageMargin;
+      _selAnchorY = _pageMargin + _fontSize;
+      _selFocusX = _pageWidth - _pageMargin;
+      _selFocusY = _pageHeight - _pageMargin;
+      _selectionRects = _engine!.selectionRectsOnPage(
+        _selPage,
+        _selAnchorX,
+        _selAnchorY,
+        _selFocusX,
+        _selFocusY,
+      );
+      notifyListeners();
+      return;
+    }
     final editor = _textController;
     if (editor == null) return;
     editor.selection = TextSelection(baseOffset: 0, extentOffset: editor.text.length);
@@ -128,6 +204,11 @@ class EditorController extends ChangeNotifier {
 
   void deleteSelection() {
     if (!canCutOrCopy) return;
+    if (usesGlyphRendering && _engine != null) {
+      _deleteGlyphSelection();
+      notifyListeners();
+      return;
+    }
     _replaceSelection('');
   }
 
@@ -198,8 +279,12 @@ class EditorController extends ChangeNotifier {
   double get zoom => _zoom;
   bool get showRuler => _showRuler;
   bool get showNavigationPane => _showNavigationPane;
+  String get activeParagraphStyle => _activeParagraphStyle;
+  double get indentLeft => _indentLeft;
   String? get infoMessage => _infoMessage;
   CaretGeometry? get caretGeometry => _caretGeometry;
+  /// Page index (0-based) where the caret/selection is active.
+  int get caretPage => _selPage;
   List<GlyphSelectionRect> get selectionRects => _selectionRects;
   bool get hasGlyphSelection {
     if (_selAnchorRunId == null || _selFocusRunId == null) return false;
@@ -294,16 +379,15 @@ class EditorController extends ChangeNotifier {
 
   /// Display list bytes for [page], cached per layout version.
   Uint8List displayListForPage(int page) {
-    if (page == _currentPage && _displayListBytes.isNotEmpty) {
-      return _displayListBytes;
-    }
     if (_engine == null) return Uint8List(0);
 
     final cached = _pageDisplayLists[page];
     if (cached != null) return cached;
 
     final bytes = _engine!.fetchPageDisplayList(page) ?? Uint8List(0);
-    _pageDisplayLists[page] = bytes;
+    if (bytes.isNotEmpty) {
+      _pageDisplayLists[page] = bytes;
+    }
     return bytes;
   }
 
@@ -342,13 +426,16 @@ class EditorController extends ChangeNotifier {
 
   void hitTestAt(int pageIndex, double x, double y) {
     if (_engine == null) return;
-    final result = _engine!.hitTestPage(pageIndex, x, y);
-    if (result == null) return;
+    _activateGlyphPage(pageIndex);
+    var result = _engine!.hitTestPage(pageIndex, x, y);
+    if (result == null) {
+      _placeCaretOnEmptyPage(pageIndex, x, y);
+      return;
+    }
     _caretRunId = result.runId;
     _caretOffset = result.charOffset;
     _caretGeometry = _engine!.caretGeometryAt(pageIndex, x, y);
     // Collapse selection to the caret.
-    _selPage = pageIndex;
     _selAnchorRunId = result.runId;
     _selAnchorOffset = result.charOffset;
     _selAnchorX = x;
@@ -358,6 +445,51 @@ class EditorController extends ChangeNotifier {
     _selFocusX = x;
     _selFocusY = y;
     _selectionRects = const [];
+    _syncRibbonFromCaret();
+    notifyListeners();
+  }
+  void _activateGlyphPage(int pageIndex) {
+    _selPage = pageIndex;
+    _engine?.setCurrentPageIndex(pageIndex);
+  }
+
+  /// Empty pages have no laid-out lines; anchor insertion at the document tail
+  /// but draw the caret where the user clicked.
+  void _placeCaretOnEmptyPage(int pageIndex, double x, double y) {
+    HitTestResult? tail;
+    for (var p = pageIndex; p >= 0; p--) {
+      tail ??= _engine!.hitTestPage(
+        p,
+        _pageWidth - _pageMargin,
+        _pageHeight - _pageMargin,
+      );
+    }
+    tail ??= _engine!.hitTestPage(0, _pageMargin, _pageMargin + _fontSize);
+
+    if (tail != null) {
+      _caretRunId = tail.runId;
+      _caretOffset = tail.charOffset;
+      _selAnchorRunId = tail.runId;
+      _selAnchorOffset = tail.charOffset;
+      _selFocusRunId = tail.runId;
+      _selFocusOffset = tail.charOffset;
+    }
+
+    final geom = tail != null
+        ? _engine!.caretAtPosition(pageIndex, tail.runId, tail.charOffset)
+        : null;
+    _caretGeometry = geom ??
+        CaretGeometry(
+          x: x.clamp(_pageMargin, _pageWidth - _pageMargin),
+          y: (y - _fontSize).clamp(_pageMargin, _pageHeight - _pageMargin),
+          height: _fontSize * _lineHeightFactor,
+        );
+    _selAnchorX = _caretGeometry!.x;
+    _selAnchorY = _caretGeometry!.y;
+    _selFocusX = _caretGeometry!.x;
+    _selFocusY = _caretGeometry!.y;
+    _selectionRects = const [];
+    _syncRibbonFromCaret();
     notifyListeners();
   }
 
@@ -388,10 +520,10 @@ class EditorController extends ChangeNotifier {
     final runId = _caretRunId;
     if (runId == null) return;
 
-    final before = _engine!.caretAtPosition(_currentPage, runId, _caretOffset);
+    final before = _engine!.caretAtPosition(_selPage, runId, _caretOffset);
     final candidate = (_caretOffset + delta).clamp(0, 1 << 30);
     if (candidate != _caretOffset) {
-      final after = _engine!.caretAtPosition(_currentPage, runId, candidate);
+      final after = _engine!.caretAtPosition(_selPage, runId, candidate);
       if (after != null && !_sameCaretGeometry(before, after)) {
         _setGlyphCaret(runId, candidate, after);
         return;
@@ -402,7 +534,7 @@ class EditorController extends ChangeNotifier {
     if (before == null) return;
     final nudge = delta > 0 ? 2.0 : -2.0;
     final probeX = (before.x + nudge).clamp(_pageMargin, _pageWidth - _pageMargin);
-    hitTestAt(_currentPage, probeX, before.y);
+    hitTestAt(_selPage, probeX, before.y);
   }
 
   bool _sameCaretGeometry(CaretGeometry? a, CaretGeometry b) {
@@ -420,6 +552,7 @@ class EditorController extends ChangeNotifier {
     _selFocusRunId = runId;
     _selFocusOffset = offset;
     _selectionRects = const [];
+    _syncRibbonFromCaret();
     notifyListeners();
   }
 
@@ -428,7 +561,7 @@ class EditorController extends ChangeNotifier {
     final stepY = _fontSize * _lineHeightFactor;
     final newY = _caretGeometry!.y + stepY * direction;
     // Keep X stable so we land on the nearest glyph segment for that line.
-    hitTestAt(_currentPage, _caretGeometry!.x, newY);
+    hitTestAt(_selPage, _caretGeometry!.x, newY);
   }
 
   void beginGlyphSelection(int pageIndex, double x, double y) {
@@ -459,6 +592,7 @@ class EditorController extends ChangeNotifier {
 
   void endGlyphSelection(int pageIndex, double x, double y) {
     updateGlyphSelection(pageIndex, x, y);
+    _syncRibbonFromCaret();
   }
 
   void insertGlyphCharacter(String char) {
@@ -471,7 +605,9 @@ class EditorController extends ChangeNotifier {
     if (runId == null) return;
     final oldCaretX = _caretGeometry?.x;
     final oldCaretOffset = _caretOffset;
-    _engine!.insertText(runId, _caretOffset, char);
+    if (!_engine!.tryInsertText(runId, _caretOffset, char)) {
+      return;
+    }
     _caretOffset += char.length;
     _selAnchorRunId = runId;
     _selAnchorOffset = _caretOffset;
@@ -510,7 +646,7 @@ class EditorController extends ChangeNotifier {
     _refreshFromEngine();
     // Place caret on the new paragraph (line below the previous caret).
     final nextY = prevY + _fontSize * _lineHeightFactor;
-    hitTestAt(_currentPage, prevX.clamp(_pageMargin, _pageWidth - _pageMargin), nextY);
+    hitTestAt(_selPage, prevX.clamp(_pageMargin, _pageWidth - _pageMargin), nextY);
     notifyListeners();
   }
 
@@ -520,45 +656,72 @@ class EditorController extends ChangeNotifier {
       _deleteGlyphSelection();
       return;
     }
-    if (_caretOffset <= 0) return;
     final runId = _caretRunId ?? _defaultRunId();
     if (runId == null) return;
-    _engine!.deleteRange(runId, _caretOffset - 1, _caretOffset);
-    _caretOffset = (_caretOffset - 1).clamp(0, 1 << 30);
-    _selAnchorRunId = runId;
-    _selAnchorOffset = _caretOffset;
-    _selFocusRunId = runId;
-    _selFocusOffset = _caretOffset;
+    if (_caretOffset > 0) {
+      _engine!.deleteRange(runId, _caretOffset - 1, _caretOffset);
+      _caretOffset = _caretOffset - 1;
+      _selAnchorRunId = runId;
+      _selAnchorOffset = _caretOffset;
+      _selFocusRunId = runId;
+      _selFocusOffset = _caretOffset;
+      _selectionRects = const [];
+      _refreshFromEngine();
+      notifyListeners();
+      return;
+    }
+
+    // At a run boundary — delete the preceding character via cross-run range.
+    final geom = _engine!.caretAtPosition(_selPage, runId, 0);
+    if (geom == null) return;
+    final probeX = (geom.x - 2.0).clamp(_pageMargin, _pageWidth - _pageMargin);
+    final prev = _engine!.hitTestPage(_selPage, probeX, geom.y);
+    if (prev == null) return;
+    if (prev.runId == runId && prev.charOffset == 0) return;
+
+    final startRun = prev.runId;
+    final startOff = prev.charOffset > 0 ? prev.charOffset - 1 : 0;
+    if (!_engine!.deleteDocRange(startRun, startOff, runId, _caretOffset)) return;
+
+    _caretRunId = startRun;
+    _caretOffset = startOff;
+    _selAnchorRunId = startRun;
+    _selAnchorOffset = startOff;
+    _selFocusRunId = startRun;
+    _selFocusOffset = startOff;
     _selectionRects = const [];
     _refreshFromEngine();
+    _syncCaretGeometry();
     notifyListeners();
   }
 
   void _deleteGlyphSelection() {
-    // Single-run selection delete; multi-run delete is deferred.
     if (_engine == null || _selAnchorRunId == null || _selFocusRunId == null) return;
-    if (_selAnchorRunId != _selFocusRunId) {
-      // Collapse and delete one char at focus for now.
-      final runId = _selFocusRunId!;
-      final offset = _selFocusOffset;
-      if (offset > 0) {
-        _engine!.deleteRange(runId, offset - 1, offset);
-        _caretOffset = offset - 1;
-      }
+    final anchorRun = _selAnchorRunId!;
+    final anchorOff = _selAnchorOffset;
+    final focusRun = _selFocusRunId!;
+    final focusOff = _selFocusOffset;
+
+    if (anchorRun == focusRun) {
+      final start = anchorOff < focusOff ? anchorOff : focusOff;
+      final end = anchorOff < focusOff ? focusOff : anchorOff;
+      if (start >= end) return;
+      if (!_engine!.deleteRange(anchorRun, start, end)) return;
+      _caretRunId = anchorRun;
+      _caretOffset = start;
     } else {
-      final start = _selAnchorOffset < _selFocusOffset ? _selAnchorOffset : _selFocusOffset;
-      final end = _selAnchorOffset < _selFocusOffset ? _selFocusOffset : _selAnchorOffset;
-      if (start < end) {
-        _engine!.deleteRange(_selAnchorRunId!, start, end);
-        _caretOffset = start;
-      }
+      if (!_engine!.deleteDocRange(anchorRun, anchorOff, focusRun, focusOff)) return;
+      _caretRunId = anchorRun;
+      _caretOffset = anchorOff;
     }
-    _selAnchorOffset = _caretOffset;
-    _selFocusOffset = _caretOffset;
+
     _selAnchorRunId = _caretRunId;
+    _selAnchorOffset = _caretOffset;
     _selFocusRunId = _caretRunId;
+    _selFocusOffset = _caretOffset;
     _selectionRects = const [];
     _refreshFromEngine();
+    _syncCaretGeometry();
     notifyListeners();
   }
 
@@ -577,7 +740,9 @@ class EditorController extends ChangeNotifier {
 
   void _ensureGlyphCaret() {
     if (_engine == null || _caretRunId != null) return;
-    final result = _engine!.hitTestPage(_currentPage, _pageMargin, _pageMargin + _fontSize);
+    _selPage = 0;
+    _engine!.setCurrentPageIndex(0);
+    final result = _engine!.hitTestPage(_selPage, _pageMargin, _pageMargin + _fontSize);
     if (result == null) return;
     _caretRunId = result.runId;
     _caretOffset = result.charOffset;
@@ -586,7 +751,7 @@ class EditorController extends ChangeNotifier {
     _selFocusRunId = result.runId;
     _selFocusOffset = result.charOffset;
     _caretGeometry = _engine!.caretGeometryAt(
-      _currentPage,
+      _selPage,
       _pageMargin,
       _pageMargin + _fontSize,
     );
@@ -661,8 +826,7 @@ class EditorController extends ChangeNotifier {
   void setFontFamily(String family) {
     _fontFamily = family;
     if (usesGlyphRendering && _engine != null) {
-      final escaped = family.replaceAll(r'\', r'\\').replaceAll('"', r'\"');
-      _applyCharFormatJson('{"font_family":"$escaped"}');
+      _applyCharFormatJson(jsonEncode({'font_family': family}));
     }
     notifyListeners();
   }
@@ -729,6 +893,88 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void clearFormatting() {
+    final range = _formatRange();
+    if (range == null || _engine == null || !usesGlyphRendering) return;
+    final (startRun, startOff, endRun, endOff) = range;
+    if (_engine!.clearFormat(startRun, startOff, endRun, endOff)) {
+      _refreshFromEngine();
+      _syncRibbonFromCaret();
+      _statusText = 'Formatting cleared';
+    }
+    notifyListeners();
+  }
+
+  static const _indentStep = 36.0;
+
+  void increaseIndent() {
+    if (usesGlyphRendering && _engine != null) {
+      final next = _indentLeft + _indentStep;
+      _applyParaFormatJson('{"indent_left":$next}');
+      _indentLeft = next;
+    }
+    notifyListeners();
+  }
+
+  void decreaseIndent() {
+    if (usesGlyphRendering && _engine != null) {
+      final next = (_indentLeft - _indentStep).clamp(0.0, double.infinity);
+      _applyParaFormatJson('{"indent_left":$next}');
+      _indentLeft = next;
+    }
+    notifyListeners();
+  }
+
+  void insertPageBreak() {
+    final caretRun = _caretRunId ?? _defaultRunId();
+    if (_engine != null && _engine!.insertPageBreakAt(caretRunId: caretRun)) {
+      _refreshFromEngine();
+      _statusText = 'Page break inserted';
+    } else {
+      _statusText = 'Page break inserted (mock)';
+    }
+    notifyListeners();
+  }
+
+  void _syncRibbonFromCaret() {
+    if (!usesGlyphRendering || _engine == null) return;
+    final runId = hasGlyphSelection ? _selFocusRunId : _caretRunId;
+    final resolvedRun = runId ?? _defaultRunId();
+    if (resolvedRun == null) return;
+    final json = _engine!.fetchCaretFormat(resolvedRun);
+    if (json == null || json.isEmpty) return;
+
+    final map = jsonDecode(json) as Map<String, dynamic>;
+    final charFmt = map['char_format'] as Map<String, dynamic>? ?? {};
+    final paraFmt = map['para_format'] as Map<String, dynamic>? ?? {};
+
+    _bold = charFmt['bold'] == true;
+    _italic = charFmt['italic'] == true;
+    final underline = charFmt['underline'];
+    _underline = underline != null && underline != 'None';
+    _strikethrough = charFmt['strikethrough'] == true;
+    _subscript = charFmt['subscript'] == true;
+    _superscript = charFmt['superscript'] == true;
+    _fontFamily = charFmt['font_family'] as String? ?? 'Calibri';
+    _fontSize = (charFmt['font_size'] as num?)?.toDouble() ?? 11;
+    _alignment = _alignmentFromJson(paraFmt['alignment'] as String?);
+    _indentLeft = (paraFmt['indent_left'] as num?)?.toDouble() ?? 0;
+
+    final styleName = map['style_name'] as String?;
+    if (styleName != null && styleName.isNotEmpty) {
+      _activeParagraphStyle = styleName;
+    }
+  }
+
+  TextAlign _alignmentFromJson(String? value) {
+    return switch (value) {
+      'Center' => TextAlign.center,
+      'Right' => TextAlign.right,
+      'Justify' => TextAlign.justify,
+      _ => TextAlign.left,
+    };
+  }
+
   void setZoom(double value) {
     _zoom = value.clamp(0.5, 3.0);
     notifyListeners();
@@ -775,7 +1021,9 @@ class EditorController extends ChangeNotifier {
   }
 
   void applyHeading1() {
-    if (_engine != null && _engine!.applyHeading1Style()) {
+    final caretRun = _caretRunId ?? _defaultRunId();
+    if (_engine != null && _engine!.applyHeading1Style(caretRunId: caretRun)) {
+      _activeParagraphStyle = 'Heading 1';
       _refreshFromEngine();
       _updateRenderModeAfterEngineOpen();
       _statusText = 'Heading 1 applied';
@@ -785,8 +1033,22 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void applyNormalStyle() {
+    final caretRun = _caretRunId ?? _defaultRunId();
+    if (_engine != null && _engine!.applyNormalStyleAt(caretRunId: caretRun)) {
+      _activeParagraphStyle = 'Normal';
+      _refreshFromEngine();
+      _updateRenderModeAfterEngineOpen();
+      _statusText = 'Normal style applied';
+    } else {
+      _statusText = 'Normal style applied (mock)';
+    }
+    notifyListeners();
+  }
+
   void applyNumberedList() {
-    if (_engine != null && _engine!.applyNumberedListStyle()) {
+    final caretRun = _caretRunId ?? _defaultRunId();
+    if (_engine != null && _engine!.applyNumberedListStyle(caretRunId: caretRun)) {
       _refreshFromEngine();
       _updateRenderModeAfterEngineOpen();
       _statusText = 'Numbered list applied';
@@ -797,7 +1059,8 @@ class EditorController extends ChangeNotifier {
   }
 
   void applyBulletList() {
-    if (_engine != null && _engine!.applyBulletListStyle()) {
+    final caretRun = _caretRunId ?? _defaultRunId();
+    if (_engine != null && _engine!.applyBulletListStyle(caretRunId: caretRun)) {
       _refreshFromEngine();
       _updateRenderModeAfterEngineOpen();
       _statusText = 'Bullet list applied';
@@ -843,6 +1106,7 @@ class EditorController extends ChangeNotifier {
   void undo() {
     if (_engine != null && _engine!.undoEdit()) {
       _refreshFromEngine();
+      _syncRibbonFromCaret();
       _statusText = 'Undo';
     }
     notifyListeners();
@@ -851,6 +1115,7 @@ class EditorController extends ChangeNotifier {
   void redo() {
     if (_engine != null && _engine!.redoEdit()) {
       _refreshFromEngine();
+      _syncRibbonFromCaret();
       _statusText = 'Redo';
     }
     notifyListeners();
@@ -1009,9 +1274,7 @@ class EditorController extends ChangeNotifier {
   void _refreshFromEngine() {
     final data = _engine?.fetchDisplayList();
     if (data == null) return;
-    if (data.version != _displayVersion) {
-      _pageDisplayLists.clear();
-    }
+    _pageDisplayLists.clear();
     _displayListBytes = data.bytes;
     _displayVersion = data.version;
     _pageWidth = data.pageWidth;
@@ -1033,11 +1296,30 @@ class EditorController extends ChangeNotifier {
 
   void _syncCaretGeometry() {
     if (_engine == null || _caretRunId == null || _preferTextRendering) return;
-    _caretGeometry = _engine!.caretAtPosition(
-      _currentPage,
+    final geom = _engine!.caretAtPosition(
+      _selPage,
       _caretRunId!,
       _caretOffset,
     );
+    if (geom != null) {
+      _caretGeometry = geom;
+      return;
+    }
+    // Run may be on another page after relayout — search all pages.
+    for (var page = 0; page < _pageCount; page++) {
+      final cross = _engine!.caretAtPosition(page, _caretRunId!, _caretOffset);
+      if (cross != null) {
+        _selPage = page;
+        _caretGeometry = cross;
+        return;
+      }
+    }
+    // Re-resolve via hit test at the last known caret location.
+    if (_caretGeometry != null) {
+      hitTestAt(_selPage, _caretGeometry!.x, _caretGeometry!.y);
+    } else {
+      _ensureGlyphCaret();
+    }
   }
 
   void _recomputePageCount() {
