@@ -50,4 +50,14 @@ See [docs/phase-plan.md](docs/phase-plan.md) for the full phase-wise plan.
 
 ## License
 
-See [LICENSE](LICENSE).
+Licensed in three parts — see [LICENSE](LICENSE) for the full statement.
+
+| Component | Paths | License |
+|-----------|-------|---------|
+| Core Engine | `crates/`, `app/`, and the rest of the repository | [MPL 2.0](LICENSE-MPL-2.0) |
+| Plugins | `plugins/` (Phase 6) | [Apache 2.0](LICENSE-APACHE-2.0) |
+| SDK | `sdk/` (Phase 6) | [MIT](LICENSE-MIT) |
+
+The engine is file-level copyleft: you can build proprietary software on top of
+it, but changes to engine files stay open. The plugin surface and the developer
+SDK are permissive so that extensions carry no obligations.

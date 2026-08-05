@@ -120,6 +120,66 @@ fn corpus_render_gate_passes_95_percent() {
     );
 }
 
+/// A shape summary of a document: what a save must not change.
+fn outline(doc: &tw_model::Document) -> Vec<String> {
+    doc.sections
+        .iter()
+        .flat_map(|section| section.blocks.iter())
+        .map(|block| match block {
+            tw_model::Block::Paragraph(para) => format!("p:{}", para.full_text()),
+            tw_model::Block::Table(table) => format!(
+                "table:{}x{}",
+                table.rows.len(),
+                table.rows.first().map(|r| r.cells.len()).unwrap_or(0)
+            ),
+            tw_model::Block::ImageBlock(image) => {
+                format!("image:{}", image.data.bytes.len())
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn every_corpus_file_survives_a_save() {
+    ensure_corpus();
+    let entries: Vec<_> = fs::read_dir(corpus_dir())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|ext| ext == "docx"))
+        .filter(|p| !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('_')))
+        .collect();
+
+    let mut losses = Vec::new();
+    for path in &entries {
+        let bytes = fs::read(path).unwrap();
+        let imported = import(&bytes).unwrap();
+        let before = outline(&imported.document);
+
+        // Export the document as an edit would: the package is no longer a
+        // stand-in for the model, so this exercises the serializer.
+        let mut package = imported.package.clone();
+        package.mark_modified("word/document.xml".into());
+        let exported = tw_docx::export(&imported.document, &package).unwrap();
+        let after = outline(&import(&exported).unwrap().document);
+
+        if before != after {
+            losses.push(format!(
+                "{}\n  before: {before:?}\n  after:  {after:?}",
+                path.file_name().unwrap().to_string_lossy()
+            ));
+        }
+    }
+
+    assert!(
+        losses.is_empty(),
+        "saving changed {} of {} corpus documents:\n{}",
+        losses.len(),
+        entries.len(),
+        losses.join("\n")
+    );
+}
+
 #[test]
 fn large_docx_open_benchmark_under_two_seconds() {
     let mut body = String::from(r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>"#);

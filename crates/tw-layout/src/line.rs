@@ -253,6 +253,23 @@ fn emit_line(
     lines.push(line);
 }
 
+/// The face a run asks for: its family at its weight and slant, falling back to
+/// the paragraph's font when the run does not name one.
+fn font_for(
+    shaper: &mut TextShaper,
+    format: &tw_model::CharFormat,
+    fallback: tw_shape::FontId,
+) -> tw_shape::FontId {
+    shaper
+        .fonts_mut()
+        .resolve_styled(
+            format.font_family.as_deref(),
+            format.bold.unwrap_or(false),
+            format.italic.unwrap_or(false),
+        )
+        .unwrap_or(fallback)
+}
+
 /// Sums shaped advances for a candidate line without touching the glyph atlas.
 fn measure_range(
     shaper: &mut TextShaper,
@@ -272,6 +289,7 @@ fn measure_range(
         if segment_text.is_empty() {
             continue;
         }
+        let run_font = font_for(shaper, &run.format, fid);
         for (piece_index, piece) in segment_text.split('\t').enumerate() {
             if piece_index > 0 {
                 width = next_tab_stop(width, tab_origin_offset);
@@ -279,7 +297,7 @@ fn measure_range(
             if piece.is_empty() {
                 continue;
             }
-            let shaped = shaper.shape(piece, &run.format, fid);
+            let shaped = shaper.shape(piece, &run.format, run_font);
             width += shaped.glyphs.iter().map(|g| g.x_advance).sum::<f32>();
         }
     }
@@ -353,6 +371,7 @@ fn shape_line(
             .map(|c| c.to_argb())
             .unwrap_or(default_color);
         let seg_start_x = cursor_x;
+        let run_font = font_for(shaper, &run.format, fid);
 
         // Tabs jump to the next stop rather than being shaped, which would
         // render them as `.notdef` boxes.
@@ -364,13 +383,15 @@ fn shape_line(
                 continue;
             }
 
-            let shaped = shaper.shape(piece, &run.format, fid);
+            let shaped = shaper.shape(piece, &run.format, run_font);
             for g in &shaped.glyphs {
-                let key = AtlasKey::new(g.font_key, g.glyph_id, size);
+                let key = AtlasKey::new(g.font_key(), g.glyph_id, size);
                 let entry = match atlas.get(&key).cloned() {
                     Some(entry) => Some(entry),
                     None => {
-                        let raster = shaper.rasterize_glyph(fid, g.glyph_id, size);
+                        // Rasterize from the glyph's own face, which is a
+                        // fallback when the run font lacked the character.
+                        let raster = shaper.rasterize_glyph(g.font, g.glyph_id, size);
                         if raster.width == 0 || raster.height == 0 {
                             None
                         } else {
@@ -394,7 +415,7 @@ fn shape_line(
                         atlas_w: entry.width as f32,
                         atlas_h: entry.height as f32,
                         color: tint,
-                        font_id: g.font_key,
+                        font_id: g.font_key(),
                     });
                 }
                 cursor_x += g.x_advance;

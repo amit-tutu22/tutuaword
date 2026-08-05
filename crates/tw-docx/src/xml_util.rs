@@ -63,6 +63,19 @@ pub fn read_own_attr<'a>(element_body: &'a str, attr: &str) -> Option<&'a str> {
     Some(&rest[..end])
 }
 
+/// Reads an OOXML on/off property such as `<w:b/>`, `<w:b w:val="0"/>`, or
+/// `<w:i w:val="true"/>`. Returns `None` when the element is absent.
+///
+/// Matching the tag name exactly matters here: a substring test for `<w:i`
+/// also hits `<w:ind>` and `<w:iCs>`, and `<w:b` hits `<w:bCs>` and `<w:bdr>`.
+pub fn read_toggle(xml: &str, tag: &str) -> Option<bool> {
+    let element = split_elements(xml, tag).into_iter().next()?;
+    Some(match read_own_attr(element, "w:val") {
+        Some(value) => !matches!(value, "0" | "false" | "off"),
+        None => true,
+    })
+}
+
 fn is_name_boundary(after_tag_name: &str) -> bool {
     matches!(
         after_tag_name.as_bytes().first(),
@@ -170,6 +183,17 @@ pub fn half_points_to_points(half_pts: f32) -> f32 {
 }
 
 pub fn extract_plain_text(xml: &str) -> String {
+    extract_text(xml, true)
+}
+
+/// Text of a single run. Unlike [`extract_plain_text`] this leaves page breaks
+/// out, because a page break is modelled as its own `RunContent` and folding it
+/// in as a newline as well would count it twice.
+pub fn extract_run_text(xml: &str) -> String {
+    extract_text(xml, false)
+}
+
+fn extract_text(xml: &str, page_breaks_as_newlines: bool) -> String {
     let mut out = String::new();
     let mut rest = xml;
     while let Some(tag_start) = rest.find('<') {
@@ -180,7 +204,11 @@ pub fn extract_plain_text(xml: &str) -> String {
             out.push('\t');
             rest = skip_tag(rest);
         } else if rest.starts_with("<w:br") {
-            out.push('\n');
+            let head = &rest[..rest.find('>').map(|i| i + 1).unwrap_or(rest.len())];
+            let is_page = head.contains("\"page\"") || head.contains("'page'");
+            if page_breaks_as_newlines || !is_page {
+                out.push('\n');
+            }
             rest = skip_tag(rest);
         } else if rest.starts_with("<w:t") {
             if let Some(text) = read_tag_text(rest, "w:t") {

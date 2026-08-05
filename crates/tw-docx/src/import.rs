@@ -4,9 +4,10 @@ use std::io::{Cursor, Read};
 use tw_model::{Block, Document, Paragraph};
 use zip::ZipArchive;
 
-use crate::paragraph::parse_paragraph;
+use crate::paragraph::{paragraph_properties_xml, parse_paragraph};
 use crate::styles::{
-    parse_numbering_xml, parse_section_properties, parse_styles_xml, parse_theme_xml,
+    parse_numbering_xml, parse_para_properties, parse_section_properties, parse_styles_xml,
+    parse_theme_xml,
 };
 use crate::table::{parse_image_block, parse_table, MediaResolver};
 use crate::xml_util::{
@@ -66,6 +67,7 @@ pub fn import_docx(source: &[u8]) -> Result<ImportResult, DocxError> {
         parse_document_xml(&xml, &styles_xml, &numbering_xml, &theme_xml, &media);
 
     apply_headers_footers(&mut document, &xml, &header_parts, &footer_parts);
+    package.source_fingerprint = Some(crate::fingerprint::document_fingerprint(&document));
 
     Ok(ImportResult { document, package })
 }
@@ -164,12 +166,17 @@ fn parse_document_xml(
     for (chunk, kind) in iter_body_blocks(body) {
         match kind {
             BlockKind::Paragraph => {
+                let image = parse_image_block(chunk, media);
                 if let Some(para) = parse_paragraph(&doc, chunk) {
                     blocks.push(Block::Paragraph(para));
-                } else if chunk.contains("<w:pPr") {
-                    blocks.push(Block::Paragraph(Paragraph::new()));
+                } else if image.is_none() {
+                    // A paragraph holding only a drawing contributes the image
+                    // alone, but an empty one still occupies its own line.
+                    let mut para = Paragraph::new();
+                    para.format = parse_para_properties(paragraph_properties_xml(chunk));
+                    blocks.push(Block::Paragraph(para));
                 }
-                if let Some(img) = parse_image_block(chunk, media) {
+                if let Some(img) = image {
                     blocks.push(Block::ImageBlock(img));
                 }
             }
@@ -193,6 +200,7 @@ fn parse_document_xml(
         }
     }
 
+    crate::styles::resolve_theme_fonts(&mut doc);
     doc
 }
 

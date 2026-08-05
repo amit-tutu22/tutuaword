@@ -112,6 +112,12 @@ pub fn parse_image_block(para_xml: &str, media: &dyn MediaResolver) -> Option<Im
     if !para_xml.contains("<w:drawing") && !para_xml.contains("<w:pict") {
         return None;
     }
+    // A drawing container is not necessarily a picture: Word also uses it for
+    // shapes, text boxes, and VML rules like the `<v:rect>` horizontal
+    // separators that HTML-to-DOCX converters emit. Only something pointing at
+    // an image part is one.
+    let rel_id = picture_relationship_id(para_xml)?;
+
     let width = read_attr_value(para_xml, "wp:extent", "cx")
         .and_then(|v| v.parse::<f32>().ok())
         .map(|emu| emu / EMU_PER_POINT)
@@ -122,16 +128,23 @@ pub fn parse_image_block(para_xml: &str, media: &dyn MediaResolver) -> Option<Im
         .unwrap_or(150.0);
 
     let mut block = ImageBlock::placeholder(width, height);
-    if let Some(rel_id) = read_attr_value(para_xml, "a:blip", "r:embed") {
-        if let Some(asset) = media.resolve(&rel_id) {
-            block.data = asset;
-        }
+    if let Some(asset) = media.resolve(&rel_id) {
+        block.data = asset;
     }
     block.anchor = parse_anchor(para_xml);
     if block.anchor.is_some() {
         block.wrap = tw_model::TextWrap::Behind;
     }
     Some(block)
+}
+
+/// Finds the relationship id of the image a drawing displays, if it displays
+/// one: `<a:blip>` for DrawingML, `<v:imagedata>` for legacy VML pictures.
+fn picture_relationship_id(para_xml: &str) -> Option<String> {
+    read_attr_value(para_xml, "a:blip", "r:embed")
+        .or_else(|| read_attr_value(para_xml, "a:blip", "r:link"))
+        .or_else(|| read_attr_value(para_xml, "v:imagedata", "r:id"))
+        .or_else(|| read_attr_value(para_xml, "v:imagedata", "r:embed"))
 }
 
 /// Resolves a `r:embed` relationship id to the image bytes it points at.

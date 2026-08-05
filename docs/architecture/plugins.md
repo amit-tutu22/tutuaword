@@ -206,6 +206,10 @@ SDK includes:
 - Test harness (mock document, mock UI)
 - Publishing CLI (`tw-plugin publish`)
 
+The SDK ships under MIT and plugin implementations under Apache 2.0, so neither
+inherits the engine's MPL copyleft. The plugin host (`tw-plugin`) is part of the
+engine and stays MPL. See [LICENSE](../../LICENSE).
+
 ## Security Considerations
 
 - All marketplace plugins must be signed by the marketplace key

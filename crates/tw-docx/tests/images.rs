@@ -97,6 +97,37 @@ fn an_inline_image_has_no_anchor() {
 }
 
 #[test]
+fn a_vml_rule_is_not_treated_as_an_image() {
+    // HTML-to-DOCX converters emit horizontal separators as a bare VML rect
+    // inside w:pict. There is no picture here, so there is nothing to draw.
+    let body = r##"<w:p><w:r><w:pict><v:rect alt="" style="width:475.5pt;height:.05pt" o:hr="f"><v:stroke filltype="solid" color="#000000" opacity="0"/></v:rect></w:pict></w:r></w:p>"##;
+    let docx = build_docx(body, true);
+    let result = import(&docx).unwrap();
+
+    assert!(image_blocks(&result.document).is_empty());
+}
+
+#[test]
+fn a_drawing_without_a_picture_is_not_an_image() {
+    let body = r#"<w:p><w:r><w:drawing><wp:inline><wp:extent cx="914400" cy="914400"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp/></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#;
+    let docx = build_docx(body, true);
+    let result = import(&docx).unwrap();
+
+    assert!(image_blocks(&result.document).is_empty());
+}
+
+#[test]
+fn a_legacy_vml_picture_still_resolves_its_media() {
+    let body = r#"<w:p><w:r><w:pict><v:shape><v:imagedata r:id="rId7" o:title="logo"/></v:shape></w:pict></w:r></w:p>"#;
+    let docx = build_docx(body, true);
+    let result = import(&docx).unwrap();
+    let images = image_blocks(&result.document);
+
+    assert_eq!(images.len(), 1);
+    assert_eq!(images[0].data.bytes, PNG_1X1);
+}
+
+#[test]
 fn an_anchored_image_records_its_offsets_and_origins() {
     let body = r#"<w:p><w:r><w:drawing><wp:anchor behindDoc="1">
         <wp:positionH relativeFrom="column"><wp:posOffset>-457200</wp:posOffset></wp:positionH>

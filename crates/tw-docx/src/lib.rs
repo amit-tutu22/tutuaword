@@ -5,7 +5,9 @@ use tw_model::Document;
 pub type PartName = String;
 
 mod export;
+mod fingerprint;
 mod import;
+mod media;
 mod opc;
 mod paragraph;
 mod styles;
@@ -21,6 +23,9 @@ pub struct DocxPackage {
     pub parts: HashMap<PartName, Vec<u8>>,
     pub modified_parts: HashSet<PartName>,
     pub original_bytes: Option<Vec<u8>>,
+    /// Fingerprint of the document as imported. Passthrough export is only
+    /// safe while the document still matches it.
+    pub source_fingerprint: Option<u64>,
 }
 
 impl DocxPackage {
@@ -30,6 +35,16 @@ impl DocxPackage {
 
     pub fn is_pristine(&self) -> bool {
         self.modified_parts.is_empty()
+    }
+
+    /// Whether the original bytes can stand in for exporting `doc`. Requires
+    /// both that nothing marked a part modified and that the document still
+    /// hashes to what was imported, so an edit that forgot to flag itself
+    /// cannot be silently dropped.
+    pub fn can_pass_through(&self, doc: &Document) -> bool {
+        self.is_pristine()
+            && self.original_bytes.is_some()
+            && self.source_fingerprint == Some(fingerprint::document_fingerprint(doc))
     }
 
     /// Empty package for exporting a document that was not opened from DOCX.
@@ -44,6 +59,7 @@ impl DocxPackage {
             parts,
             modified_parts: HashSet::new(),
             original_bytes: None,
+            source_fingerprint: None,
         }
     }
 }
@@ -57,8 +73,6 @@ const MINIMAL_CONTENT_TYPES: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 
 #[derive(Debug, Error)]
 pub enum DocxError {
-    #[error("docx export not implemented")]
-    ExportNotImplemented,
     #[error("word/document.xml missing from docx package")]
     MissingDocumentPart,
     #[error("io error: {0}")]
@@ -77,7 +91,7 @@ pub fn import(source: &[u8]) -> Result<ImportResult, DocxError> {
 }
 
 pub fn export(doc: &Document, package: &DocxPackage) -> Result<Vec<u8>, DocxError> {
-    if package.is_pristine() {
+    if package.can_pass_through(doc) {
         if let Some(bytes) = &package.original_bytes {
             return Ok(bytes.clone());
         }

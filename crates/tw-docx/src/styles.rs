@@ -5,9 +5,65 @@ use tw_model::{
 };
 
 use crate::xml_util::{
-    half_points_to_points, read_attr_value, read_numeric_attr, read_own_attr, split_elements,
-    twips_to_points,
+    half_points_to_points, read_attr_value, read_numeric_attr, read_own_attr, read_toggle,
+    split_elements, twips_to_points,
 };
+
+/// Marks a `font_family` that names a theme slot rather than a real family.
+pub const THEME_FONT_PREFIX: &str = "+";
+
+/// Substitutes theme font references for the families the theme names. Runs
+/// after the whole document is parsed, since `styles.xml` is read before
+/// `theme1.xml`.
+pub fn resolve_theme_fonts(doc: &mut tw_model::Document) {
+    let theme = doc.settings.theme.clone();
+    let substitute = |format: &mut CharFormat| {
+        let Some(family) = format.font_family.as_deref() else {
+            return;
+        };
+        let Some(slot) = family.strip_prefix(THEME_FONT_PREFIX) else {
+            return;
+        };
+        format.font_family = Some(if slot.starts_with("major") {
+            theme.major_font.clone()
+        } else {
+            theme.minor_font.clone()
+        });
+    };
+
+    substitute(&mut doc.styles.defaults.char_format);
+    for style in doc.styles.paragraph_styles.values_mut() {
+        substitute(&mut style.char_format);
+    }
+    for style in doc.styles.character_styles.values_mut() {
+        substitute(&mut style.char_format);
+    }
+    for section in &mut doc.sections {
+        for block in &mut section.blocks {
+            visit_block_runs(block, &substitute);
+        }
+    }
+}
+
+fn visit_block_runs(block: &mut tw_model::Block, substitute: &impl Fn(&mut CharFormat)) {
+    match block {
+        tw_model::Block::Paragraph(para) => {
+            for run in &mut para.runs {
+                substitute(&mut run.format);
+            }
+        }
+        tw_model::Block::Table(table) => {
+            for row in &mut table.rows {
+                for cell in &mut row.cells {
+                    for block in &mut cell.blocks {
+                        visit_block_runs(block, substitute);
+                    }
+                }
+            }
+        }
+        tw_model::Block::ImageBlock(_) => {}
+    }
+}
 
 pub fn parse_styles_xml(xml: &str) -> StyleSheet {
     let mut sheet = StyleSheet::with_defaults();
@@ -196,18 +252,25 @@ pub fn parse_para_properties(xml: &str) -> ParaFormat {
 }
 
 pub fn parse_char_properties(xml: &str) -> CharFormat {
+    // Character properties live in `w:rPr`. Reading the whole chunk would pick
+    // up paragraph properties too, so a `<w:ind>` would read as italic.
+    let xml = split_elements(xml, "w:rPr")
+        .into_iter()
+        .next()
+        .unwrap_or(xml);
+
     let mut format = CharFormat::default();
-    if xml.contains("<w:b") && !xml.contains("w:val=\"0\"") {
-        format.bold = Some(true);
-    }
-    if xml.contains("<w:i") && !xml.contains("w:val=\"0\"") {
-        format.italic = Some(true);
-    }
-    if xml.contains("<w:u ") || xml.contains("<w:u/>") {
-        format.underline = Some(tw_model::UnderlineStyle::Single);
-    }
-    if xml.contains("<w:strike") && !xml.contains("w:val=\"0\"") {
+    format.bold = read_toggle(xml, "w:b");
+    format.italic = read_toggle(xml, "w:i");
+    if read_toggle(xml, "w:strike").unwrap_or(false) {
         format.strikethrough = Some(true);
+    }
+    if let Some(underline) = read_attr_value(xml, "w:u", "w:val") {
+        if underline != "none" {
+            format.underline = Some(tw_model::UnderlineStyle::Single);
+        }
+    } else if split_elements(xml, "w:u").first().is_some() {
+        format.underline = Some(tw_model::UnderlineStyle::Single);
     }
     if let Some(sz) = read_numeric_attr(xml, "w:sz", "w:val") {
         format.font_size = Some(half_points_to_points(sz));
@@ -216,6 +279,12 @@ pub fn parse_char_properties(xml: &str) -> CharFormat {
         .or_else(|| read_attr_value(xml, "w:rFonts", "w:hAnsi"))
     {
         format.font_family = Some(font);
+    } else if let Some(theme) = read_attr_value(xml, "w:rFonts", "w:asciiTheme")
+        .or_else(|| read_attr_value(xml, "w:rFonts", "w:hAnsiTheme"))
+    {
+        // The theme part may not be parsed yet, so record the reference and let
+        // `resolve_theme_fonts` substitute the real family afterwards.
+        format.font_family = Some(format!("{THEME_FONT_PREFIX}{theme}"));
     }
     if let Some(color) = read_tag_text_in(xml, "w:color", "w:val") {
         format.color = parse_color(&color);
@@ -288,4 +357,152 @@ fn read_tag_text_in(xml: &str, tag: &str, attr: &str) -> Option<String> {
 fn chunk_after<'a>(xml: &'a str, marker: &str) -> Option<&'a str> {
     let start = xml.find(marker)?;
     Some(&xml[start..])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Run properties must be read as elements, not substrings: `<w:i` also
+    // appears in `<w:ind>` and `<w:iCs>`, `<w:b` in `<w:bCs>` and `<w:bdr>`.
+
+    #[test]
+    fn an_indent_does_not_make_text_italic() {
+        let xml = r#"<w:pPr><w:ind w:left="720"/></w:pPr><w:rPr><w:sz w:val="24"/></w:rPr>"#;
+
+        assert_eq!(parse_char_properties(xml).italic, None);
+    }
+
+    #[test]
+    fn complex_script_bold_alone_does_not_bold_the_run() {
+        let xml = r#"<w:rPr><w:bCs/><w:sz w:val="24"/></w:rPr>"#;
+
+        assert_eq!(parse_char_properties(xml).bold, None);
+    }
+
+    #[test]
+    fn a_bold_toggle_is_read() {
+        assert_eq!(
+            parse_char_properties(r#"<w:rPr><w:b/></w:rPr>"#).bold,
+            Some(true)
+        );
+        assert_eq!(
+            parse_char_properties(r#"<w:rPr><w:b w:val="1"/></w:rPr>"#).bold,
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn a_bold_toggle_can_be_switched_off() {
+        // A style may enable bold and the run turn it back off.
+        assert_eq!(
+            parse_char_properties(r#"<w:rPr><w:b w:val="0"/></w:rPr>"#).bold,
+            Some(false)
+        );
+        assert_eq!(
+            parse_char_properties(r#"<w:rPr><w:b w:val="false"/></w:rPr>"#).bold,
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn an_unrelated_zero_valued_property_does_not_disable_bold() {
+        let xml = r#"<w:rPr><w:b/><w:spacing w:val="0"/></w:rPr>"#;
+
+        assert_eq!(parse_char_properties(xml).bold, Some(true));
+    }
+
+    #[test]
+    fn italic_is_read_from_its_own_element() {
+        assert_eq!(
+            parse_char_properties(r#"<w:rPr><w:i/></w:rPr>"#).italic,
+            Some(true)
+        );
+        assert_eq!(
+            parse_char_properties(r#"<w:rPr><w:iCs/></w:rPr>"#).italic,
+            None
+        );
+    }
+
+    #[test]
+    fn paragraph_properties_do_not_leak_into_the_run_format() {
+        // A style chunk holds both; only w:rPr describes the characters.
+        let xml = r#"<w:pPr><w:ind w:left="720"/><w:jc w:val="center"/></w:pPr>
+                     <w:rPr><w:rFonts w:ascii="Georgia"/></w:rPr>"#;
+        let format = parse_char_properties(xml);
+
+        assert_eq!(format.font_family.as_deref(), Some("Georgia"));
+        assert_eq!(format.italic, None);
+        assert_eq!(format.bold, None);
+    }
+
+    #[test]
+    fn an_underline_of_none_is_not_an_underline() {
+        assert_eq!(
+            parse_char_properties(r#"<w:rPr><w:u w:val="none"/></w:rPr>"#).underline,
+            None
+        );
+        assert!(
+            parse_char_properties(r#"<w:rPr><w:u w:val="single"/></w:rPr>"#)
+                .underline
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn a_theme_font_is_recorded_as_a_reference() {
+        let xml = r#"<w:rPr><w:rFonts w:asciiTheme="minorHAnsi"/></w:rPr>"#;
+
+        assert_eq!(
+            parse_char_properties(xml).font_family.as_deref(),
+            Some("+minorHAnsi")
+        );
+    }
+
+    #[test]
+    fn an_explicit_family_wins_over_a_theme_reference() {
+        let xml = r#"<w:rPr><w:rFonts w:ascii="Georgia" w:hAnsiTheme="minorHAnsi"/></w:rPr>"#;
+
+        assert_eq!(
+            parse_char_properties(xml).font_family.as_deref(),
+            Some("Georgia")
+        );
+    }
+
+    #[test]
+    fn theme_references_resolve_to_the_documents_theme() {
+        let mut doc = tw_model::Document::with_paragraph("Hi");
+        doc.settings.theme.minor_font = "Aptos".into();
+        doc.settings.theme.major_font = "Aptos Display".into();
+        doc.styles.defaults.char_format.font_family = Some("+minorHAnsi".into());
+        doc.sections[0].blocks = vec![tw_model::Block::Paragraph({
+            let mut para = tw_model::Paragraph::with_text("Hi");
+            para.runs[0].format.font_family = Some("+majorHAnsi".into());
+            para
+        })];
+
+        resolve_theme_fonts(&mut doc);
+
+        assert_eq!(
+            doc.styles.defaults.char_format.font_family.as_deref(),
+            Some("Aptos")
+        );
+        let tw_model::Block::Paragraph(para) = &doc.sections[0].blocks[0] else {
+            panic!("expected a paragraph");
+        };
+        assert_eq!(para.runs[0].format.font_family.as_deref(), Some("Aptos Display"));
+    }
+
+    #[test]
+    fn a_real_family_is_left_alone_by_theme_resolution() {
+        let mut doc = tw_model::Document::with_paragraph("Hi");
+        doc.styles.defaults.char_format.font_family = Some("Times New Roman".into());
+
+        resolve_theme_fonts(&mut doc);
+
+        assert_eq!(
+            doc.styles.defaults.char_format.font_family.as_deref(),
+            Some("Times New Roman")
+        );
+    }
 }

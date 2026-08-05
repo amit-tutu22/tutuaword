@@ -84,11 +84,13 @@ impl LayoutEngine {
                             if effective_para.runs.is_empty() {
                                 effective_para.runs.push(Run::new_text(""));
                             }
-                            let resolved = doc.styles.resolve_char_format(
-                                para.style_id,
-                                &effective_para.runs[0].format,
-                            );
-                            effective_para.runs[0].format = resolved;
+                            // Every run inherits the document defaults and the
+                            // paragraph style, not just the first one.
+                            for run in &mut effective_para.runs {
+                                run.format = doc
+                                    .styles
+                                    .resolve_char_format(para.style_id, &run.format);
+                            }
 
                             let list_marker = para.format.numbering.map(|nr| {
                                 let key = (nr.numbering_id, nr.level);

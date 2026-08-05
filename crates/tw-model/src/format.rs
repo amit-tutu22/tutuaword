@@ -135,7 +135,7 @@ impl Default for SectionFormat {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 pub enum Alignment {
     #[default]
     Left,
@@ -153,7 +153,7 @@ pub enum LineSpacing {
     Multiple(f32),
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 pub enum UnderlineStyle {
     #[default]
     Single,
@@ -163,7 +163,7 @@ pub enum UnderlineStyle {
     Wave,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 pub struct Color {
     pub r: u8,
     pub g: u8,
@@ -184,7 +184,7 @@ impl Color {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum BreakType {
     Line,
     Page,
