@@ -1,0 +1,16 @@
+[package]
+name = "tw-native"
+description = "Native .twdoc format import/export"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tw-model = { path = "../tw-model" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+zip = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]

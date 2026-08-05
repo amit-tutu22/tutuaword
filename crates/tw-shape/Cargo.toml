@@ -1,0 +1,14 @@
+[package]
+name = "tw-shape"
+description = "Font discovery, text shaping, and glyph rasterization"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tw-model = { path = "../tw-model" }
+rustybuzz = { workspace = true }
+fontdb = { workspace = true }
+swash = { workspace = true }
+
+[dev-dependencies]

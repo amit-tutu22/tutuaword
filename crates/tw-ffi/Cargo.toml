@@ -1,0 +1,18 @@
+[package]
+name = "tw-ffi"
+description = "C ABI bridge for Flutter native platforms"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+tw-core = { path = "../tw-core" }
+tw-edit = { path = "../tw-edit" }
+tw-model = { path = "../tw-model" }
+uuid = { workspace = true }
+parking_lot = { workspace = true }
+
+[dev-dependencies]

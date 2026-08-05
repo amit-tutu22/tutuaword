@@ -1,0 +1,27 @@
+[package]
+name = "tw-core"
+description = "Session facade orchestrating edit, layout, render, and formats"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tw-model = { path = "../tw-model" }
+tw-text = { path = "../tw-text" }
+tw-edit = { path = "../tw-edit" }
+tw-layout = { path = "../tw-layout" }
+tw-render = { path = "../tw-render" }
+tw-native = { path = "../tw-native" }
+tw-docx = { path = "../tw-docx" }
+tw-odt = { path = "../tw-odt" }
+tw-rtf = { path = "../tw-rtf" }
+tw-html = { path = "../tw-html" }
+tw-markdown = { path = "../tw-markdown" }
+tw-pdf = { path = "../tw-pdf" }
+tw-spell = { path = "../tw-spell" }
+crossbeam-channel = { workspace = true }
+parking_lot = { workspace = true }
+thiserror = { workspace = true }
+zip = { workspace = true }
+
+[dev-dependencies]

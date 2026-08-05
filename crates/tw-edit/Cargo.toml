@@ -1,0 +1,13 @@
+[package]
+name = "tw-edit"
+description = "Document mutations, undo/redo, single mutation entry point"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tw-model = { path = "../tw-model" }
+tw-text = { path = "../tw-text" }
+thiserror = { workspace = true }
+
+[dev-dependencies]

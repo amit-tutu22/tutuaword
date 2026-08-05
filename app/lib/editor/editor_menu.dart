@@ -1,0 +1,249 @@
+import 'dart:io';
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:tutuaword/editor/editor_controller.dart';
+
+/// Full macOS menu bar — app menu (Quit), File, Edit, View, Window.
+class EditorMenuBar extends StatelessWidget {
+  const EditorMenuBar({
+    super.key,
+    required this.controller,
+    required this.onOpen,
+    required this.onSave,
+    required this.onSaveAs,
+    required this.child,
+  });
+
+  final EditorController controller;
+  final VoidCallback onOpen;
+  final VoidCallback onSave;
+  final void Function(String extension) onSaveAs;
+  final Widget child;
+
+  static const _appName = 'tutuaword';
+
+  PlatformMenuItemGroup? _group(List<PlatformMenuItem> members) {
+    if (members.isEmpty) return null;
+    return PlatformMenuItemGroup(members: members);
+  }
+
+  List<PlatformMenuItem> _compact(Iterable<PlatformMenuItem?> items) {
+    return items.whereType<PlatformMenuItem>().toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!Platform.isMacOS) {
+      return child;
+    }
+
+    return PlatformMenuBar(
+      menus: [
+        _appMenu(context),
+        _fileMenu(),
+        _editMenu(),
+        _toolsMenu(),
+        _viewMenu(),
+        _windowMenu(),
+      ],
+      child: child,
+    );
+  }
+
+  PlatformMenu _appMenu(BuildContext context) {
+    return PlatformMenu(
+      label: _appName,
+      menus: _compact([
+        if (_has(PlatformProvidedMenuItemType.about))
+          PlatformMenuItemGroup(
+            members: [
+              PlatformProvidedMenuItem(
+                type: PlatformProvidedMenuItemType.about,
+              ),
+            ],
+          ),
+        if (_has(PlatformProvidedMenuItemType.servicesSubmenu))
+          PlatformMenuItemGroup(
+            members: [
+              PlatformProvidedMenuItem(
+                type: PlatformProvidedMenuItemType.servicesSubmenu,
+              ),
+            ],
+          ),
+        _group([
+          if (_has(PlatformProvidedMenuItemType.hide))
+            PlatformProvidedMenuItem(
+              type: PlatformProvidedMenuItemType.hide,
+            ),
+          if (_has(PlatformProvidedMenuItemType.hideOtherApplications))
+            PlatformProvidedMenuItem(
+              type: PlatformProvidedMenuItemType.hideOtherApplications,
+            ),
+          if (_has(PlatformProvidedMenuItemType.showAllApplications))
+            PlatformProvidedMenuItem(
+              type: PlatformProvidedMenuItemType.showAllApplications,
+            ),
+        ]),
+        _group([
+          if (_has(PlatformProvidedMenuItemType.quit))
+            PlatformProvidedMenuItem(
+              type: PlatformProvidedMenuItemType.quit,
+            ),
+        ]),
+      ]),
+    );
+  }
+
+  PlatformMenu _fileMenu() {
+    return PlatformMenu(
+      label: 'File',
+      menus: [
+        PlatformMenuItem(
+          label: 'Open…',
+          shortcut: const SingleActivator(LogicalKeyboardKey.keyO, meta: true),
+          onSelected: onOpen,
+        ),
+        PlatformMenuItem(
+          label: 'Save…',
+          shortcut: const SingleActivator(LogicalKeyboardKey.keyS, meta: true),
+          onSelected: onSave,
+        ),
+        PlatformMenuItemGroup(
+          members: [
+            PlatformMenuItem(
+              label: 'Save as DOCX…',
+              onSelected: () => onSaveAs('docx'),
+            ),
+            PlatformMenuItem(
+              label: 'Save as ODT…',
+              onSelected: () => onSaveAs('odt'),
+            ),
+            PlatformMenuItem(
+              label: 'Save as Markdown…',
+              onSelected: () => onSaveAs('md'),
+            ),
+            PlatformMenuItem(
+              label: 'Save as HTML…',
+              onSelected: () => onSaveAs('html'),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  PlatformMenu _toolsMenu() {
+    return PlatformMenu(
+      label: 'Tools',
+      menus: [
+        PlatformMenuItem(
+          label: 'Spell Check',
+          onSelected: controller.spellCheckDocument,
+        ),
+        PlatformMenuItem(
+          label: controller.trackChanges ? 'Turn Off Track Changes' : 'Turn On Track Changes',
+          onSelected: controller.toggleTrackChanges,
+        ),
+      ],
+    );
+  }
+
+  PlatformMenu _editMenu() {
+    return PlatformMenu(
+      label: 'Edit',
+      menus: [
+        PlatformMenuItem(
+          label: 'Undo',
+          shortcut: const SingleActivator(LogicalKeyboardKey.keyZ, meta: true),
+          onSelected: () {},
+        ),
+        PlatformMenuItem(
+          label: 'Redo',
+          shortcut: const SingleActivator(
+            LogicalKeyboardKey.keyZ,
+            meta: true,
+            shift: true,
+          ),
+          onSelected: () {},
+        ),
+        PlatformMenuItemGroup(
+          members: [
+            PlatformMenuItem(
+              label: 'Cut',
+              shortcut: const SingleActivator(LogicalKeyboardKey.keyX, meta: true),
+              onSelected: controller.cutSelection,
+            ),
+            PlatformMenuItem(
+              label: 'Copy',
+              shortcut: const SingleActivator(LogicalKeyboardKey.keyC, meta: true),
+              onSelected: controller.copySelection,
+            ),
+            PlatformMenuItem(
+              label: 'Paste',
+              shortcut: const SingleActivator(LogicalKeyboardKey.keyV, meta: true),
+              onSelected: controller.paste,
+            ),
+            PlatformMenuItem(
+              label: 'Paste and Match Style',
+              shortcut: const SingleActivator(
+                LogicalKeyboardKey.keyV,
+                meta: true,
+                shift: true,
+                alt: true,
+              ),
+              onSelected: () => controller.paste(plainText: true),
+            ),
+            PlatformMenuItem(
+              label: 'Delete',
+              onSelected: controller.deleteSelection,
+            ),
+            PlatformMenuItem(
+              label: 'Select All',
+              shortcut: const SingleActivator(LogicalKeyboardKey.keyA, meta: true),
+              onSelected: controller.selectAll,
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  PlatformMenu _viewMenu() {
+    return PlatformMenu(
+      label: 'View',
+      menus: _compact([
+        if (_has(PlatformProvidedMenuItemType.toggleFullScreen))
+          PlatformProvidedMenuItem(
+            type: PlatformProvidedMenuItemType.toggleFullScreen,
+          ),
+      ]),
+    );
+  }
+
+  PlatformMenu _windowMenu() {
+    return PlatformMenu(
+      label: 'Window',
+      menus: _compact([
+        if (_has(PlatformProvidedMenuItemType.minimizeWindow))
+          PlatformProvidedMenuItem(
+            type: PlatformProvidedMenuItemType.minimizeWindow,
+          ),
+        if (_has(PlatformProvidedMenuItemType.zoomWindow))
+          PlatformProvidedMenuItem(
+            type: PlatformProvidedMenuItemType.zoomWindow,
+          ),
+        _group([
+          if (_has(PlatformProvidedMenuItemType.arrangeWindowsInFront))
+            PlatformProvidedMenuItem(
+              type: PlatformProvidedMenuItemType.arrangeWindowsInFront,
+            ),
+        ]),
+      ]),
+    );
+  }
+
+  bool _has(PlatformProvidedMenuItemType type) {
+    return PlatformProvidedMenuItem.hasMenu(type);
+  }
+}

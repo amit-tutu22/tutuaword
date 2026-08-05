@@ -1,0 +1,11 @@
+[package]
+name = "tw-odt"
+description = "OpenDocument Text import/export (Phase 3)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tw-model = { path = "../tw-model" }
+thiserror = { workspace = true }
+zip = { workspace = true }

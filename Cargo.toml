@@ -1,0 +1,48 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/tw-model",
+    "crates/tw-text",
+    "crates/tw-edit",
+    "crates/tw-shape",
+    "crates/tw-layout",
+    "crates/tw-render",
+    "crates/tw-native",
+    "crates/tw-core",
+    "crates/tw-ffi",
+    "crates/tw-pdf",
+    "crates/tw-docx",
+    "crates/tw-odt",
+    "crates/tw-markdown",
+    "crates/tw-html",
+    "crates/tw-rtf",
+    "crates/tw-spell",
+    "crates/tw-ai",
+    "crates/tw-crdt",
+    "crates/tw-plugin",
+    "crates/tw-wasm",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/Hypersdk/tutuaword"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+thiserror = "2"
+ropey = "1"
+rustybuzz = "0.20"
+fontdb = { version = "0.23", features = ["fs"] }
+swash = "0.2"
+unicode-linebreak = "0.1"
+unicode-segmentation = "1"
+crossbeam-channel = "0.5"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+chrono = { version = "0.4", features = ["serde"] }
+parking_lot = "0.12"
+quick-xml = { version = "0.37", features = ["serialize"] }
+pulldown-cmark = "0.12"
