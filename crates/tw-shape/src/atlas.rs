@@ -1,0 +1,93 @@
+use crate::{AtlasKey, RasterizedGlyph};
+use std::collections::HashMap;
+
+#[derive(Debug, Clone)]
+pub struct AtlasEntry {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub bearing_x: f32,
+    pub bearing_y: f32,
+    pub is_color: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct GlyphAtlas {
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Vec<u8>,
+    entries: HashMap<AtlasKey, AtlasEntry>,
+    cursor_x: u32,
+    cursor_y: u32,
+    row_height: u32,
+}
+
+impl Default for GlyphAtlas {
+    fn default() -> Self {
+        Self::new(2048, 2048)
+    }
+}
+
+impl GlyphAtlas {
+    pub fn new(width: u32, height: u32) -> Self {
+        Self {
+            width,
+            height,
+            pixels: vec![0; (width * height * 4) as usize],
+            entries: HashMap::new(),
+            cursor_x: 0,
+            cursor_y: 0,
+            row_height: 0,
+        }
+    }
+
+    pub fn get(&self, key: &AtlasKey) -> Option<&AtlasEntry> {
+        self.entries.get(key)
+    }
+
+    pub fn insert(&mut self, key: AtlasKey, glyph: &RasterizedGlyph) -> AtlasEntry {
+        if let Some(entry) = self.entries.get(&key) {
+            return entry.clone();
+        }
+
+        let (width, height) = (glyph.width, glyph.height);
+        if self.cursor_x + width > self.width {
+            self.cursor_x = 0;
+            self.cursor_y += self.row_height + 1;
+            self.row_height = 0;
+        }
+
+        let x = self.cursor_x;
+        let y = self.cursor_y;
+        self.row_height = self.row_height.max(height);
+
+        for row in 0..height {
+            for col in 0..width {
+                let src = ((row * width + col) * 4) as usize;
+                let dst = (((y + row) * self.width + x + col) * 4) as usize;
+                if dst + 3 < self.pixels.len() && src + 3 < glyph.rgba.len() {
+                    self.pixels[dst..dst + 4].copy_from_slice(&glyph.rgba[src..src + 4]);
+                }
+            }
+        }
+
+        self.cursor_x += width + 1;
+
+        let entry = AtlasEntry {
+            x,
+            y,
+            width,
+            height,
+            bearing_x: glyph.bearing_x,
+            bearing_y: glyph.bearing_y,
+            is_color: glyph.is_color,
+        };
+        self.entries.insert(key, entry.clone());
+        entry
+    }
+
+    pub fn pixels_rgba(&self) -> &[u8] {
+        &self.pixels
+    }
+}

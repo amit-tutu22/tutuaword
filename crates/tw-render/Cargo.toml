@@ -1,0 +1,13 @@
+[package]
+name = "tw-render"
+description = "Display list builder and binary serialization"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tw-layout = { path = "../tw-layout" }
+tw-shape = { path = "../tw-shape" }
+
+[dev-dependencies]
+tw-model = { path = "../tw-model" }

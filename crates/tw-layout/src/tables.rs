@@ -1,0 +1,249 @@
+use crate::line::{layout_paragraph, ParagraphFrame};
+use crate::types::{TableCellLayout, TableLayout};
+use tw_model::Table;
+use tw_shape::{GlyphAtlas, TextShaper};
+
+const CELL_PADDING: f32 = 4.0;
+const MIN_ROW_HEIGHT: f32 = 18.0;
+
+/// A run of table rows placed on one page.
+pub struct TableSlice {
+    pub layout: TableLayout,
+    /// Rows placed by this call, starting at the requested `start_row`.
+    pub rows_placed: usize,
+}
+
+pub fn layout_table(
+    shaper: &mut TextShaper,
+    atlas: &mut GlyphAtlas,
+    table: &Table,
+    x: f32,
+    y: f32,
+    max_width: f32,
+    default_color: u32,
+) -> TableLayout {
+    layout_table_slice(
+        shaper,
+        atlas,
+        table,
+        0,
+        x,
+        y,
+        max_width,
+        f32::INFINITY,
+        default_color,
+    )
+    .layout
+}
+
+/// Lays out rows from `start_row` that fit within `max_height`.
+///
+/// At least one row is always placed so pagination makes progress, even when a
+/// single row is taller than the page. Row spans are clamped to the slice.
+pub fn layout_table_slice(
+    shaper: &mut TextShaper,
+    atlas: &mut GlyphAtlas,
+    table: &Table,
+    start_row: usize,
+    x: f32,
+    y: f32,
+    max_width: f32,
+    max_height: f32,
+    default_color: u32,
+) -> TableSlice {
+    let col_count = column_count(table);
+    let col_widths = fit_column_widths(table, col_count, max_width);
+    // Prefix sums so a spanning cell advances by its span exactly once.
+    let col_offsets = prefix_offsets(&col_widths);
+
+    let row_count = table.rows.len();
+    let mut occupied = vec![vec![false; col_count]; row_count];
+    let table_width: f32 = col_widths.iter().sum();
+    let mut cells: Vec<TableCellLayout> = Vec::new();
+    // Row index and span per cell, so heights can be reconciled after all rows
+    // in the slice have been measured.
+    let mut cell_spans: Vec<(usize, usize)> = Vec::new();
+    let mut row_heights = vec![0.0f32; row_count];
+    let mut row_y = y;
+    let mut rows_placed = 0usize;
+
+    for ri in start_row..row_count {
+        let row = &table.rows[ri];
+        let mut row_height = row.height.unwrap_or(0.0).max(MIN_ROW_HEIGHT);
+        let mut row_cells: Vec<TableCellLayout> = Vec::new();
+        let mut row_spans: Vec<(usize, usize)> = Vec::new();
+        let mut ci = 0usize;
+
+        while ci < col_count {
+            if occupied[ri][ci] {
+                ci += 1;
+                continue;
+            }
+            let Some(cell) = row.cells.get(cell_index(row, ci)) else {
+                break;
+            };
+
+            let colspan = (cell.format.colspan.max(1) as usize).min(col_count - ci);
+            let rowspan = (cell.format.rowspan.max(1) as usize).min(row_count - ri);
+
+            for r in ri..ri + rowspan {
+                for c in ci..ci + colspan {
+                    occupied[r][c] = true;
+                }
+            }
+
+            let col_x = x + col_offsets[ci];
+            let col_w: f32 = col_widths[ci..ci + colspan].iter().sum();
+            let text_width = (col_w - CELL_PADDING * 2.0).max(1.0);
+
+            let mut cell_lines = Vec::new();
+            let mut cursor_y = row_y + CELL_PADDING;
+            for block in &cell.blocks {
+                if let tw_model::Block::Paragraph(para) = block {
+                    // Word restarts the tab grid at each cell's text edge.
+                    let (lines, height) = layout_paragraph(
+                        shaper,
+                        atlas,
+                        para,
+                        ParagraphFrame::new(col_x + CELL_PADDING, cursor_y, text_width),
+                        default_color,
+                    );
+                    cell_lines.extend(lines);
+                    cursor_y += height;
+                }
+            }
+            let content_height = cursor_y - row_y + CELL_PADDING;
+
+            if rowspan == 1 {
+                row_height = row_height.max(content_height);
+            }
+
+            row_spans.push((ri, rowspan));
+            row_cells.push(TableCellLayout {
+                x: col_x,
+                y: row_y,
+                width: col_w,
+                height: content_height,
+                cell_id: cell.id,
+                background: cell.format.background.map(|c| c.to_argb()),
+                lines: cell_lines,
+            });
+
+            ci += colspan;
+        }
+
+        // Defer the row to the next page rather than letting it overflow,
+        // unless it is the first row of the slice and has nowhere else to go.
+        if rows_placed > 0 && row_y + row_height - y > max_height {
+            break;
+        }
+
+        row_heights[ri] = row_height;
+        row_y += row_height;
+        rows_placed += 1;
+        cells.append(&mut row_cells);
+        cell_spans.append(&mut row_spans);
+    }
+
+    let placed_end = start_row + rows_placed;
+    // Stretch every cell to the band it occupies so borders align.
+    for (cell, (ri, rowspan)) in cells.iter_mut().zip(cell_spans) {
+        cell.height = row_heights[ri..(ri + rowspan).min(placed_end)]
+            .iter()
+            .sum::<f32>()
+            .max(MIN_ROW_HEIGHT);
+    }
+
+    let mut grid_lines = Vec::new();
+    for cell in &cells {
+        push_cell_border(&mut grid_lines, cell.x, cell.y, cell.width, cell.height);
+    }
+
+    TableSlice {
+        layout: TableLayout {
+            x,
+            y,
+            width: table_width,
+            height: row_y - y,
+            table_id: table.id,
+            cells,
+            grid_lines,
+        },
+        rows_placed,
+    }
+}
+
+/// Grid column count, preferring the declared grid (`w:tblGrid`) over the
+/// widest row, since a row's spans may not sum to the grid width.
+fn column_count(table: &Table) -> usize {
+    if !table.format.column_widths.is_empty() {
+        return table.format.column_widths.len();
+    }
+    table
+        .rows
+        .iter()
+        .map(|r| {
+            r.cells
+                .iter()
+                .map(|c| c.format.colspan.max(1) as usize)
+                .sum::<usize>()
+        })
+        .max()
+        .unwrap_or(1)
+        .max(1)
+}
+
+/// Maps a grid column index back to the cell that starts at or before it.
+fn cell_index(row: &tw_model::TableRow, grid_col: usize) -> usize {
+    let mut consumed = 0usize;
+    for (i, cell) in row.cells.iter().enumerate() {
+        let span = cell.format.colspan.max(1) as usize;
+        if grid_col < consumed + span {
+            return i;
+        }
+        consumed += span;
+    }
+    row.cells.len().saturating_sub(1)
+}
+
+/// Author widths scaled to the available column, so a table can never
+/// bleed past the page margin.
+fn fit_column_widths(table: &Table, col_count: usize, max_width: f32) -> Vec<f32> {
+    let mut widths = table.format.column_widths.clone();
+    if widths.len() != col_count || widths.iter().any(|w| *w <= 0.0) {
+        widths = vec![max_width / col_count as f32; col_count];
+    }
+
+    let total: f32 = widths.iter().sum();
+    if total > max_width && total > 0.0 {
+        let scale = max_width / total;
+        for w in widths.iter_mut() {
+            *w *= scale;
+        }
+    }
+    widths
+}
+
+fn prefix_offsets(widths: &[f32]) -> Vec<f32> {
+    let mut offsets = Vec::with_capacity(widths.len());
+    let mut acc = 0.0;
+    for w in widths {
+        offsets.push(acc);
+        acc += w;
+    }
+    offsets
+}
+
+fn push_cell_border(lines: &mut Vec<f32>, x: f32, y: f32, w: f32, h: f32) {
+    for segment in [
+        (x, y, x + w, y),
+        (x, y, x, y + h),
+        (x + w, y, x + w, y + h),
+        (x, y + h, x + w, y + h),
+    ] {
+        lines.push(segment.0);
+        lines.push(segment.1);
+        lines.push(segment.2);
+        lines.push(segment.3);
+    }
+}

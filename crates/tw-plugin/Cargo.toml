@@ -1,0 +1,13 @@
+[package]
+name = "tw-plugin"
+description = "Plugin system — lifecycle, sandbox, and SDK surface (Phase 6)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tw-core = { path = "../tw-core" }
+tw-edit = { path = "../tw-edit" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

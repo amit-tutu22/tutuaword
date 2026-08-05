@@ -1,0 +1,15 @@
+[package]
+name = "tw-docx"
+description = "DOCX import/export with OPC package passthrough (Phase 3)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tw-model = { path = "../tw-model" }
+thiserror = { workspace = true }
+zip = { workspace = true }
+
+[dev-dependencies]
+tw-layout = { path = "../tw-layout" }
+tw-render = { path = "../tw-render" }

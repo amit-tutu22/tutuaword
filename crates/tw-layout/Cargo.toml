@@ -1,0 +1,13 @@
+[package]
+name = "tw-layout"
+description = "Layout engine — line breaking, pagination, hit testing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tw-model = { path = "../tw-model" }
+tw-shape = { path = "../tw-shape" }
+unicode-linebreak = { workspace = true }
+
+[dev-dependencies]

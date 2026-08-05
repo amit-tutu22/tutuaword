@@ -1,0 +1,9 @@
+[package]
+name = "tw-spell"
+description = "Spell checking with embedded dictionaries (Phase 3)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+unicode-segmentation = { workspace = true }
