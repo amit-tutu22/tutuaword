@@ -2,6 +2,7 @@ mod access;
 mod block_ops;
 mod command;
 mod normalize;
+mod range;
 mod session;
 
 pub use command::*;
@@ -32,11 +33,23 @@ pub fn apply(
             format,
             merge,
         } => set_char_format(doc, buffer, *run_id, *start, *end, format.clone(), *merge)?,
+        Command::SetCharFormatRange {
+            range,
+            format,
+            merge,
+        } => set_char_format_range(doc, buffer, range, format.clone(), *merge)?,
         Command::SetParaFormat {
             paragraph_id,
             format,
             merge,
         } => set_para_format(doc, *paragraph_id, format.clone(), *merge)?,
+        Command::SetParaFormatRange {
+            range,
+            format,
+            merge,
+        } => set_para_format_range(doc, range, format.clone(), *merge)?,
+        Command::RestoreRunFormats { formats } => restore_run_formats(doc, formats)?,
+        Command::RestoreParaFormats { formats } => restore_para_formats(doc, formats)?,
         Command::InsertParagraph { after_id } => insert_paragraph(doc, buffer, *after_id)?,
         Command::DeleteParagraph { id } => delete_paragraph(doc, buffer, *id)?,
         Command::InsertTable {
@@ -204,7 +217,17 @@ fn set_char_format(
     format: tw_model::CharFormat,
     merge: bool,
 ) -> Result<EditResult, EditError> {
-    if start == 0 && end >= buffer.len(run_id) {
+    let run_len = buffer.len(run_id);
+    let end = end.min(run_len);
+    if start > end {
+        return Err(EditError::InvalidRange);
+    }
+    if start == end {
+        return Ok(EditResult::default());
+    }
+
+    // Whole-run fast path.
+    if start == 0 && end == run_len {
         return with_run_mut(doc, run_id, |run| {
             let old = run.format.clone();
             if merge {
@@ -214,7 +237,8 @@ fn set_char_format(
             }
             Ok(EditResult {
                 affected_nodes: vec![run_id],
-                old_char_format: Some(old),
+                old_char_format: Some(old.clone()),
+                old_run_formats: vec![(run_id, old)],
                 ..Default::default()
             })
         })
@@ -224,27 +248,262 @@ fn set_char_format(
     let (si, bi, _) = doc
         .find_run_location(run_id)
         .ok_or(EditError::RunNotFound(run_id))?;
-    split_run_at(doc, buffer, si, bi, run_id, start)?;
-    if start != end {
-        split_run_at(doc, buffer, si, bi, run_id, end)?;
+
+    // Split so `target` is exactly the [start, end) slice.
+    // First split off the prefix; the returned id is the suffix starting at `start`.
+    let mut target = run_id;
+    if start > 0 {
+        target = split_run_at(doc, buffer, si, bi, run_id, start)?;
+    }
+    // Then split off the tail beyond `end - start`.
+    let slice_len = end - start;
+    if slice_len < buffer.len(target) {
+        let _ = split_run_at(doc, buffer, si, bi, target, slice_len)?;
+    }
+
+    with_run_mut(doc, target, |run| {
+        let old = run.format.clone();
+        if merge {
+            run.format.merge(&format);
+        } else {
+            run.format = format;
+        }
+        Ok(EditResult {
+            affected_nodes: vec![target],
+            old_char_format: Some(old.clone()),
+            old_run_formats: vec![(target, old)],
+            ..Default::default()
+        })
+    })
+    .ok_or(EditError::RunNotFound(target))?
+}
+
+fn set_char_format_range(
+    doc: &mut Document,
+    buffer: &mut TextBuffer,
+    range: &DocRange,
+    format: tw_model::CharFormat,
+    merge: bool,
+) -> Result<EditResult, EditError> {
+    let range = range::normalize_range(doc, range)?;
+    if range::positions_equal(&range.start, &range.end) {
+        return Ok(EditResult::default());
+    }
+
+    let start_loc = doc
+        .find_run_location(range.start.run_id)
+        .ok_or(EditError::RunNotFound(range.start.run_id))?;
+    let end_loc = doc
+        .find_run_location(range.end.run_id)
+        .ok_or(EditError::RunNotFound(range.end.run_id))?;
+
+    // Same paragraph — handle as one contiguous run span.
+    if start_loc.0 == end_loc.0 && start_loc.1 == end_loc.1 {
+        return format_runs_in_paragraph(
+            doc,
+            buffer,
+            start_loc.0,
+            start_loc.1,
+            &range.start,
+            &range.end,
+            format,
+            merge,
+        );
+    }
+
+    // Snapshot middle paragraph coordinates and boundary end-of-para /
+    // start-of-para positions before mutating.
+    let mut middle: Vec<(usize, usize)> = Vec::new();
+    let mut first_end = DocPosition {
+        run_id: range.start.run_id,
+        char_offset: 0,
+    };
+    let mut last_start = DocPosition {
+        run_id: range.end.run_id,
+        char_offset: 0,
+    };
+
+    for (si, section) in doc.sections.iter().enumerate() {
+        for (bi, block) in section.blocks.iter().enumerate() {
+            let Some(para) = block.paragraph() else {
+                continue;
+            };
+            if (si, bi) == (start_loc.0, start_loc.1) {
+                let last = para.runs.last().ok_or(EditError::InvalidRange)?;
+                first_end = DocPosition {
+                    run_id: last.id,
+                    char_offset: buffer.len(last.id),
+                };
+            } else if (si, bi) == (end_loc.0, end_loc.1) {
+                let first = para.runs.first().ok_or(EditError::InvalidRange)?;
+                last_start = DocPosition {
+                    run_id: first.id,
+                    char_offset: 0,
+                };
+            } else if (si, bi) > (start_loc.0, start_loc.1) && (si, bi) < (end_loc.0, end_loc.1)
+            {
+                middle.push((si, bi));
+            }
+        }
+    }
+
+    let mut affected = Vec::new();
+    let mut old_run_formats = Vec::new();
+
+    let partial = format_runs_in_paragraph(
+        doc,
+        buffer,
+        start_loc.0,
+        start_loc.1,
+        &range.start,
+        &first_end,
+        format.clone(),
+        merge,
+    )?;
+    affected.extend(partial.affected_nodes);
+    old_run_formats.extend(partial.old_run_formats);
+
+    for (si, bi) in middle {
+        let para_empty = doc
+            .paragraph_at(si, bi)
+            .map(|p| p.runs.is_empty())
+            .unwrap_or(true);
+        if para_empty {
+            continue;
+        }
+        let (mid_start, mid_end) = {
+            let para = doc.paragraph_at(si, bi).ok_or(EditError::InvalidRange)?;
+            let first = para.runs[0].id;
+            let last = para.runs.last().unwrap();
+            (
+                DocPosition {
+                    run_id: first,
+                    char_offset: 0,
+                },
+                DocPosition {
+                    run_id: last.id,
+                    char_offset: buffer.len(last.id),
+                },
+            )
+        };
+        let partial = format_runs_in_paragraph(
+            doc,
+            buffer,
+            si,
+            bi,
+            &mid_start,
+            &mid_end,
+            format.clone(),
+            merge,
+        )?;
+        affected.extend(partial.affected_nodes);
+        old_run_formats.extend(partial.old_run_formats);
+    }
+
+    let partial = format_runs_in_paragraph(
+        doc,
+        buffer,
+        end_loc.0,
+        end_loc.1,
+        &last_start,
+        &range.end,
+        format,
+        merge,
+    )?;
+    affected.extend(partial.affected_nodes);
+    old_run_formats.extend(partial.old_run_formats);
+
+    Ok(EditResult {
+        affected_nodes: affected,
+        old_run_formats,
+        ..Default::default()
+    })
+}
+
+fn format_runs_in_paragraph(
+    doc: &mut Document,
+    buffer: &mut TextBuffer,
+    si: usize,
+    bi: usize,
+    start: &DocPosition,
+    end: &DocPosition,
+    format: tw_model::CharFormat,
+    merge: bool,
+) -> Result<EditResult, EditError> {
+    if start.run_id == end.run_id {
+        return set_char_format(
+            doc,
+            buffer,
+            start.run_id,
+            start.char_offset,
+            end.char_offset,
+            format,
+            merge,
+        );
+    }
+
+    // Split the end run first so earlier indices stay stable, then the start run.
+    let mut last_id = end.run_id;
+    if end.char_offset == 0 {
+        // Empty selection into the end run — exclude it by walking to previous run.
+        let para = doc
+            .paragraph_at(si, bi)
+            .ok_or(EditError::RunNotFound(end.run_id))?;
+        let idx = para
+            .runs
+            .iter()
+            .position(|r| r.id == end.run_id)
+            .ok_or(EditError::RunNotFound(end.run_id))?;
+        if idx == 0 {
+            return Ok(EditResult::default());
+        }
+        last_id = para.runs[idx - 1].id;
+    } else if end.char_offset < buffer.len(end.run_id) {
+        let _ = split_run_at(doc, buffer, si, bi, end.run_id, end.char_offset)?;
+        // Prefix keeps end.run_id and is exactly what we want.
+        last_id = end.run_id;
+    }
+
+    let mut first_id = start.run_id;
+    if start.char_offset > 0 {
+        first_id = split_run_at(doc, buffer, si, bi, start.run_id, start.char_offset)?;
+    } else if start.char_offset == 0 {
+        first_id = start.run_id;
     }
 
     let para = doc
         .paragraph_at_mut(si, bi)
-        .ok_or(EditError::RunNotFound(run_id))?;
-    let run_idx = para.runs.iter().position(|r| r.id == run_id).unwrap();
-    let old = para.runs.get(run_idx).map(|r| r.format.clone());
-    for run in &mut para.runs[run_idx..=run_idx] {
+        .ok_or(EditError::RunNotFound(start.run_id))?;
+    let i0 = para
+        .runs
+        .iter()
+        .position(|r| r.id == first_id)
+        .ok_or(EditError::RunNotFound(first_id))?;
+    let i1 = para
+        .runs
+        .iter()
+        .position(|r| r.id == last_id)
+        .ok_or(EditError::RunNotFound(last_id))?;
+    if i0 > i1 {
+        return Ok(EditResult::default());
+    }
+
+    let mut affected = Vec::new();
+    let mut old_run_formats = Vec::new();
+    for run in &mut para.runs[i0..=i1] {
+        old_run_formats.push((run.id, run.format.clone()));
         if merge {
             run.format.merge(&format);
         } else {
             run.format = format.clone();
         }
+        affected.push(run.id);
     }
 
     Ok(EditResult {
-        affected_nodes: vec![run_id],
-        old_char_format: old,
+        affected_nodes: affected,
+        old_char_format: old_run_formats.first().map(|(_, f)| f.clone()),
+        old_run_formats,
         ..Default::default()
     })
 }
@@ -267,7 +526,8 @@ fn split_run_at(
         .ok_or(EditError::RunNotFound(run_id))?;
 
     let text = buffer.to_string(run_id);
-    if offset == 0 || offset >= text.chars().count() {
+    let char_len = text.chars().count();
+    if offset == 0 || offset >= char_len {
         return Ok(run_id);
     }
 
@@ -275,9 +535,9 @@ fn split_run_at(
     let prefix: String = text.chars().take(offset).collect();
 
     if let Some(t) = para.runs[idx].text_mut() {
-        *t = prefix;
+        *t = prefix.clone();
     }
-    buffer.sync_from_run(run_id, &buffer.to_string(run_id));
+    buffer.sync_from_run(run_id, &prefix);
 
     let new_run = Run {
         id: NodeId::new(),
@@ -306,11 +566,77 @@ fn set_para_format(
         }
         Ok(EditResult {
             affected_nodes: vec![paragraph_id],
-            old_para_format: Some(old),
+            old_para_format: Some(old.clone()),
+            old_para_formats: vec![(paragraph_id, old)],
             ..Default::default()
         })
     })
     .ok_or(EditError::ParagraphNotFound(paragraph_id))?
+}
+
+fn set_para_format_range(
+    doc: &mut Document,
+    range: &DocRange,
+    format: tw_model::ParaFormat,
+    merge: bool,
+) -> Result<EditResult, EditError> {
+    let range = range::normalize_range(doc, range)?;
+    let ids = range::paragraph_ids_in_range(doc, &range)?;
+    if ids.is_empty() {
+        // Caret / empty range: still format the paragraph holding the caret.
+        let id = range::paragraph_id_for_run(doc, range.start.run_id)?;
+        return set_para_format(doc, id, format, merge);
+    }
+
+    let mut affected = Vec::new();
+    let mut old_para_formats = Vec::new();
+    for id in ids {
+        let partial = set_para_format(doc, id, format.clone(), merge)?;
+        affected.extend(partial.affected_nodes);
+        old_para_formats.extend(partial.old_para_formats);
+    }
+    Ok(EditResult {
+        affected_nodes: affected,
+        old_para_format: old_para_formats.first().map(|(_, f)| f.clone()),
+        old_para_formats,
+        ..Default::default()
+    })
+}
+
+fn restore_run_formats(
+    doc: &mut Document,
+    formats: &[(NodeId, tw_model::CharFormat)],
+) -> Result<EditResult, EditError> {
+    let mut affected = Vec::new();
+    for (run_id, format) in formats {
+        with_run_mut(doc, *run_id, |run| {
+            run.format = format.clone();
+            affected.push(*run_id);
+        })
+        .ok_or(EditError::RunNotFound(*run_id))?;
+    }
+    Ok(EditResult {
+        affected_nodes: affected,
+        ..Default::default()
+    })
+}
+
+fn restore_para_formats(
+    doc: &mut Document,
+    formats: &[(NodeId, tw_model::ParaFormat)],
+) -> Result<EditResult, EditError> {
+    let mut affected = Vec::new();
+    for (para_id, format) in formats {
+        with_paragraph_mut(doc, *para_id, |para| {
+            para.format = format.clone();
+            affected.push(*para_id);
+        })
+        .ok_or(EditError::ParagraphNotFound(*para_id))?;
+    }
+    Ok(EditResult {
+        affected_nodes: affected,
+        ..Default::default()
+    })
 }
 
 fn insert_paragraph(
@@ -490,5 +816,169 @@ mod phase2_tests {
 
         let para = session.document.paragraph_at(0, 0).unwrap();
         assert_eq!(para.format.numbering.unwrap().numbering_id, 2);
+    }
+
+    #[test]
+    fn mid_run_char_format_splits_correctly() {
+        let mut session = EditSession::new();
+        let run_id = session.document.paragraph_at(0, 0).unwrap().runs[0].id;
+        session
+            .apply(Command::InsertText {
+                run_id,
+                offset: 0,
+                text: "HelloWorld".into(),
+            })
+            .unwrap();
+
+        session
+            .apply(Command::SetCharFormat {
+                run_id,
+                start: 5,
+                end: 10,
+                format: tw_model::CharFormat {
+                    bold: Some(true),
+                    ..Default::default()
+                },
+                merge: true,
+            })
+            .unwrap();
+
+        let runs = &session.document.paragraph_at(0, 0).unwrap().runs;
+        assert!(runs.len() >= 2);
+        let texts: Vec<String> = runs.iter().map(|r| r.text().to_string()).collect();
+        assert_eq!(texts.join(""), "HelloWorld");
+        let bold_run = runs.iter().find(|r| r.format.bold == Some(true)).unwrap();
+        assert_eq!(bold_run.text(), "World");
+        let plain = runs.iter().find(|r| r.format.bold != Some(true)).unwrap();
+        assert_eq!(plain.text(), "Hello");
+    }
+
+    #[test]
+    fn char_format_range_spans_two_runs() {
+        let mut session = EditSession::new();
+        let run_id = session.document.paragraph_at(0, 0).unwrap().runs[0].id;
+        session
+            .apply(Command::InsertText {
+                run_id,
+                offset: 0,
+                text: "abcdef".into(),
+            })
+            .unwrap();
+        // Split into two runs by formatting the second half first.
+        session
+            .apply(Command::SetCharFormat {
+                run_id,
+                start: 3,
+                end: 6,
+                format: tw_model::CharFormat {
+                    italic: Some(true),
+                    ..Default::default()
+                },
+                merge: true,
+            })
+            .unwrap();
+
+        let runs = &session.document.paragraph_at(0, 0).unwrap().runs;
+        assert_eq!(runs.len(), 2);
+        let start = DocPosition {
+            run_id: runs[0].id,
+            char_offset: 1,
+        };
+        let end = DocPosition {
+            run_id: runs[1].id,
+            char_offset: 2,
+        };
+
+        session
+            .apply(Command::SetCharFormatRange {
+                range: DocRange { start, end },
+                format: tw_model::CharFormat {
+                    bold: Some(true),
+                    ..Default::default()
+                },
+                merge: true,
+            })
+            .unwrap();
+
+        let runs = &session.document.paragraph_at(0, 0).unwrap().runs;
+        let bold_text: String = runs
+            .iter()
+            .filter(|r| r.format.bold == Some(true))
+            .map(|r| r.text().to_string())
+            .collect();
+        assert_eq!(bold_text, "bcde");
+    }
+
+    #[test]
+    fn para_format_range_sets_alignment() {
+        let mut session = EditSession::new();
+        let run_id = session.document.paragraph_at(0, 0).unwrap().runs[0].id;
+        session
+            .apply(Command::SetParaFormatRange {
+                range: DocRange {
+                    start: DocPosition {
+                        run_id,
+                        char_offset: 0,
+                    },
+                    end: DocPosition {
+                        run_id,
+                        char_offset: 0,
+                    },
+                },
+                format: tw_model::ParaFormat {
+                    alignment: Some(tw_model::Alignment::Center),
+                    ..Default::default()
+                },
+                merge: true,
+            })
+            .unwrap();
+
+        let para = session.document.paragraph_at(0, 0).unwrap();
+        assert_eq!(para.format.alignment, Some(tw_model::Alignment::Center));
+    }
+
+    #[test]
+    fn char_format_range_undo_restores() {
+        let mut session = EditSession::new();
+        let run_id = session.document.paragraph_at(0, 0).unwrap().runs[0].id;
+        session
+            .apply(Command::InsertText {
+                run_id,
+                offset: 0,
+                text: "abc".into(),
+            })
+            .unwrap();
+        session
+            .apply(Command::SetCharFormatRange {
+                range: DocRange {
+                    start: DocPosition {
+                        run_id,
+                        char_offset: 0,
+                    },
+                    end: DocPosition {
+                        run_id,
+                        char_offset: 3,
+                    },
+                },
+                format: tw_model::CharFormat {
+                    bold: Some(true),
+                    ..Default::default()
+                },
+                merge: true,
+            })
+            .unwrap();
+        assert_eq!(
+            session.document.paragraph_at(0, 0).unwrap().runs[0]
+                .format
+                .bold,
+            Some(true)
+        );
+        session.undo().unwrap();
+        assert_ne!(
+            session.document.paragraph_at(0, 0).unwrap().runs[0]
+                .format
+                .bold,
+            Some(true)
+        );
     }
 }

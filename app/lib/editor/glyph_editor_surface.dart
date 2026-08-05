@@ -2,6 +2,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:tutuaword/bridge/native_engine.dart';
 import 'package:tutuaword/editor/document_painter.dart';
 import 'package:tutuaword/editor/display_list.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
@@ -64,7 +65,7 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
   }
 
   void _handleTapDown(TapDownDetails details) {
-    widget.controller.hitTestAt(
+    widget.controller.beginGlyphSelection(
       widget.pageIndex,
       details.localPosition.dx,
       details.localPosition.dy,
@@ -72,15 +73,41 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
     _focusNode.requestFocus();
   }
 
+  void _handlePanStart(DragStartDetails details) {
+    widget.controller.beginGlyphSelection(
+      widget.pageIndex,
+      details.localPosition.dx,
+      details.localPosition.dy,
+    );
+    _focusNode.requestFocus();
+  }
+
+  void _handlePanUpdate(DragUpdateDetails details) {
+    widget.controller.updateGlyphSelection(
+      widget.pageIndex,
+      details.localPosition.dx,
+      details.localPosition.dy,
+    );
+  }
+
+  void _handlePanEnd(DragEndDetails details) {
+    // Final geometry already updated during pan; keep focus for typing.
+    _focusNode.requestFocus();
+  }
+
   @override
   Widget build(BuildContext context) {
     final caret = widget.controller.caretGeometry;
+    final selection = widget.controller.selectionRects;
     return Focus(
       focusNode: _focusNode,
       onKeyEvent: _handleKey,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTapDown: _handleTapDown,
+        onPanStart: _handlePanStart,
+        onPanUpdate: _handlePanUpdate,
+        onPanEnd: _handlePanEnd,
         child: Stack(
           children: [
             CustomPaint(
@@ -91,7 +118,12 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
                 images: widget.images,
               ),
             ),
-            if (caret != null)
+            if (selection.isNotEmpty)
+              CustomPaint(
+                size: Size(widget.controller.pageWidth, widget.controller.pageHeight),
+                painter: _SelectionPainter(rects: selection),
+              ),
+            if (caret != null && selection.isEmpty)
               Positioned(
                 left: caret.x,
                 top: caret.y - caret.height,
@@ -106,4 +138,25 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
       ),
     );
   }
+}
+
+class _SelectionPainter extends CustomPainter {
+  _SelectionPainter({required this.rects});
+
+  final List<GlyphSelectionRect> rects;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()..color = const Color(0x553B82F6);
+    for (final rect in rects) {
+      canvas.drawRect(
+        Rect.fromLTWH(rect.x, rect.y, rect.width, rect.height),
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _SelectionPainter oldDelegate) =>
+      oldDelegate.rects != rects;
 }

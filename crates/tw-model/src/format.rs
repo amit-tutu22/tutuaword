@@ -155,6 +155,7 @@ pub enum LineSpacing {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 pub enum UnderlineStyle {
+    None,
     #[default]
     Single,
     Double,

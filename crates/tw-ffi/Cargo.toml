@@ -14,5 +14,6 @@ tw-edit = { path = "../tw-edit" }
 tw-model = { path = "../tw-model" }
 uuid = { workspace = true }
 parking_lot = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]

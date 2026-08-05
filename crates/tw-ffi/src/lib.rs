@@ -3,8 +3,8 @@ use std::ffi::{c_char, CStr};
 use std::slice;
 use std::time::Duration;
 use tw_core::Session;
-use tw_edit::Command;
-use tw_model::NodeId;
+use tw_edit::{Command, DocPosition, DocRange};
+use tw_model::{CharFormat, NodeId, ParaFormat};
 use uuid::Uuid;
 
 static SESSION: Mutex<Option<Session>> = Mutex::new(None);
@@ -238,6 +238,160 @@ pub extern "C" fn tw_apply_bullet_list() -> i32 {
         return -1;
     };
     session.apply_bullet_list();
+    wait_for_document(session)
+}
+
+fn parse_node_id(ptr: *const c_char) -> Option<NodeId> {
+    if ptr.is_null() {
+        return None;
+    }
+    let s = unsafe { CStr::from_ptr(ptr) }.to_string_lossy();
+    Uuid::parse_str(&s).ok().map(NodeId::from_uuid)
+}
+
+fn parse_cstr(ptr: *const c_char) -> Option<String> {
+    if ptr.is_null() {
+        return None;
+    }
+    Some(unsafe { CStr::from_ptr(ptr) }.to_string_lossy().into_owned())
+}
+
+/// Apply a character-format JSON delta over `[start, end)`.
+///
+/// `format_json` is a partial `CharFormat` object, e.g. `{"bold":true}`.
+/// When start and end describe the same collapsed caret, the whole run at
+/// `start_run_id` is formatted.
+#[no_mangle]
+pub extern "C" fn tw_apply_char_format(
+    start_run_id_ptr: *const c_char,
+    start_offset: u32,
+    end_run_id_ptr: *const c_char,
+    end_offset: u32,
+    format_json_ptr: *const c_char,
+) -> i32 {
+    let guard = SESSION.lock();
+    let Some(session) = guard.as_ref() else {
+        return -1;
+    };
+    let Some(start_run) = parse_node_id(start_run_id_ptr) else {
+        return -2;
+    };
+    let Some(end_run) = parse_node_id(end_run_id_ptr) else {
+        return -2;
+    };
+    let Some(json) = parse_cstr(format_json_ptr) else {
+        return -3;
+    };
+    let format: CharFormat = match serde_json::from_str(&json) {
+        Ok(f) => f,
+        Err(_) => return -3,
+    };
+
+    let collapsed = start_run == end_run && start_offset == end_offset;
+    let command = if collapsed {
+        // Format the entire run containing the caret.
+        Command::SetCharFormat {
+            run_id: start_run,
+            start: 0,
+            end: usize::MAX,
+            format,
+            merge: true,
+        }
+    } else if start_run == end_run {
+        Command::SetCharFormat {
+            run_id: start_run,
+            start: start_offset as usize,
+            end: end_offset as usize,
+            format,
+            merge: true,
+        }
+    } else {
+        Command::SetCharFormatRange {
+            range: DocRange {
+                start: DocPosition {
+                    run_id: start_run,
+                    char_offset: start_offset as usize,
+                },
+                end: DocPosition {
+                    run_id: end_run,
+                    char_offset: end_offset as usize,
+                },
+            },
+            format,
+            merge: true,
+        }
+    };
+
+    session.apply(command);
+    wait_for_document(session)
+}
+
+/// Apply a paragraph-format JSON delta to every paragraph touched by the range.
+#[no_mangle]
+pub extern "C" fn tw_apply_para_format(
+    start_run_id_ptr: *const c_char,
+    start_offset: u32,
+    end_run_id_ptr: *const c_char,
+    end_offset: u32,
+    format_json_ptr: *const c_char,
+) -> i32 {
+    let guard = SESSION.lock();
+    let Some(session) = guard.as_ref() else {
+        return -1;
+    };
+    let Some(start_run) = parse_node_id(start_run_id_ptr) else {
+        return -2;
+    };
+    let Some(end_run) = parse_node_id(end_run_id_ptr) else {
+        return -2;
+    };
+    let Some(json) = parse_cstr(format_json_ptr) else {
+        return -3;
+    };
+    let format: ParaFormat = match serde_json::from_str(&json) {
+        Ok(f) => f,
+        Err(_) => return -3,
+    };
+
+    session.apply(Command::SetParaFormatRange {
+        range: DocRange {
+            start: DocPosition {
+                run_id: start_run,
+                char_offset: start_offset as usize,
+            },
+            end: DocPosition {
+                run_id: end_run,
+                char_offset: end_offset as usize,
+            },
+        },
+        format,
+        merge: true,
+    });
+    wait_for_document(session)
+}
+
+/// Delete characters in a single run (`[start, end)`).
+#[no_mangle]
+pub extern "C" fn tw_apply_delete_range(
+    run_id_ptr: *const c_char,
+    start: u32,
+    end: u32,
+) -> i32 {
+    let guard = SESSION.lock();
+    let Some(session) = guard.as_ref() else {
+        return -1;
+    };
+    let Some(run_id) = parse_node_id(run_id_ptr) else {
+        return -2;
+    };
+    if start >= end {
+        return -3;
+    }
+    session.apply(Command::DeleteRange {
+        run_id,
+        start: start as usize,
+        end: end as usize,
+    });
     wait_for_document(session)
 }
 

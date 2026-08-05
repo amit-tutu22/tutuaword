@@ -27,7 +27,7 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "MPL-2.0"
-repository = "https://github.com/Hypersdk/tutuaword"
+repository = "https://github.com/amit-tutu22/tutuaword"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

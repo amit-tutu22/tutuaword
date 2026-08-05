@@ -69,6 +69,39 @@ typedef TwApplyHeading1Dart = int Function();
 typedef TwApplyBulletListNative = Int32 Function();
 typedef TwApplyBulletListDart = int Function();
 
+typedef TwApplyCharFormatNative = Int32 Function(
+  Pointer<Utf8>,
+  Uint32,
+  Pointer<Utf8>,
+  Uint32,
+  Pointer<Utf8>,
+);
+typedef TwApplyCharFormatDart = int Function(
+  Pointer<Utf8>,
+  int,
+  Pointer<Utf8>,
+  int,
+  Pointer<Utf8>,
+);
+
+typedef TwApplyParaFormatNative = Int32 Function(
+  Pointer<Utf8>,
+  Uint32,
+  Pointer<Utf8>,
+  Uint32,
+  Pointer<Utf8>,
+);
+typedef TwApplyParaFormatDart = int Function(
+  Pointer<Utf8>,
+  int,
+  Pointer<Utf8>,
+  int,
+  Pointer<Utf8>,
+);
+
+typedef TwApplyDeleteRangeNative = Int32 Function(Pointer<Utf8>, Uint32, Uint32);
+typedef TwApplyDeleteRangeDart = int Function(Pointer<Utf8>, int, int);
+
 typedef TwInsertTableNative = Int32 Function(Uint32, Uint32);
 typedef TwInsertTableDart = int Function(int, int);
 
@@ -124,6 +157,9 @@ class NativeEngine {
 
   final DynamicLibrary _lib;
   late final TwApplyInsertTextDart applyInsertText;
+  late final TwApplyCharFormatDart applyCharFormat;
+  late final TwApplyParaFormatDart applyParaFormat;
+  late final TwApplyDeleteRangeDart applyDeleteRange;
   late final TwGetDisplayListDart getDisplayList;
   late final TwGetPageDisplayListDart getPageDisplayList;
   late final TwGetDocumentTextDart getDocumentText;
@@ -154,6 +190,12 @@ class NativeEngine {
       );
       engine.applyInsertText =
           lib.lookupFunction<TwApplyInsertTextNative, TwApplyInsertTextDart>('tw_apply_insert_text');
+      engine.applyCharFormat =
+          lib.lookupFunction<TwApplyCharFormatNative, TwApplyCharFormatDart>('tw_apply_char_format');
+      engine.applyParaFormat =
+          lib.lookupFunction<TwApplyParaFormatNative, TwApplyParaFormatDart>('tw_apply_para_format');
+      engine.applyDeleteRange =
+          lib.lookupFunction<TwApplyDeleteRangeNative, TwApplyDeleteRangeDart>('tw_apply_delete_range');
       engine.getDisplayList =
           lib.lookupFunction<TwGetDisplayListNative, TwGetDisplayListDart>('tw_get_display_list');
       engine.getPageDisplayList = lib.lookupFunction<TwGetPageDisplayListNative,
@@ -258,8 +300,8 @@ class CaretGeometry {
   final double height;
 }
 
-class SelectionRect {
-  SelectionRect({required this.x, required this.y, required this.width, required this.height});
+class GlyphSelectionRect {
+  GlyphSelectionRect({required this.x, required this.y, required this.width, required this.height});
 
   final double x;
   final double y;
@@ -404,6 +446,55 @@ extension NativeEngineOps on NativeEngine {
     }
   }
 
+  /// Apply a partial CharFormat JSON delta over a document range.
+  bool applyCharFormatJson({
+    required String startRunId,
+    required int startOffset,
+    required String endRunId,
+    required int endOffset,
+    required String formatJson,
+  }) {
+    final startPtr = startRunId.toNativeUtf8();
+    final endPtr = endRunId.toNativeUtf8();
+    final jsonPtr = formatJson.toNativeUtf8();
+    try {
+      return applyCharFormat(startPtr, startOffset, endPtr, endOffset, jsonPtr) == 0;
+    } finally {
+      calloc.free(startPtr);
+      calloc.free(endPtr);
+      calloc.free(jsonPtr);
+    }
+  }
+
+  /// Apply a partial ParaFormat JSON delta over paragraphs touched by the range.
+  bool applyParaFormatJson({
+    required String startRunId,
+    required int startOffset,
+    required String endRunId,
+    required int endOffset,
+    required String formatJson,
+  }) {
+    final startPtr = startRunId.toNativeUtf8();
+    final endPtr = endRunId.toNativeUtf8();
+    final jsonPtr = formatJson.toNativeUtf8();
+    try {
+      return applyParaFormat(startPtr, startOffset, endPtr, endOffset, jsonPtr) == 0;
+    } finally {
+      calloc.free(startPtr);
+      calloc.free(endPtr);
+      calloc.free(jsonPtr);
+    }
+  }
+
+  bool deleteRange(String runId, int start, int end) {
+    final runPtr = runId.toNativeUtf8();
+    try {
+      return applyDeleteRange(runPtr, start, end) == 0;
+    } finally {
+      calloc.free(runPtr);
+    }
+  }
+
   bool setCurrentPageIndex(int page) => setCurrentPage(page) == 0;
 
   bool applyHeading1Style() => applyHeading1() == 0;
@@ -506,7 +597,7 @@ extension NativeEngineOps on NativeEngine {
     }
   }
 
-  List<SelectionRect> selectionRectsOnPage(int page, double startX, double startY, double endX, double endY) {
+  List<GlyphSelectionRect> selectionRectsOnPage(int page, double startX, double startY, double endX, double endY) {
     const maxRects = 64;
     final buf = calloc<Float>(maxRects * 4);
     final countOut = calloc<Uint32>();
@@ -514,10 +605,10 @@ extension NativeEngineOps on NativeEngine {
       final result = selectionRects(page, startX, startY, endX, endY, buf, maxRects * 4, countOut);
       if (result != 0) return const [];
       final count = countOut.value;
-      final rects = <SelectionRect>[];
+      final rects = <GlyphSelectionRect>[];
       for (var i = 0; i < count; i++) {
         final base = i * 4;
-        rects.add(SelectionRect(
+        rects.add(GlyphSelectionRect(
           x: buf[base],
           y: buf[base + 1],
           width: buf[base + 2],

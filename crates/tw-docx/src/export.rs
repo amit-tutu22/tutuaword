@@ -635,6 +635,7 @@ fn alignment_value(alignment: Alignment) -> &'static str {
 
 fn underline_value(style: UnderlineStyle) -> &'static str {
     match style {
+        UnderlineStyle::None => "none",
         UnderlineStyle::Single => "single",
         UnderlineStyle::Double => "double",
         UnderlineStyle::Dotted => "dotted",

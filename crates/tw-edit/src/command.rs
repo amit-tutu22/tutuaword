@@ -31,10 +31,31 @@ pub enum Command {
         format: CharFormat,
         merge: bool,
     },
+    /// Apply a character-format delta across an arbitrary document range
+    /// (possibly spanning multiple runs / paragraphs).
+    SetCharFormatRange {
+        range: DocRange,
+        format: CharFormat,
+        merge: bool,
+    },
     SetParaFormat {
         paragraph_id: NodeId,
         format: ParaFormat,
         merge: bool,
+    },
+    /// Apply a paragraph-format delta to every paragraph touched by `range`.
+    SetParaFormatRange {
+        range: DocRange,
+        format: ParaFormat,
+        merge: bool,
+    },
+    /// Restore previously recorded run formats (undo helper for range edits).
+    RestoreRunFormats {
+        formats: Vec<(NodeId, CharFormat)>,
+    },
+    /// Restore previously recorded paragraph formats (undo helper for range edits).
+    RestoreParaFormats {
+        formats: Vec<(NodeId, ParaFormat)>,
     },
     InsertParagraph {
         after_id: NodeId,
@@ -119,6 +140,15 @@ impl Command {
                     merge: false,
                 })
             }
+            Command::SetCharFormatRange { .. } => {
+                if result.old_run_formats.is_empty() {
+                    None
+                } else {
+                    Some(Command::RestoreRunFormats {
+                        formats: result.old_run_formats.clone(),
+                    })
+                }
+            }
             Command::SetParaFormat {
                 paragraph_id,
                 ..
@@ -130,6 +160,16 @@ impl Command {
                     merge: false,
                 })
             }
+            Command::SetParaFormatRange { .. } => {
+                if result.old_para_formats.is_empty() {
+                    None
+                } else {
+                    Some(Command::RestoreParaFormats {
+                        formats: result.old_para_formats.clone(),
+                    })
+                }
+            }
+            Command::RestoreRunFormats { .. } | Command::RestoreParaFormats { .. } => None,
             Command::InsertParagraph { .. } => {
                 let new_id = result.created_node_id?;
                 Some(Command::DeleteParagraph { id: new_id })
@@ -182,6 +222,10 @@ pub struct EditResult {
     pub deleted_text: Option<String>,
     pub old_char_format: Option<CharFormat>,
     pub old_para_format: Option<ParaFormat>,
+    /// Per-run format snapshots for multi-run character formatting undo.
+    pub old_run_formats: Vec<(NodeId, CharFormat)>,
+    /// Per-paragraph format snapshots for multi-paragraph formatting undo.
+    pub old_para_formats: Vec<(NodeId, ParaFormat)>,
     pub created_node_id: Option<NodeId>,
     pub previous_paragraph_id: Option<NodeId>,
     pub deleted_paragraph: Option<tw_model::Paragraph>,
