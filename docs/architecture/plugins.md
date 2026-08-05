@@ -1,5 +1,7 @@
 # Plugins
 
+> **Implementation status:** This spec describes the Phase 6 target. Only traits and `PluginManager::register()` exist in `tw-plugin` today — no WASM runtime or sandbox. See [Long-Tail Gaps](../long-tail-gaps.md) §5.
+
 The plugin system enables third-party extensions for grammar checking, citations, diagrams, integrations, and custom workflows. This spec defines the SDK surface; implementation is deferred to Phase 6.
 
 ## Design Principles

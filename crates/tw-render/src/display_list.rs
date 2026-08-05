@@ -66,7 +66,10 @@ impl DisplayListBuilder {
 
         for layout_box in &page.boxes {
             match layout_box {
-                LayoutBox::TextLine(line) => append_line_glyphs(line, &mut atlas_batch),
+                LayoutBox::TextLine(line) => {
+                    append_line_decorations(line, &mut rect_batch);
+                    append_line_glyphs(line, &mut atlas_batch);
+                }
                 LayoutBox::Rect {
                     x,
                     y,
@@ -100,6 +103,7 @@ impl DisplayListBuilder {
                             append_rect(cell.x, cell.y, cell.width, cell.height, bg, &mut rect_batch);
                         }
                         for line in &cell.lines {
+                            append_line_decorations(line, &mut rect_batch);
                             append_line_glyphs(line, &mut atlas_batch);
                         }
                     }
@@ -212,6 +216,12 @@ impl DisplayListBuilder {
             image_batch,
             path_batch,
         })
+    }
+}
+
+fn append_line_decorations(line: &TextLine, batch: &mut RectBatch) {
+    for deco in &line.decorations {
+        append_rect(deco.x, deco.y, deco.width, deco.height, deco.color, batch);
     }
 }
 

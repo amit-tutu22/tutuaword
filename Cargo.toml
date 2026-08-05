@@ -46,3 +46,4 @@ chrono = { version = "0.4", features = ["serde"] }
 parking_lot = "0.12"
 quick-xml = { version = "0.37", features = ["serialize"] }
 pulldown-cmark = "0.12"
+criterion = "0.5"

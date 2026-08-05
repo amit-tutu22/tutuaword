@@ -151,6 +151,22 @@ impl FontDatabase {
         self.db.face(font_id.id)
     }
 
+    /// Ascent, descent, and line gap in points for a given font size.
+    pub fn vertical_metrics(&self, font_id: FontId, size: f32) -> (f32, f32, f32) {
+        self.db
+            .with_face_data(font_id.id, |data, index| {
+                rustybuzz::Face::from_slice(data, index).map(|face| {
+                    let scale = size / face.units_per_em() as f32;
+                    let ascent = face.ascender() as f32 * scale;
+                    let descent = (-face.descender() as f32) * scale;
+                    let line_gap = face.line_gap() as f32 * scale;
+                    (ascent, descent, line_gap.max(0.0))
+                })
+            })
+            .flatten()
+            .unwrap_or((size, size * 0.25, size * 0.1))
+    }
+
     /// True when the face has a glyph for `ch`.
     pub fn covers(&mut self, font_id: FontId, ch: char) -> bool {
         if let Some(cached) = self.coverage_cache.get(&(font_id.key(), ch)) {

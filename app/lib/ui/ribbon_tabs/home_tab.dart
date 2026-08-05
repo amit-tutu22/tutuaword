@@ -135,7 +135,11 @@ class HomeTab extends StatelessWidget {
                       tooltip: 'Bullets',
                       onPressed: controller.applyBulletList,
                     ),
-                    RibbonIconButton(icon: Icons.format_list_numbered, onPressed: null),
+                    RibbonIconButton(
+                      icon: Icons.format_list_numbered,
+                      tooltip: 'Numbering',
+                      onPressed: controller.applyNumberedList,
+                    ),
                     RibbonIconButton(icon: Icons.format_indent_decrease, onPressed: null),
                     RibbonIconButton(icon: Icons.format_indent_increase, onPressed: null),
                     RibbonIconButton(icon: Icons.sort, onPressed: null),

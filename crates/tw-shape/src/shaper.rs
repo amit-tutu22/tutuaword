@@ -171,6 +171,10 @@ impl TextShaper {
         self.fonts.resolve(None)
     }
 
+    pub fn vertical_metrics(&self, font_id: FontId, size: f32) -> (f32, f32, f32) {
+        self.fonts.vertical_metrics(font_id, size)
+    }
+
     pub fn rasterize_glyph(
         &mut self,
         font_id: FontId,

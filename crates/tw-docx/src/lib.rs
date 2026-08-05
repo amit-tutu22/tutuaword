@@ -8,6 +8,7 @@ mod export;
 mod fingerprint;
 mod import;
 mod media;
+mod numbering;
 mod opc;
 mod paragraph;
 mod styles;
@@ -64,7 +65,7 @@ impl DocxPackage {
     }
 }
 
-const MINIMAL_CONTENT_TYPES: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
+pub(crate) const MINIMAL_CONTENT_TYPES: &[u8] = br#"<?xml version="1.0" encoding="UTF-8"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>

@@ -94,6 +94,66 @@ pub fn advance_past_tag<'a>(xml: &'a str, tag: &str) -> &'a str {
         .unwrap_or("")
 }
 
+/// The next run-level child inside a paragraph body: `w:r`, `w:ins`, or `w:del`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunLevelTag {
+    Run,
+    Insert,
+    Delete,
+}
+
+/// Finds the earliest run-level element at the current parse position.
+pub fn next_run_level_tag(xml: &str) -> Option<(usize, RunLevelTag)> {
+    let candidates = [
+        xml.find("<w:r").map(|i| (i, RunLevelTag::Run)),
+        xml.find("<w:ins").map(|i| (i, RunLevelTag::Insert)),
+        xml.find("<w:del").map(|i| (i, RunLevelTag::Delete)),
+    ]
+    .into_iter()
+    .flatten()
+    .filter(|(i, tag)| {
+        let after = &xml[*i..];
+        let prefix = match tag {
+            RunLevelTag::Run => "<w:r",
+            RunLevelTag::Insert => "<w:ins",
+            RunLevelTag::Delete => "<w:del",
+        };
+        after
+            .get(prefix.len()..)
+            .map(|rest| is_name_boundary(rest))
+            .unwrap_or(false)
+    })
+    .min_by_key(|(i, _)| *i);
+    candidates
+}
+
+/// Returns the whole element starting at `xml` and the remainder after it.
+pub fn take_element<'a>(xml: &'a str, tag: &str) -> Option<(&'a str, &'a str)> {
+    let open = format!("<{tag}");
+    let close = format!("</{tag}>");
+    let start = xml.find(&open)?;
+    let after = &xml[start..];
+    if !is_name_boundary(&after[open.len()..]) {
+        return None;
+    }
+    let head_end = after.find('>')?;
+    let end = if after[..head_end].ends_with('/') {
+        head_end + 1
+    } else {
+        after.find(&close)? + close.len()
+    };
+    Some((&after[..end], &after[end..]))
+}
+
+/// Reads an attribute from an element's opening tag given the full element slice.
+pub fn read_attr_on_element(xml: &str, tag: &str, attr: &str) -> Option<String> {
+    let open = format!("<{tag}");
+    let start = xml.find(&open)?;
+    let after = &xml[start..];
+    let head_end = after.find('>')?;
+    read_attr_value(&after[..=head_end], tag, attr)
+}
+
 pub fn read_tag_text(xml: &str, tag: &str) -> Option<String> {
     let open = format!("<{tag}");
     let close = format!("</{tag}>");
@@ -210,11 +270,16 @@ fn extract_text(xml: &str, page_breaks_as_newlines: bool) -> String {
                 out.push('\n');
             }
             rest = skip_tag(rest);
-        } else if rest.starts_with("<w:t") {
-            if let Some(text) = read_tag_text(rest, "w:t") {
+        } else if rest.starts_with("<w:t") || rest.starts_with("<w:delText") {
+            let tag = if rest.starts_with("<w:delText") {
+                "w:delText"
+            } else {
+                "w:t"
+            };
+            if let Some(text) = read_tag_text(rest, tag) {
                 out.push_str(&decode_xml_entities(&text));
             }
-            rest = advance_past_tag(rest, "w:t");
+            rest = advance_past_tag(rest, tag);
         } else {
             rest = &rest[1..];
         }

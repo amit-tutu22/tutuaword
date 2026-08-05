@@ -69,6 +69,9 @@ typedef TwApplyHeading1Dart = int Function();
 typedef TwApplyBulletListNative = Int32 Function();
 typedef TwApplyBulletListDart = int Function();
 
+typedef TwApplyNumberedListNative = Int32 Function();
+typedef TwApplyNumberedListDart = int Function();
+
 typedef TwApplyCharFormatNative = Int32 Function(
   Pointer<Utf8>,
   Uint32,
@@ -101,6 +104,9 @@ typedef TwApplyParaFormatDart = int Function(
 
 typedef TwApplyDeleteRangeNative = Int32 Function(Pointer<Utf8>, Uint32, Uint32);
 typedef TwApplyDeleteRangeDart = int Function(Pointer<Utf8>, int, int);
+
+typedef TwApplySplitParagraphNative = Int32 Function(Pointer<Utf8>, Uint32);
+typedef TwApplySplitParagraphDart = int Function(Pointer<Utf8>, int);
 
 typedef TwInsertTableNative = Int32 Function(Uint32, Uint32);
 typedef TwInsertTableDart = int Function(int, int);
@@ -146,6 +152,23 @@ typedef TwHitTestDart = int Function(int, double, double, Pointer<Utf8>, int, Po
 typedef TwCaretGeometryNative = Int32 Function(Uint32, Float, Float, Pointer<Float>, Pointer<Float>, Pointer<Float>);
 typedef TwCaretGeometryDart = int Function(int, double, double, Pointer<Float>, Pointer<Float>, Pointer<Float>);
 
+typedef TwCaretAtPositionNative = Int32 Function(
+  Uint32,
+  Pointer<Utf8>,
+  Uint32,
+  Pointer<Float>,
+  Pointer<Float>,
+  Pointer<Float>,
+);
+typedef TwCaretAtPositionDart = int Function(
+  int,
+  Pointer<Utf8>,
+  int,
+  Pointer<Float>,
+  Pointer<Float>,
+  Pointer<Float>,
+);
+
 typedef TwSelectionRectsNative = Int32 Function(Uint32, Float, Float, Float, Float, Pointer<Float>, Uint32, Pointer<Uint32>);
 typedef TwSelectionRectsDart = int Function(int, double, double, double, double, Pointer<Float>, int, Pointer<Uint32>);
 
@@ -160,6 +183,7 @@ class NativeEngine {
   late final TwApplyCharFormatDart applyCharFormat;
   late final TwApplyParaFormatDart applyParaFormat;
   late final TwApplyDeleteRangeDart applyDeleteRange;
+  late final TwApplySplitParagraphDart applySplitParagraph;
   late final TwGetDisplayListDart getDisplayList;
   late final TwGetPageDisplayListDart getPageDisplayList;
   late final TwGetDocumentTextDart getDocumentText;
@@ -168,6 +192,7 @@ class NativeEngine {
   late final TwSetCurrentPageDart setCurrentPage;
   late final TwApplyHeading1Dart applyHeading1;
   late final TwApplyBulletListDart applyBulletList;
+  late final TwApplyNumberedListDart applyNumberedList;
   late final TwInsertTableDart insertTable;
   late final TwInsertImageDart insertImage;
   late final TwExportPdfDart exportPdf;
@@ -178,6 +203,7 @@ class NativeEngine {
   late final TwSetTrackChangesDart setTrackChanges;
   late final TwHitTestDart hitTest;
   late final TwCaretGeometryDart caretGeometry;
+  late final TwCaretAtPositionDart caretAtPositionNative;
   late final TwSelectionRectsDart selectionRects;
   late final TwFreeBufferDart freeBuffer;
 
@@ -196,6 +222,8 @@ class NativeEngine {
           lib.lookupFunction<TwApplyParaFormatNative, TwApplyParaFormatDart>('tw_apply_para_format');
       engine.applyDeleteRange =
           lib.lookupFunction<TwApplyDeleteRangeNative, TwApplyDeleteRangeDart>('tw_apply_delete_range');
+      engine.applySplitParagraph = lib.lookupFunction<TwApplySplitParagraphNative,
+          TwApplySplitParagraphDart>('tw_apply_split_paragraph');
       engine.getDisplayList =
           lib.lookupFunction<TwGetDisplayListNative, TwGetDisplayListDart>('tw_get_display_list');
       engine.getPageDisplayList = lib.lookupFunction<TwGetPageDisplayListNative,
@@ -212,6 +240,8 @@ class NativeEngine {
           lib.lookupFunction<TwApplyHeading1Native, TwApplyHeading1Dart>('tw_apply_heading1');
       engine.applyBulletList = lib.lookupFunction<TwApplyBulletListNative, TwApplyBulletListDart>(
           'tw_apply_bullet_list');
+      engine.applyNumberedList = lib.lookupFunction<TwApplyNumberedListNative, TwApplyNumberedListDart>(
+          'tw_apply_numbered_list');
       engine.insertTable =
           lib.lookupFunction<TwInsertTableNative, TwInsertTableDart>('tw_insert_table');
       engine.insertImage =
@@ -229,6 +259,8 @@ class NativeEngine {
       engine.hitTest = lib.lookupFunction<TwHitTestNative, TwHitTestDart>('tw_hit_test');
       engine.caretGeometry =
           lib.lookupFunction<TwCaretGeometryNative, TwCaretGeometryDart>('tw_caret_geometry');
+      engine.caretAtPositionNative = lib.lookupFunction<TwCaretAtPositionNative, TwCaretAtPositionDart>(
+          'tw_caret_at_position');
       engine.selectionRects =
           lib.lookupFunction<TwSelectionRectsNative, TwSelectionRectsDart>('tw_selection_rects');
       engine.freeBuffer = lib.lookupFunction<TwFreeBufferNative, TwFreeBufferDart>('tw_free_buffer');
@@ -495,11 +527,21 @@ extension NativeEngineOps on NativeEngine {
     }
   }
 
+  bool splitParagraphAt(String runId, int offset) {
+    final runPtr = runId.toNativeUtf8();
+    try {
+      return applySplitParagraph(runPtr, offset) == 0;
+    } finally {
+      calloc.free(runPtr);
+    }
+  }
+
   bool setCurrentPageIndex(int page) => setCurrentPage(page) == 0;
 
   bool applyHeading1Style() => applyHeading1() == 0;
 
   bool applyBulletListStyle() => applyBulletList() == 0;
+  bool applyNumberedListStyle() => applyNumberedList() == 0;
 
   bool insertTableBlock(int rows, int cols) => insertTable(rows, cols) == 0;
 
@@ -591,6 +633,23 @@ extension NativeEngineOps on NativeEngine {
       if (result != 0) return null;
       return CaretGeometry(x: outX.value, y: outY.value, height: outH.value);
     } finally {
+      calloc.free(outX);
+      calloc.free(outY);
+      calloc.free(outH);
+    }
+  }
+
+  CaretGeometry? caretAtPosition(int page, String runId, int charOffset) {
+    final runPtr = runId.toNativeUtf8();
+    final outX = calloc<Float>();
+    final outY = calloc<Float>();
+    final outH = calloc<Float>();
+    try {
+      final result = caretAtPositionNative(page, runPtr, charOffset, outX, outY, outH);
+      if (result != 0) return null;
+      return CaretGeometry(x: outX.value, y: outY.value, height: outH.value);
+    } finally {
+      calloc.free(runPtr);
       calloc.free(outX);
       calloc.free(outY);
       calloc.free(outH);

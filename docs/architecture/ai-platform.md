@@ -1,5 +1,7 @@
 # AI Platform
 
+> **Implementation status:** Routing, policy, and `AiProvider` trait exist in `tw-ai`; no production provider implementations yet (tests use mocks only). See [Long-Tail Gaps](../long-tail-gaps.md) §6.
+
 The AI platform (`tw-ai`) provides document intelligence as a built-in capability. This is the primary product differentiator. The editor is **not tied to a single AI engine** — a provider-agnostic abstraction layer lets users switch between cloud APIs, in-process local models, and platform-native on-device inference.
 
 ## Design Principles

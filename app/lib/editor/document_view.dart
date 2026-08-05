@@ -236,6 +236,9 @@ class _PageCanvasState extends State<_PageCanvas> {
   FocusNode? _focusNode;
   bool _syncingFromController = false;
 
+  bool get _wantGlyphEditor =>
+      !widget.controller.preferTextRendering && !widget.readOnly;
+
   bool get _canPaintDisplayList =>
       !widget.controller.preferTextRendering &&
       widget.snapshot != null &&
@@ -352,11 +355,11 @@ class _PageCanvasState extends State<_PageCanvas> {
       ),
       child: Stack(
         children: [
-          if (_canPaintDisplayList && !widget.readOnly && widget.snapshot != null)
+          if (_wantGlyphEditor)
             GlyphEditorSurface(
               controller: widget.controller,
               pageIndex: widget.pageIndex,
-              snapshot: widget.snapshot!,
+              snapshot: widget.snapshot ?? DisplayListSnapshot.empty(),
               atlasImage: widget.atlasImage,
               images: widget.images,
             )

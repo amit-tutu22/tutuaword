@@ -1,5 +1,7 @@
 # Document Model
 
+> **Implementation status:** The tree below includes types not yet built in code (`Comment`, `Bookmark`, `RunContent::Field`, `Block::ShapeBlock`, typed header/footer maps). See [Long-Tail Gaps](../long-tail-gaps.md) §4 for current vs planned model.
+
 The document model (`tw-model`) is the single source of truth for all document content and structure. Every other subsystem reads from it; only `tw-edit` mutates it.
 
 ## Design Principles

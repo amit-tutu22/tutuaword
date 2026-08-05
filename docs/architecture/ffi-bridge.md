@@ -26,7 +26,7 @@ The FFI bridge connects the Rust engine to the Flutter UI. It defines the bounda
          │         Shared Memory            │
          │    ┌─────────────────────┐       │
          └───►│  Snapshot Buffers   │◄──────┘
-              │  (double-buffered)  │
+              │  (RwLock front/back)│
               └─────────────────────┘
 ```
 
@@ -113,31 +113,54 @@ void _onSnapshotEvent(SnapshotEvent event) {
 }
 ```
 
-## Double-Buffered Snapshots
+## RwLock Snapshot Buffer
 
-Display list snapshots use double buffering to avoid tearing:
+Display list snapshots use a front/back pair protected by `parking_lot::RwLock` (implemented in `tw-core/src/snapshot.rs`):
 
 ```rust
 pub struct SnapshotBuffer {
-    front: AtomicPtr<DisplayListSnapshot>,  // UI reads this
-    back: Mutex<DisplayListSnapshot>,       // Worker writes this
+    front: RwLock<PageSnapshot>,  // UI reads this (clone-on-read)
+    back: RwLock<PageSnapshot>,  // Worker writes here first
 }
 
 impl SnapshotBuffer {
-    pub fn publish(&self, new_snapshot: DisplayListSnapshot) {
-        let mut back = self.back.lock().unwrap();
-        *back = new_snapshot;
-        let old_front = self.front.swap(back as *const _ as *mut _, Ordering::Release);
-        // old front becomes new back
+    pub fn publish(&self, snapshot: PageSnapshot) {
+        let mut back = self.back.write();
+        *back = snapshot;
+        let mut front = self.front.write();
+        std::mem::swap(&mut *back, &mut *front);
     }
 
-    pub fn read(&self) -> &DisplayListSnapshot {
-        unsafe { &*self.front.load(Ordering::Acquire) }
+    pub fn read(&self) -> PageSnapshot {
+        self.front.read().clone()
     }
 }
 ```
 
-The UI thread always reads the front buffer. The worker thread writes to the back buffer and atomically swaps. No locks on the read path.
+The worker writes to the back buffer, then swaps front and back under write locks. The UI thread clones the front snapshot on read — a short lock, not a lock-free atomic pointer swap.
+
+### Synchronous Wait (5 s)
+
+After enqueueing a command, `tw-ffi` blocks until the worker publishes a fresh snapshot or times out. `wait_for_document` polls `Session::poll_event()` every **5 ms** for up to **5 seconds**:
+
+```rust
+fn wait_for_document(session: &Session) -> i32 {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if let Some(event) = session.poll_event() {
+            match event {
+                BridgeEvent::DocumentOpened { .. } | BridgeEvent::DisplayListReady { .. } => return 0,
+                BridgeEvent::Error { .. } => return -2,
+                _ => {}
+            }
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    -3  // timeout
+}
+```
+
+`tw_init` and edit FFI entry points call this helper so the first display-list fetch does not race an unpublished snapshot. `Session::wait_for_event(timeout_ms)` exposes the same polling pattern for tests.
 
 ## Zero-Copy Data Transport
 
@@ -331,7 +354,7 @@ Flutter displays errors via snackbar/dialog based on the error event.
 | Resource | Owner | Lifetime |
 |----------|-------|----------|
 | Document model | Rust (worker thread) | Until document closed |
-| Display list snapshots | Rust (double buffer) | Until next publish for that page |
+| Display list snapshots | Rust (RwLock front/back) | Until next publish for that page |
 | Glyph atlas | Rust (shared Arc) | Until atlas rebuild |
 | Image assets | Rust (cache) + Flutter (ui.Image) | Until document closed |
 | Command bytes | Flutter (sent) | Freed by Flutter after enqueue |

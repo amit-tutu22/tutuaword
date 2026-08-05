@@ -60,3 +60,14 @@ impl Drop for WasmSession {
         self.inner.take();
     }
 }
+
+/// WASM entry point stub — opens a document from raw bytes.
+/// Enable with `--features wasm-bindgen`.
+#[cfg(feature = "wasm-bindgen")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn tw_open_document(data: &[u8]) -> Result<(), wasm_bindgen::JsValue> {
+    let session = WasmSession::new();
+    session
+        .open_bytes(data.to_vec())
+        .map_err(|e| wasm_bindgen::JsValue::from_str(&e.to_string()))
+}

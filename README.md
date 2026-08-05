@@ -16,6 +16,7 @@ Full engineering reference: **[docs/README.md](docs/README.md)**
 |----------|-------------|
 | [Vision](docs/vision.md) | Product goals, principles, non-goals |
 | [Roadmap](docs/roadmap.md) | 6-phase development plan with exit criteria |
+| [Long-Tail Gaps](docs/long-tail-gaps.md) | Partial features: PDF fonts, Hunspell, parsers, plugins, AI |
 | [Architecture Overview](docs/architecture/overview.md) | Layers, process model, data flow |
 | [Crate Map](docs/architecture/crate-map.md) | Rust crate boundaries |
 | [ADRs](docs/adr/) | Architecture Decision Records |
@@ -47,6 +48,8 @@ Full engineering reference: **[docs/README.md](docs/README.md)**
 - Flutter: rulers, page navigator, print preview, table/image/PDF toolbar
 
 See [docs/phase-plan.md](docs/phase-plan.md) for the full phase-wise plan.
+
+**Known gaps (long-tail):** PDF font embedding, Hunspell dictionaries, full HTML/Markdown parsers, hyperlinks/comments model, plugin WASM sandbox, and production AI providers are documented in **[docs/long-tail-gaps.md](docs/long-tail-gaps.md)** — not blocking core editing.
 
 ## License
 

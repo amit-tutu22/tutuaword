@@ -42,6 +42,11 @@ impl LayoutCache {
         map.lines.first().map(|line| (line.x, line.y, line.ascent + line.descent))
     }
 
+    pub fn caret_at(&self, page: u32, run_id: tw_model::NodeId, char_offset: usize) -> Option<(f32, f32, f32)> {
+        let map = self.line_maps.get(&page)?;
+        map.caret_at(run_id, char_offset)
+    }
+
     pub fn selection_rects(&self, page: u32, start_x: f32, start_y: f32, end_x: f32, end_y: f32) -> Vec<f32> {
         let Some(map) = self.line_maps.get(&page) else {
             return Vec::new();

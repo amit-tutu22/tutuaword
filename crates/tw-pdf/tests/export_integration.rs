@@ -11,21 +11,22 @@ fn export_empty_document_produces_valid_pdf() {
     assert!(pdf.ends_with(b"%%EOF\n") || pdf.ends_with(b"%%EOF"));
 }
 
-#[test]
-fn export_multi_paragraph_document() {
-    let mut doc = Document::new();
-    doc.sections[0].blocks = vec![
-        Block::Paragraph(Paragraph::with_text("Title")),
-        Block::Paragraph(Paragraph::with_text("Body paragraph one.")),
-        Block::Paragraph(Paragraph::with_text("Body paragraph two.")),
-    ];
+    #[test]
+    fn export_multi_paragraph_document_contains_real_characters() {
+        let mut doc = Document::new();
+        doc.sections[0].blocks = vec![
+            Block::Paragraph(Paragraph::with_text("Title")),
+            Block::Paragraph(Paragraph::with_text("Body paragraph one.")),
+            Block::Paragraph(Paragraph::with_text("Body paragraph two.")),
+        ];
 
-    let exporter = DisplayListPdfExporter;
-    let pdf = exporter.export(&doc, &PdfExportOptions::default()).unwrap();
-    assert!(pdf.len() > 200);
-    let pdf_str = String::from_utf8_lossy(&pdf);
-    assert!(pdf_str.contains("/Type /Page"));
-}
+        let exporter = DisplayListPdfExporter;
+        let pdf = exporter.export(&doc, &PdfExportOptions::default()).unwrap();
+        assert!(pdf.len() > 200);
+        let pdf_str = String::from_utf8_lossy(&pdf);
+        assert!(pdf_str.contains("/Type /Page"));
+        assert!(pdf_str.contains("(Title) Tj") || pdf_str.contains("(Body paragraph one.) Tj"));
+    }
 
 #[test]
 fn export_document_with_header_footer_and_table() {

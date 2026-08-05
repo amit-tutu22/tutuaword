@@ -19,6 +19,10 @@ class EditorController extends ChangeNotifier {
         : 'Rust engine connected';
     // Glyph-first when the engine is present; TextField fallback otherwise.
     _preferTextRendering = _engine == null;
+    if (_engine != null) {
+      _refreshFromEngine();
+      _ensureGlyphCaret();
+    }
     _recomputePageCount();
   }
 
@@ -357,6 +361,76 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void moveGlyphCaretByArrow(LogicalKeyboardKey key) {
+    if (_engine == null) return;
+    if (_preferTextRendering) return; // TextField fallback handles arrows.
+    if (_caretRunId == null) return;
+
+    switch (key) {
+      case LogicalKeyboardKey.arrowLeft:
+        _moveGlyphCaretOffset(-1);
+        return;
+      case LogicalKeyboardKey.arrowRight:
+        _moveGlyphCaretOffset(1);
+        return;
+      case LogicalKeyboardKey.arrowUp:
+        _moveGlyphCaretUpDown(-1);
+        return;
+      case LogicalKeyboardKey.arrowDown:
+        _moveGlyphCaretUpDown(1);
+        return;
+      default:
+        return;
+    }
+  }
+
+  void _moveGlyphCaretOffset(int delta) {
+    final runId = _caretRunId;
+    if (runId == null) return;
+
+    final before = _engine!.caretAtPosition(_currentPage, runId, _caretOffset);
+    final candidate = (_caretOffset + delta).clamp(0, 1 << 30);
+    if (candidate != _caretOffset) {
+      final after = _engine!.caretAtPosition(_currentPage, runId, candidate);
+      if (after != null && !_sameCaretGeometry(before, after)) {
+        _setGlyphCaret(runId, candidate, after);
+        return;
+      }
+    }
+
+    // At a run boundary — nudge horizontally and hit-test the adjacent position.
+    if (before == null) return;
+    final nudge = delta > 0 ? 2.0 : -2.0;
+    final probeX = (before.x + nudge).clamp(_pageMargin, _pageWidth - _pageMargin);
+    hitTestAt(_currentPage, probeX, before.y);
+  }
+
+  bool _sameCaretGeometry(CaretGeometry? a, CaretGeometry b) {
+    if (a == null) return false;
+    const eps = 0.01;
+    return (b.x - a.x).abs() < eps && (b.y - a.y).abs() < eps;
+  }
+
+  void _setGlyphCaret(String runId, int offset, CaretGeometry geometry) {
+    _caretRunId = runId;
+    _caretOffset = offset;
+    _caretGeometry = geometry;
+    _selAnchorRunId = runId;
+    _selAnchorOffset = offset;
+    _selFocusRunId = runId;
+    _selFocusOffset = offset;
+    _selectionRects = const [];
+    notifyListeners();
+  }
+
+  void _moveGlyphCaretUpDown(int direction) {
+    if (_caretGeometry == null) return;
+    final stepY = _fontSize * _lineHeightFactor;
+    final newY = _caretGeometry!.y + stepY * direction;
+    // Keep X stable so we land on the nearest glyph segment for that line.
+    hitTestAt(_currentPage, _caretGeometry!.x, newY);
+  }
+
   void beginGlyphSelection(int pageIndex, double x, double y) {
     hitTestAt(pageIndex, x, y);
   }
@@ -389,8 +463,14 @@ class EditorController extends ChangeNotifier {
 
   void insertGlyphCharacter(String char) {
     if (_engine == null) return;
+    // Never insert control characters as glyphs (Enter used to produce tofu □).
+    if (char == '\n' || char == '\r' || char.codeUnitAt(0) < 0x20) {
+      return;
+    }
     final runId = _caretRunId ?? _defaultRunId();
     if (runId == null) return;
+    final oldCaretX = _caretGeometry?.x;
+    final oldCaretOffset = _caretOffset;
     _engine!.insertText(runId, _caretOffset, char);
     _caretOffset += char.length;
     _selAnchorRunId = runId;
@@ -399,7 +479,38 @@ class EditorController extends ChangeNotifier {
     _selFocusOffset = _caretOffset;
     _selectionRects = const [];
     _refreshFromEngine();
-    _updateRenderModeAfterEngineOpen();
+    // Whitespace can advance layout without producing a visible glyph, which
+    // can leave caret-x effectively unchanged. Ensure the caret visibly
+    // advances immediately after inserting a space.
+    if (usesGlyphRendering &&
+        oldCaretX != null &&
+        oldCaretOffset != _caretOffset &&
+        char.trim().isEmpty &&
+        _caretGeometry != null &&
+        (_caretGeometry!.x - oldCaretX).abs() < 0.5) {
+      final approxSpace = _fontSize * _avgCharWidthFactor;
+      _caretGeometry = CaretGeometry(
+        x: (oldCaretX + approxSpace).clamp(0.0, _pageWidth),
+        y: _caretGeometry!.y,
+        height: _caretGeometry!.height,
+      );
+    }
+    notifyListeners();
+  }
+
+  /// Word Enter: split the current paragraph at the caret.
+  void insertGlyphParagraphBreak() {
+    if (_engine == null) return;
+    final runId = _caretRunId ?? _defaultRunId();
+    if (runId == null) return;
+    final prevY = _caretGeometry?.y ?? (_pageMargin + _fontSize);
+    final prevX = _caretGeometry?.x ?? _pageMargin;
+    _engine!.splitParagraphAt(runId, _caretOffset);
+    _selectionRects = const [];
+    _refreshFromEngine();
+    // Place caret on the new paragraph (line below the previous caret).
+    final nextY = prevY + _fontSize * _lineHeightFactor;
+    hitTestAt(_currentPage, prevX.clamp(_pageMargin, _pageWidth - _pageMargin), nextY);
     notifyListeners();
   }
 
@@ -452,8 +563,33 @@ class EditorController extends ChangeNotifier {
   }
 
   String? _defaultRunId() {
-    if (_documentText.isEmpty) return null;
-    return '00000000-0000-0000-0000-000000000004';
+    if (_caretRunId != null) return _caretRunId;
+    _ensureGlyphCaret();
+    return _caretRunId;
+  }
+
+  /// Place the caret on the first editable run if none is set yet.
+  void ensureGlyphCaret() {
+    if (_caretRunId != null) return;
+    _ensureGlyphCaret();
+    if (_caretRunId != null) notifyListeners();
+  }
+
+  void _ensureGlyphCaret() {
+    if (_engine == null || _caretRunId != null) return;
+    final result = _engine!.hitTestPage(_currentPage, _pageMargin, _pageMargin + _fontSize);
+    if (result == null) return;
+    _caretRunId = result.runId;
+    _caretOffset = result.charOffset;
+    _selAnchorRunId = result.runId;
+    _selAnchorOffset = result.charOffset;
+    _selFocusRunId = result.runId;
+    _selFocusOffset = result.charOffset;
+    _caretGeometry = _engine!.caretGeometryAt(
+      _currentPage,
+      _pageMargin,
+      _pageMargin + _fontSize,
+    );
   }
 
   (String, int, String, int)? _formatRange() {
@@ -645,6 +781,17 @@ class EditorController extends ChangeNotifier {
       _statusText = 'Heading 1 applied';
     } else {
       _statusText = 'Heading 1 applied (mock)';
+    }
+    notifyListeners();
+  }
+
+  void applyNumberedList() {
+    if (_engine != null && _engine!.applyNumberedListStyle()) {
+      _refreshFromEngine();
+      _updateRenderModeAfterEngineOpen();
+      _statusText = 'Numbered list applied';
+    } else {
+      _statusText = 'Numbered list applied (mock)';
     }
     notifyListeners();
   }
@@ -881,6 +1028,16 @@ class EditorController extends ChangeNotifier {
     if (_currentPage >= _pageCount) {
       _currentPage = _pageCount - 1;
     }
+    _syncCaretGeometry();
+  }
+
+  void _syncCaretGeometry() {
+    if (_engine == null || _caretRunId == null || _preferTextRendering) return;
+    _caretGeometry = _engine!.caretAtPosition(
+      _currentPage,
+      _caretRunId!,
+      _caretOffset,
+    );
   }
 
   void _recomputePageCount() {
@@ -900,12 +1057,13 @@ class EditorController extends ChangeNotifier {
   }
 
   void _updateRenderModeAfterEngineOpen() {
-    if (_engineHasPaintableDisplayList()) {
-      _preferTextRendering = false;
-    } else {
+    if (_engine == null) {
       _preferTextRendering = true;
       _recomputePageCount();
+      return;
     }
+    // Keep the engine as the editing path even for empty documents.
+    _preferTextRendering = false;
   }
 
   bool _engineHasPaintableDisplayList() {
@@ -914,8 +1072,8 @@ class EditorController extends ChangeNotifier {
     return snapshot.hasPaintableGlyphs || snapshot.hasPaintableContent;
   }
 
-  /// Whether the active page should paint via Rust display list glyphs.
-  bool get usesGlyphRendering => !_preferTextRendering && _engineHasPaintableDisplayList();
+  /// Whether the UI is in glyph/engine editing mode (vs TextField fallback).
+  bool get usesGlyphRendering => !_preferTextRendering;
 
   /// Test hook: inject display list bytes and switch to glyph rendering mode.
   @visibleForTesting

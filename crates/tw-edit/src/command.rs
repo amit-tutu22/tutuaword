@@ -60,6 +60,12 @@ pub enum Command {
     InsertParagraph {
         after_id: NodeId,
     },
+    /// Split the paragraph containing `run_id` at `offset` (Word Enter).
+    /// Content after the caret moves into a new paragraph; caret lands at its start.
+    SplitParagraphAt {
+        run_id: NodeId,
+        offset: usize,
+    },
     DeleteParagraph {
         id: NodeId,
     },
@@ -99,6 +105,25 @@ pub enum Command {
         table_id: NodeId,
         column: u32,
         width: f32,
+    },
+    /// Restore a table cell's colspan/rowspan (undo helper for merge).
+    SetTableCellSpan {
+        table_id: NodeId,
+        row: u32,
+        col: u32,
+        colspan: u32,
+        rowspan: u32,
+    },
+    /// Replace every occurrence of `find` with `replace` inside `range`.
+    FindReplace {
+        range: DocRange,
+        find: String,
+        replace: String,
+        match_case: bool,
+    },
+    /// Undo helper for [`Command::FindReplace`].
+    RestoreFindReplace {
+        segments: Vec<(NodeId, usize, String, String)>,
     },
     DeleteBlock {
         id: NodeId,
@@ -174,6 +199,12 @@ impl Command {
                 let new_id = result.created_node_id?;
                 Some(Command::DeleteParagraph { id: new_id })
             }
+            // Stage 2: undo of a split removes the new paragraph (content merge
+            // is deferred — prefer undo immediately after Enter).
+            Command::SplitParagraphAt { .. } => {
+                let new_id = result.created_node_id?;
+                Some(Command::DeleteParagraph { id: new_id })
+            }
             Command::DeleteParagraph { .. } => {
                 let after_id = result.previous_paragraph_id?;
                 Some(Command::InsertParagraph { after_id })
@@ -202,7 +233,54 @@ impl Command {
                     numbering: old,
                 })
             }
-            Command::MergeTableCells { .. } | Command::ResizeTableColumn { .. } => None,
+            Command::MergeTableCells {
+                table_id,
+                start_row,
+                start_col,
+                ..
+            } => {
+                let (colspan, rowspan) = result.old_cell_span?;
+                Some(Command::SetTableCellSpan {
+                    table_id: *table_id,
+                    row: *start_row,
+                    col: *start_col,
+                    colspan,
+                    rowspan,
+                })
+            }
+            Command::SetTableCellSpan {
+                table_id,
+                row,
+                col,
+                ..
+            } => {
+                let (colspan, rowspan) = result.old_cell_span?;
+                Some(Command::SetTableCellSpan {
+                    table_id: *table_id,
+                    row: *row,
+                    col: *col,
+                    colspan,
+                    rowspan,
+                })
+            }
+            Command::ResizeTableColumn {
+                table_id,
+                column,
+                ..
+            } => {
+                let width = result.old_column_width?;
+                Some(Command::ResizeTableColumn {
+                    table_id: *table_id,
+                    column: *column,
+                    width,
+                })
+            }
+            Command::FindReplace { .. } => result.find_replace_undo.as_ref().map(|segments| {
+                Command::RestoreFindReplace {
+                    segments: segments.clone(),
+                }
+            }),
+            Command::RestoreFindReplace { .. } => None,
             Command::DeleteBlock { .. } => {
                 let after_id = result.previous_block_id?;
                 let block = result.deleted_block.clone()?;
@@ -233,6 +311,9 @@ pub struct EditResult {
     pub old_numbering: Option<Option<NumberingRef>>,
     pub previous_block_id: Option<NodeId>,
     pub deleted_block: Option<tw_model::Block>,
+    pub old_cell_span: Option<(u32, u32)>,
+    pub old_column_width: Option<f32>,
+    pub find_replace_undo: Option<Vec<(NodeId, usize, String, String)>>,
 }
 
 #[derive(Debug, thiserror::Error)]

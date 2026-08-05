@@ -51,6 +51,9 @@ pub fn apply(
         Command::RestoreRunFormats { formats } => restore_run_formats(doc, formats)?,
         Command::RestoreParaFormats { formats } => restore_para_formats(doc, formats)?,
         Command::InsertParagraph { after_id } => insert_paragraph(doc, buffer, *after_id)?,
+        Command::SplitParagraphAt { run_id, offset } => {
+            split_paragraph_at(doc, buffer, *run_id, *offset)?
+        }
         Command::DeleteParagraph { id } => delete_paragraph(doc, buffer, *id)?,
         Command::InsertTable {
             after_block_id,
@@ -96,6 +99,20 @@ pub fn apply(
             column,
             width,
         } => block_ops::resize_table_column(doc, *table_id, *column, *width)?,
+        Command::SetTableCellSpan {
+            table_id,
+            row,
+            col,
+            colspan,
+            rowspan,
+        } => block_ops::set_table_cell_span(doc, *table_id, *row, *col, *colspan, *rowspan)?,
+        Command::FindReplace {
+            range,
+            find,
+            replace,
+            match_case,
+        } => find_replace(doc, buffer, range, find, replace, *match_case)?,
+        Command::RestoreFindReplace { segments } => restore_find_replace(doc, buffer, segments)?,
         Command::DeleteBlock { id } => block_ops::delete_block(doc, buffer, *id)?,
         Command::InsertBlock {
             after_block_id,
@@ -665,6 +682,107 @@ fn insert_paragraph(
     })
 }
 
+/// Word Enter: split the paragraph at `(run_id, offset)`.
+///
+/// Returns `created_node_id` = new paragraph id and puts the new paragraph's
+/// first run id in `affected_nodes[0]` so the caret can land there.
+fn split_paragraph_at(
+    doc: &mut Document,
+    buffer: &mut TextBuffer,
+    run_id: NodeId,
+    offset: usize,
+) -> Result<EditResult, EditError> {
+    let (si, bi, _) = doc
+        .find_run_location(run_id)
+        .ok_or(EditError::RunNotFound(run_id))?;
+
+    let run_len = buffer.len(run_id);
+    if offset > run_len {
+        return Err(EditError::InvalidRange);
+    }
+
+    // Mid-run: split so the caret boundary is a run start.
+    let mut first_moved_run = run_id;
+    if offset > 0 && offset < run_len {
+        first_moved_run = split_run_at(doc, buffer, si, bi, run_id, offset)?;
+    } else if offset == run_len {
+        // Caret at end of this run — move subsequent runs (or insert empty para).
+        let para = doc
+            .paragraph_at(si, bi)
+            .ok_or(EditError::RunNotFound(run_id))?;
+        let idx = para
+            .runs
+            .iter()
+            .position(|r| r.id == run_id)
+            .ok_or(EditError::RunNotFound(run_id))?;
+        if idx + 1 < para.runs.len() {
+            first_moved_run = para.runs[idx + 1].id;
+        } else {
+            // End of paragraph → empty new paragraph after this one.
+            let after_id = para.id;
+            let result = insert_paragraph(doc, buffer, after_id)?;
+            let new_para_id = result.created_node_id.unwrap();
+            let new_run_id = doc
+                .paragraph_at(si, bi + 1)
+                .and_then(|p| p.runs.first().map(|r| r.id))
+                .ok_or(EditError::ParagraphNotFound(new_para_id))?;
+            return Ok(EditResult {
+                affected_nodes: vec![new_run_id, new_para_id],
+                created_node_id: Some(new_para_id),
+                ..Default::default()
+            });
+        }
+    }
+    // offset == 0: move this run and everything after.
+
+    let para = doc
+        .paragraph_at_mut(si, bi)
+        .ok_or(EditError::RunNotFound(run_id))?;
+    let move_from = para
+        .runs
+        .iter()
+        .position(|r| r.id == first_moved_run)
+        .ok_or(EditError::RunNotFound(first_moved_run))?;
+
+    let old_format = para.format.clone();
+    let old_style = para.style_id;
+    let moved: Vec<Run> = para.runs.drain(move_from..).collect();
+
+    if para.runs.is_empty() {
+        let empty = Run::new_text("");
+        buffer.register(empty.id, "");
+        para.runs.push(empty);
+    }
+
+    let new_first_run = if moved.is_empty() {
+        let empty = Run::new_text("");
+        buffer.register(empty.id, "");
+        let id = empty.id;
+        (id, vec![empty])
+    } else {
+        (moved[0].id, moved)
+    };
+
+    let new_para = tw_model::Paragraph {
+        id: NodeId::new(),
+        format: old_format,
+        style_id: old_style,
+        runs: new_first_run.1,
+    };
+    let new_para_id = new_para.id;
+    let new_run_id = new_first_run.0;
+
+    doc.sections[si]
+        .blocks
+        .insert(bi + 1, tw_model::Block::Paragraph(new_para));
+
+    Ok(EditResult {
+        affected_nodes: vec![new_run_id, new_para_id],
+        created_node_id: Some(new_para_id),
+        ..Default::default()
+    })
+}
+
 fn delete_paragraph(
     doc: &mut Document,
     buffer: &mut TextBuffer,
@@ -731,6 +849,143 @@ fn apply_paragraph_style_by_id(
         })
     })
     .ok_or(EditError::ParagraphNotFound(paragraph_id))?
+}
+
+fn find_in(haystack: &str, needle: &str, match_case: bool) -> Option<usize> {
+    if needle.is_empty() {
+        return None;
+    }
+    let needle_chars: Vec<char> = needle.chars().collect();
+    let hay_chars: Vec<char> = haystack.chars().collect();
+    for start in 0..=hay_chars.len().saturating_sub(needle_chars.len()) {
+        let matched = needle_chars.iter().enumerate().all(|(i, &nc)| {
+            let hc = hay_chars[start + i];
+            if match_case {
+                hc == nc
+            } else {
+                hc.to_lowercase().eq(nc.to_lowercase())
+            }
+        });
+        if matched {
+            return Some(start);
+        }
+    }
+    None
+}
+
+fn find_replace(
+    doc: &mut Document,
+    buffer: &mut TextBuffer,
+    range: &DocRange,
+    find: &str,
+    replace: &str,
+    match_case: bool,
+) -> Result<EditResult, EditError> {
+    if find.is_empty() {
+        return Err(EditError::InvalidRange);
+    }
+    let range = crate::range::normalize_range(doc, range)?;
+    let start_loc = doc
+        .find_run_location(range.start.run_id)
+        .ok_or(EditError::RunNotFound(range.start.run_id))?;
+    let end_loc = doc
+        .find_run_location(range.end.run_id)
+        .ok_or(EditError::RunNotFound(range.end.run_id))?;
+
+    let find_len = find.chars().count();
+    let mut undo_segments = Vec::new();
+    let mut affected = Vec::new();
+    let mut pending = Vec::new();
+
+    for (si, section) in doc.sections.iter().enumerate() {
+        for (bi, block) in section.blocks.iter().enumerate() {
+            if (si, bi) < (start_loc.0, start_loc.1) || (si, bi) > (end_loc.0, end_loc.1) {
+                continue;
+            }
+            let tw_model::Block::Paragraph(para) = block else {
+                continue;
+            };
+            for run in &para.runs {
+                if !run_in_doc_range(run.id, start_loc, end_loc, doc) {
+                    continue;
+                }
+                let run_start = if run.id == range.start.run_id {
+                    range.start.char_offset
+                } else {
+                    0
+                };
+                let run_end = if run.id == range.end.run_id {
+                    range.end.char_offset
+                } else {
+                    buffer.len(run.id)
+                };
+                if run_start >= run_end {
+                    continue;
+                }
+
+                let slice = buffer.slice(run.id, run_start..run_end);
+                let mut matches = Vec::new();
+                let mut search_from = 0usize;
+                let slice_len = slice.chars().count();
+                while search_from < slice_len {
+                    let tail: String = slice.chars().skip(search_from).collect();
+                    if let Some(rel) = find_in(&tail, find, match_case) {
+                        let abs = run_start + search_from + rel;
+                        matches.push(abs);
+                        search_from += rel + find_len;
+                    } else {
+                        break;
+                    }
+                }
+
+                for abs_start in matches.into_iter().rev() {
+                    pending.push((run.id, abs_start));
+                }
+            }
+        }
+    }
+
+    for (run_id, abs_start) in pending {
+        let abs_end = abs_start + find_len;
+        undo_segments.push((run_id, abs_start, find.to_string(), replace.to_string()));
+        delete_range(doc, buffer, run_id, abs_start, abs_end)?;
+        insert_text(doc, buffer, run_id, abs_start, replace)?;
+        affected.push(run_id);
+    }
+
+    Ok(EditResult {
+        affected_nodes: affected,
+        find_replace_undo: Some(undo_segments),
+        ..Default::default()
+    })
+}
+
+fn run_in_doc_range(
+    run_id: NodeId,
+    start_loc: (usize, usize, usize),
+    end_loc: (usize, usize, usize),
+    doc: &Document,
+) -> bool {
+    doc.find_run_location(run_id)
+        .is_some_and(|loc| loc >= start_loc && loc <= end_loc)
+}
+
+fn restore_find_replace(
+    doc: &mut Document,
+    buffer: &mut TextBuffer,
+    segments: &[(NodeId, usize, String, String)],
+) -> Result<EditResult, EditError> {
+    let mut affected = Vec::new();
+    for (run_id, offset, find, replace) in segments.iter().rev() {
+        let replace_len = replace.chars().count();
+        delete_range(doc, buffer, *run_id, *offset, *offset + replace_len)?;
+        insert_text(doc, buffer, *run_id, *offset, find)?;
+        affected.push(*run_id);
+    }
+    Ok(EditResult {
+        affected_nodes: affected,
+        ..Default::default()
+    })
 }
 
 fn set_numbering(
@@ -979,6 +1234,92 @@ mod phase2_tests {
                 .format
                 .bold,
             Some(true)
+        );
+    }
+
+    #[test]
+    fn find_replace_within_range() {
+        let mut session = EditSession::new();
+        let run_id = session.document.paragraph_at(0, 0).unwrap().runs[0].id;
+        session
+            .apply(Command::InsertText {
+                run_id,
+                offset: 0,
+                text: "foo bar foo".into(),
+            })
+            .unwrap();
+        session
+            .apply(Command::FindReplace {
+                range: DocRange {
+                    start: DocPosition {
+                        run_id,
+                        char_offset: 0,
+                    },
+                    end: DocPosition {
+                        run_id,
+                        char_offset: 11,
+                    },
+                },
+                find: "foo".into(),
+                replace: "baz".into(),
+                match_case: true,
+            })
+            .unwrap();
+        assert_eq!(
+            session.document.paragraph_at(0, 0).unwrap().runs[0].text(),
+            "baz bar baz"
+        );
+        session.undo().unwrap();
+        assert_eq!(
+            session.document.paragraph_at(0, 0).unwrap().runs[0].text(),
+            "foo bar foo"
+        );
+    }
+
+    #[test]
+    fn merge_table_cells_undo_restores_span() {
+        let mut session = EditSession::new();
+        let after = session.document.sections[0].blocks[0]
+            .paragraph()
+            .unwrap()
+            .id;
+        session
+            .apply(Command::InsertTable {
+                after_block_id: after,
+                rows: 2,
+                cols: 2,
+            })
+            .unwrap();
+        let table_id = session.document.sections[0].blocks[1].table().unwrap().id;
+        session
+            .apply(Command::MergeTableCells {
+                table_id,
+                start_row: 0,
+                start_col: 0,
+                end_row: 0,
+                end_col: 1,
+            })
+            .unwrap();
+        assert_eq!(
+            session.document.sections[0].blocks[1]
+                .table()
+                .unwrap()
+                .rows[0]
+                .cells[0]
+                .format
+                .colspan,
+            2
+        );
+        session.undo().unwrap();
+        assert_eq!(
+            session.document.sections[0].blocks[1]
+                .table()
+                .unwrap()
+                .rows[0]
+                .cells[0]
+                .format
+                .colspan,
+            1
         );
     }
 }

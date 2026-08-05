@@ -20,13 +20,14 @@ Read these documents in order if you are new to the project:
 11. [DOCX Compatibility](architecture/docx-compatibility.md) — OOXML fidelity strategy
 12. [Performance Budgets](performance-budgets.md) — targets and measurement methods
 13. [Testing Strategy](testing-strategy.md) — golden images, round-trip corpus, benchmarks
+14. [Long-Tail Gaps](long-tail-gaps.md) — partial/peripheral features not yet built (PDF fonts, Hunspell, parsers, plugins, AI)
 
 ### Later Phases (interface specs only)
 
-14. [AI Platform](architecture/ai-platform.md)
-15. [Collaboration](architecture/collaboration.md)
-16. [Plugins](architecture/plugins.md)
-17. [Security](architecture/security.md)
+15. [AI Platform](architecture/ai-platform.md)
+16. [Collaboration](architecture/collaboration.md)
+17. [Plugins](architecture/plugins.md)
+18. [Security](architecture/security.md)
 
 ### Architecture Decision Records
 
