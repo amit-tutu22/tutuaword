@@ -448,6 +448,45 @@ fn an_untouched_document_still_passes_through_byte_for_byte() {
 }
 
 #[test]
+fn track_changes_wrapper_round_trip() {
+    let xml = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:ins w:id="42" w:author="Alice" w:date="2024-01-01T00:00:00Z"><w:r><w:t>Added</w:t></w:r></w:ins><w:del w:id="43" w:author="Bob" w:date="2024-01-02T00:00:00Z"><w:r><w:t>Removed</w:t></w:r></w:del></w:p></w:body></w:document>"#;
+    let imported = import(&minimal_docx(xml, &[])).unwrap();
+    let para = imported.document.sections[0].blocks[0]
+        .paragraph()
+        .unwrap();
+    assert_eq!(para.runs.len(), 2);
+    assert!(matches!(
+        para.runs[0].revision.as_ref().map(|r| r.revision_type),
+        Some(tw_model::RevisionType::Insert)
+    ));
+    assert!(matches!(
+        para.runs[1].revision.as_ref().map(|r| r.revision_type),
+        Some(tw_model::RevisionType::Delete)
+    ));
+
+    let reimported = round_trip(&imported.document);
+    let para = reimported.sections[0].blocks[0].paragraph().unwrap();
+    assert_eq!(para.runs.len(), 2);
+    assert!(para.runs[0].revision.is_some());
+    assert!(para.runs[1].revision.is_some());
+}
+
+#[test]
+fn numbering_xml_is_written_for_fresh_exports() {
+    let doc = Document::with_paragraph("List item");
+    let bytes = export(&doc, &DocxPackage::minimal()).unwrap();
+    let imported = import(&bytes).unwrap();
+    assert!(
+        imported.package.parts.contains_key("word/numbering.xml"),
+        "fresh export must include numbering definitions"
+    );
+    assert!(
+        imported.document.settings.numbering.get(1).is_some(),
+        "default bullet definition should round-trip"
+    );
+}
+
+#[test]
 fn a_document_with_no_source_package_is_always_serialized() {
     let doc = Document::with_paragraph("Fresh");
 

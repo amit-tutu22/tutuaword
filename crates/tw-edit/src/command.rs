@@ -31,13 +31,40 @@ pub enum Command {
         format: CharFormat,
         merge: bool,
     },
+    /// Apply a character-format delta across an arbitrary document range
+    /// (possibly spanning multiple runs / paragraphs).
+    SetCharFormatRange {
+        range: DocRange,
+        format: CharFormat,
+        merge: bool,
+    },
     SetParaFormat {
         paragraph_id: NodeId,
         format: ParaFormat,
         merge: bool,
     },
+    /// Apply a paragraph-format delta to every paragraph touched by `range`.
+    SetParaFormatRange {
+        range: DocRange,
+        format: ParaFormat,
+        merge: bool,
+    },
+    /// Restore previously recorded run formats (undo helper for range edits).
+    RestoreRunFormats {
+        formats: Vec<(NodeId, CharFormat)>,
+    },
+    /// Restore previously recorded paragraph formats (undo helper for range edits).
+    RestoreParaFormats {
+        formats: Vec<(NodeId, ParaFormat)>,
+    },
     InsertParagraph {
         after_id: NodeId,
+    },
+    /// Split the paragraph containing `run_id` at `offset` (Word Enter).
+    /// Content after the caret moves into a new paragraph; caret lands at its start.
+    SplitParagraphAt {
+        run_id: NodeId,
+        offset: usize,
     },
     DeleteParagraph {
         id: NodeId,
@@ -79,6 +106,25 @@ pub enum Command {
         column: u32,
         width: f32,
     },
+    /// Restore a table cell's colspan/rowspan (undo helper for merge).
+    SetTableCellSpan {
+        table_id: NodeId,
+        row: u32,
+        col: u32,
+        colspan: u32,
+        rowspan: u32,
+    },
+    /// Replace every occurrence of `find` with `replace` inside `range`.
+    FindReplace {
+        range: DocRange,
+        find: String,
+        replace: String,
+        match_case: bool,
+    },
+    /// Undo helper for [`Command::FindReplace`].
+    RestoreFindReplace {
+        segments: Vec<(NodeId, usize, String, String)>,
+    },
     DeleteBlock {
         id: NodeId,
     },
@@ -119,6 +165,15 @@ impl Command {
                     merge: false,
                 })
             }
+            Command::SetCharFormatRange { .. } => {
+                if result.old_run_formats.is_empty() {
+                    None
+                } else {
+                    Some(Command::RestoreRunFormats {
+                        formats: result.old_run_formats.clone(),
+                    })
+                }
+            }
             Command::SetParaFormat {
                 paragraph_id,
                 ..
@@ -130,7 +185,23 @@ impl Command {
                     merge: false,
                 })
             }
+            Command::SetParaFormatRange { .. } => {
+                if result.old_para_formats.is_empty() {
+                    None
+                } else {
+                    Some(Command::RestoreParaFormats {
+                        formats: result.old_para_formats.clone(),
+                    })
+                }
+            }
+            Command::RestoreRunFormats { .. } | Command::RestoreParaFormats { .. } => None,
             Command::InsertParagraph { .. } => {
+                let new_id = result.created_node_id?;
+                Some(Command::DeleteParagraph { id: new_id })
+            }
+            // Stage 2: undo of a split removes the new paragraph (content merge
+            // is deferred — prefer undo immediately after Enter).
+            Command::SplitParagraphAt { .. } => {
                 let new_id = result.created_node_id?;
                 Some(Command::DeleteParagraph { id: new_id })
             }
@@ -162,7 +233,54 @@ impl Command {
                     numbering: old,
                 })
             }
-            Command::MergeTableCells { .. } | Command::ResizeTableColumn { .. } => None,
+            Command::MergeTableCells {
+                table_id,
+                start_row,
+                start_col,
+                ..
+            } => {
+                let (colspan, rowspan) = result.old_cell_span?;
+                Some(Command::SetTableCellSpan {
+                    table_id: *table_id,
+                    row: *start_row,
+                    col: *start_col,
+                    colspan,
+                    rowspan,
+                })
+            }
+            Command::SetTableCellSpan {
+                table_id,
+                row,
+                col,
+                ..
+            } => {
+                let (colspan, rowspan) = result.old_cell_span?;
+                Some(Command::SetTableCellSpan {
+                    table_id: *table_id,
+                    row: *row,
+                    col: *col,
+                    colspan,
+                    rowspan,
+                })
+            }
+            Command::ResizeTableColumn {
+                table_id,
+                column,
+                ..
+            } => {
+                let width = result.old_column_width?;
+                Some(Command::ResizeTableColumn {
+                    table_id: *table_id,
+                    column: *column,
+                    width,
+                })
+            }
+            Command::FindReplace { .. } => result.find_replace_undo.as_ref().map(|segments| {
+                Command::RestoreFindReplace {
+                    segments: segments.clone(),
+                }
+            }),
+            Command::RestoreFindReplace { .. } => None,
             Command::DeleteBlock { .. } => {
                 let after_id = result.previous_block_id?;
                 let block = result.deleted_block.clone()?;
@@ -182,6 +300,10 @@ pub struct EditResult {
     pub deleted_text: Option<String>,
     pub old_char_format: Option<CharFormat>,
     pub old_para_format: Option<ParaFormat>,
+    /// Per-run format snapshots for multi-run character formatting undo.
+    pub old_run_formats: Vec<(NodeId, CharFormat)>,
+    /// Per-paragraph format snapshots for multi-paragraph formatting undo.
+    pub old_para_formats: Vec<(NodeId, ParaFormat)>,
     pub created_node_id: Option<NodeId>,
     pub previous_paragraph_id: Option<NodeId>,
     pub deleted_paragraph: Option<tw_model::Paragraph>,
@@ -189,6 +311,9 @@ pub struct EditResult {
     pub old_numbering: Option<Option<NumberingRef>>,
     pub previous_block_id: Option<NodeId>,
     pub deleted_block: Option<tw_model::Block>,
+    pub old_cell_span: Option<(u32, u32)>,
+    pub old_column_width: Option<f32>,
+    pub find_replace_undo: Option<Vec<(NodeId, usize, String, String)>>,
 }
 
 #[derive(Debug, thiserror::Error)]

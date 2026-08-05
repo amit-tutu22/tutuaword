@@ -26,6 +26,7 @@ pub enum BridgeCommand {
     SetCurrentPage { page: u32 },
     ApplyHeading1,
     ApplyBulletList,
+    ApplyNumberedList,
     InsertTable { rows: u32, cols: u32 },
     InsertImage { width: f32, height: f32 },
     Undo,
@@ -51,7 +52,7 @@ pub struct WorkerHandle {
 
 impl WorkerHandle {
     pub fn spawn(snapshot: Arc<SnapshotBuffer>, layout_cache: crate::SharedLayoutCache) -> Self {
-        let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+        let (cmd_tx, cmd_rx) = crossbeam_channel::bounded(512);
         let (event_tx, event_rx) = crossbeam_channel::unbounded();
 
         let join = thread::spawn(move || {
@@ -117,7 +118,17 @@ fn worker_loop(
     let page_count = layout.page_count() as u32;
     let _ = event_tx.send(BridgeEvent::DocumentOpened { page_count });
 
-    while let Ok(cmd) = cmd_rx.recv() {
+    let mut pending: Option<BridgeCommand> = None;
+
+    loop {
+        let cmd = match pending.take() {
+            Some(cmd) => cmd,
+            None => match cmd_rx.recv() {
+                Ok(cmd) => cmd,
+                Err(_) => break,
+            },
+        };
+
         match cmd {
             BridgeCommand::NewDocument => {
                 session = EditSession::new();
@@ -180,7 +191,30 @@ fn worker_loop(
                 session.document.settings.track_changes_enabled = enabled;
             },
             BridgeCommand::ApplyEdit { command } => {
-                if session.apply(command).is_ok() {
+                let mut commands = vec![command];
+                while let Ok(next) = cmd_rx.try_recv() {
+                    match next {
+                        BridgeCommand::ApplyEdit { command: c } => commands.push(c),
+                        other => {
+                            pending = Some(other);
+                            break;
+                        }
+                    }
+                }
+
+                let mut apply_error = None;
+                for command in commands {
+                    if let Err(e) = session.apply(command) {
+                        apply_error = Some(e);
+                        break;
+                    }
+                }
+
+                if let Some(e) = apply_error {
+                    let _ = event_tx.send(BridgeEvent::Error {
+                        message: e.to_string(),
+                    });
+                } else {
                     format_ctx.mark_document_modified();
                     version = rebuild(&session, &mut layout, &mut version, current_page);
                     let _ = event_tx.send(BridgeEvent::DisplayListReady {
@@ -201,6 +235,16 @@ fn worker_loop(
             }
             BridgeCommand::ApplyBulletList => {
                 if let Some(cmd) = bullet_list_command(&session.document) {
+                    let _ = session.apply(cmd);
+                    version = rebuild(&session, &mut layout, &mut version, current_page);
+                    let _ = event_tx.send(BridgeEvent::DisplayListReady {
+                        page: current_page,
+                        version,
+                    });
+                }
+            }
+            BridgeCommand::ApplyNumberedList => {
+                if let Some(cmd) = numbered_list_command(&session.document) {
                     let _ = session.apply(cmd);
                     version = rebuild(&session, &mut layout, &mut version, current_page);
                     let _ = event_tx.send(BridgeEvent::DisplayListReady {
@@ -251,24 +295,44 @@ fn worker_loop(
                     version: snap.version,
                 });
             }
-            BridgeCommand::Undo => {
-                if session.undo().is_ok() {
+            BridgeCommand::Undo => match session.undo() {
+                Ok(Some(_)) => {
                     version = rebuild(&session, &mut layout, &mut version, current_page);
                     let _ = event_tx.send(BridgeEvent::DisplayListReady {
                         page: current_page,
                         version,
                     });
                 }
-            }
-            BridgeCommand::Redo => {
-                if session.redo().is_ok() {
+                Ok(None) => {
+                    let _ = event_tx.send(BridgeEvent::Error {
+                        message: "nothing to undo".into(),
+                    });
+                }
+                Err(e) => {
+                    let _ = event_tx.send(BridgeEvent::Error {
+                        message: e.to_string(),
+                    });
+                }
+            },
+            BridgeCommand::Redo => match session.redo() {
+                Ok(Some(_)) => {
                     version = rebuild(&session, &mut layout, &mut version, current_page);
                     let _ = event_tx.send(BridgeEvent::DisplayListReady {
                         page: current_page,
                         version,
                     });
                 }
-            }
+                Ok(None) => {
+                    let _ = event_tx.send(BridgeEvent::Error {
+                        message: "nothing to redo".into(),
+                    });
+                }
+                Err(e) => {
+                    let _ = event_tx.send(BridgeEvent::Error {
+                        message: e.to_string(),
+                    });
+                }
+            },
             BridgeCommand::Shutdown => break,
         }
     }
@@ -286,6 +350,17 @@ pub fn last_block_id(doc: &tw_model::Document) -> Option<NodeId> {
         Block::Paragraph(p) => p.id,
         Block::Table(t) => t.id,
         Block::ImageBlock(i) => i.id,
+    })
+}
+
+pub fn numbered_list_command(doc: &tw_model::Document) -> Option<Command> {
+    let para_id = first_paragraph_id(doc)?;
+    Some(Command::SetNumbering {
+        paragraph_id: para_id,
+        numbering: Some(NumberingRef {
+            numbering_id: 2,
+            level: 0,
+        }),
     })
 }
 

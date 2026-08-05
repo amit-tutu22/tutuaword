@@ -25,3 +25,8 @@ thiserror = { workspace = true }
 zip = { workspace = true }
 
 [dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "typing_latency"
+harness = false

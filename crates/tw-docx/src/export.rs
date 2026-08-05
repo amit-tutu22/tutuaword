@@ -11,7 +11,7 @@ use tw_model::{
 };
 
 use crate::media::MediaWriter;
-use crate::{DocxError, DocxPackage};
+use crate::{DocxError, DocxPackage, MINIMAL_CONTENT_TYPES};
 
 const TWIPS_PER_POINT: f32 = 20.0;
 /// English Metric Units per point (914400 per inch, 72 points per inch).
@@ -50,9 +50,53 @@ pub fn export_docx(doc: &Document, package: &DocxPackage) -> Result<Vec<u8>, Doc
     pkg.parts
         .insert("word/document.xml".into(), document_xml.into_bytes());
     pkg.mark_modified("word/document.xml".into());
+
+    let numbering_xml = crate::numbering::serialize_numbering_xml(&doc.settings.numbering);
+    if !numbering_xml.is_empty() {
+        pkg.parts
+            .insert("word/numbering.xml".into(), numbering_xml.into_bytes());
+        pkg.mark_modified("word/numbering.xml".into());
+        ensure_numbering_content_type(&mut pkg);
+        ensure_numbering_relationship(&mut pkg);
+    }
+
     media.commit(&mut pkg);
 
     crate::opc::repack(&pkg)
+}
+
+fn ensure_numbering_content_type(pkg: &mut DocxPackage) {
+    let part = "[Content_Types].xml";
+    let bytes = pkg.parts.get(part).cloned().unwrap_or_else(|| {
+        MINIMAL_CONTENT_TYPES.to_vec()
+    });
+    let mut xml = String::from_utf8_lossy(&bytes).into_owned();
+    let override_tag = r#"<Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>"#;
+    if !xml.contains("/word/numbering.xml") {
+        if let Some(end) = xml.rfind("</Types>") {
+            xml.insert_str(end, override_tag);
+        } else {
+            xml.push_str(override_tag);
+        }
+        pkg.parts.insert(part.into(), xml.into_bytes());
+        pkg.mark_modified(part.into());
+    }
+}
+
+fn ensure_numbering_relationship(pkg: &mut DocxPackage) {
+    let part = "word/_rels/document.xml.rels";
+    let bytes = pkg.parts.get(part).cloned().unwrap_or_else(|| b"<Relationships/>".to_vec());
+    let mut xml = String::from_utf8_lossy(&bytes).into_owned();
+    if !xml.contains("numbering.xml") {
+        let rel = r#"<Relationship Id="rIdNumbering" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>"#;
+        if let Some(end) = xml.rfind("</Relationships>") {
+            xml.insert_str(end, rel);
+        } else {
+            xml = format!("<Relationships>{rel}</Relationships>");
+        }
+        pkg.parts.insert(part.into(), xml.into_bytes());
+        pkg.mark_modified(part.into());
+    }
 }
 
 fn serialize_document_xml(doc: &Document, source: &DocxPackage, media: &mut MediaWriter) -> String {
@@ -242,7 +286,7 @@ fn serialize_run(run: &Run) -> String {
             let tag = if deleted { "w:del" } else { "w:ins" };
             format!(
                 r#"<{tag} w:id="{}" w:author="{}" w:date="{}">{xml}</{tag}>"#,
-                rev.id,
+                revision_numeric_id(&rev.id),
                 escape_xml(&rev.author),
                 rev.timestamp.to_rfc3339()
             )
@@ -287,6 +331,12 @@ fn serialize_text(text: &str, deleted: bool) -> String {
         ));
     }
     out
+}
+
+fn revision_numeric_id(id: &tw_model::NodeId) -> u32 {
+    let bytes = id.as_uuid().as_bytes();
+    let value = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    value.max(1)
 }
 
 fn serialize_run_properties(format: &CharFormat) -> String {
@@ -635,6 +685,7 @@ fn alignment_value(alignment: Alignment) -> &'static str {
 
 fn underline_value(style: UnderlineStyle) -> &'static str {
     match style {
+        UnderlineStyle::None => "none",
         UnderlineStyle::Single => "single",
         UnderlineStyle::Double => "double",
         UnderlineStyle::Dotted => "dotted",
@@ -661,7 +712,7 @@ fn hex_rgb(color: Color) -> String {
     format!("{:02X}{:02X}{:02X}", color.r, color.g, color.b)
 }
 
-fn to_twips(points: f32) -> i32 {
+pub(crate) fn to_twips(points: f32) -> i32 {
     (points * TWIPS_PER_POINT).round() as i32
 }
 

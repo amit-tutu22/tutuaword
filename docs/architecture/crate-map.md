@@ -149,7 +149,7 @@ Violations of this rule will be caught by CI (cargo-deny or a custom lint).
 
 **Purpose:** Converts the document model into positioned layout boxes.
 
-**Depends on:** `tw-model`, `tw-shape`, `unicode-linebreak`, `icu_segmenter`
+**Depends on:** `tw-model`, `tw-shape`, `unicode-linebreak`
 
 **Public API surface:**
 - `LayoutEngine` — owns layout state for a document
@@ -249,17 +249,22 @@ Violations of this rule will be caught by CI (cargo-deny or a custom lint).
 | `tw-rtf` | 3 | `.rtf` | — |
 | `tw-pdf` | 2 | — | `.pdf` |
 
-Each format crate implements a common trait:
+Each format crate exposes crate-level free functions (no shared `FormatHandler` trait). Examples:
 
-```rust
-trait FormatHandler {
-    fn import(&self, source: &[u8]) -> Result<Document, ImportError>;
-    fn export(&self, doc: &Document, dest: &mut Vec<u8>) -> Result<(), ExportError>;
-    fn extensions(&self) -> &[&str];
-}
-```
+| Crate | Import | Export |
+|-------|--------|--------|
+| `tw-native` | `NativeFormat::import`, `import_plain_text` | `NativeFormat::export` |
+| `tw-docx` | `import(source) → ImportResult` | `export(doc, &DocxPackage)` |
+| `tw-odt` | `import(source) → ImportResult` | `export(doc, &OdtPackage)` |
+| `tw-markdown` | `import(source)` | `export(doc)` |
+| `tw-html` | `import(source)` | `export(doc)` |
+| `tw-rtf` | `import(source)` | — |
+
+`tw-core` routes through `import_document` / `export_document` in its bundle layer, which dispatches to the appropriate crate function based on detected format.
 
 ### Future Crates
+
+Peripheral crates below have varying implementation status. See **[Long-Tail Gaps](../long-tail-gaps.md)** for what is built vs spec.
 
 | Crate | Phase | Purpose |
 |-------|-------|---------|

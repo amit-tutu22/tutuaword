@@ -3,8 +3,8 @@ use std::ffi::{c_char, CStr};
 use std::slice;
 use std::time::Duration;
 use tw_core::Session;
-use tw_edit::Command;
-use tw_model::NodeId;
+use tw_edit::{Command, DocPosition, DocRange};
+use tw_model::{CharFormat, NodeId, ParaFormat};
 use uuid::Uuid;
 
 static SESSION: Mutex<Option<Session>> = Mutex::new(None);
@@ -13,28 +13,92 @@ type EventCallback = extern "C" fn(event_type: u32, data: *const u8, len: usize)
 
 static mut EVENT_CALLBACK: Option<EventCallback> = None;
 
-fn wait_for_document(session: &Session) -> i32 {
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+const EDIT_WAIT: Duration = Duration::from_millis(100);
+const BLOCKING_WAIT: Duration = Duration::from_secs(30);
+
+fn poll_session_event() -> Option<tw_core::BridgeEvent> {
+    let guard = SESSION.lock();
+    guard.as_ref().and_then(|session| session.poll_event())
+}
+
+fn wait_for_events(timeout: Duration, mut on_event: impl FnMut(tw_core::BridgeEvent) -> Option<i32>) -> i32 {
+    let deadline = std::time::Instant::now() + timeout;
     while std::time::Instant::now() < deadline {
-        if let Some(event) = session.poll_event() {
-            match event {
-                tw_core::BridgeEvent::DocumentOpened { .. } => return 0,
-                tw_core::BridgeEvent::DisplayListReady { .. } => return 0,
-                tw_core::BridgeEvent::Error { .. } => return -2,
-                _ => {}
+        if let Some(event) = poll_session_event() {
+            if let Some(code) = on_event(event) {
+                return code;
             }
         }
-        std::thread::sleep(Duration::from_millis(5));
+        std::thread::sleep(Duration::from_millis(2));
     }
     -3
+}
+
+fn wait_for_document_ready() -> i32 {
+    wait_for_events(BLOCKING_WAIT, |event| match event {
+        tw_core::BridgeEvent::DocumentOpened { .. } | tw_core::BridgeEvent::DisplayListReady { .. } => {
+            Some(0)
+        }
+        tw_core::BridgeEvent::Error { .. } => Some(-2),
+        _ => None,
+    })
+}
+
+/// Brief wait on edit hot paths; return success if the worker is still catching up.
+fn wait_for_document_edit() -> i32 {
+    match wait_for_events(EDIT_WAIT, |event| match event {
+        tw_core::BridgeEvent::DisplayListReady { .. } => Some(0),
+        tw_core::BridgeEvent::Error { .. } => Some(-2),
+        _ => None,
+    }) {
+        -3 => 0,
+        code => code,
+    }
+}
+
+fn wait_for_document_saved(out_ptr: *mut *const u8, out_len: *mut usize) -> i32 {
+    wait_for_events(BLOCKING_WAIT, |event| match event {
+        tw_core::BridgeEvent::DocumentSaved { data } => {
+            let leaked = data.clone();
+            unsafe {
+                *out_ptr = leaked.as_ptr();
+                *out_len = leaked.len();
+            }
+            std::mem::forget(leaked);
+            Some(0)
+        }
+        tw_core::BridgeEvent::Error { .. } => Some(-2),
+        _ => None,
+    })
+}
+
+fn wait_for_spell_check(out_ptr: *mut *const u8, out_len: *mut usize) -> i32 {
+    wait_for_events(BLOCKING_WAIT, |event| match event {
+        tw_core::BridgeEvent::SpellCheckResult { misspellings } => {
+            let text = misspellings.join("\n");
+            let leaked = text.into_bytes();
+            unsafe {
+                *out_ptr = leaked.as_ptr();
+                *out_len = leaked.len();
+            }
+            std::mem::forget(leaked);
+            Some(0)
+        }
+        tw_core::BridgeEvent::Error { .. } => Some(-2),
+        _ => None,
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn tw_init(callback: EventCallback) -> i32 {
     unsafe { EVENT_CALLBACK = Some(callback); }
-    let mut guard = SESSION.lock();
-    *guard = Some(Session::new());
-    0
+    {
+        let mut guard = SESSION.lock();
+        *guard = Some(Session::new());
+    }
+    // Wait for the worker's initial empty document so the first display-list
+    // fetch is not racing an unpublished snapshot.
+    wait_for_document_ready()
 }
 
 #[no_mangle]
@@ -58,12 +122,15 @@ pub extern "C" fn tw_apply_insert_text(
     let text = unsafe { CStr::from_ptr(text_ptr) }.to_string_lossy().into_owned();
     let run_id = NodeId::from_uuid(Uuid::parse_str(&run_id_str).unwrap_or_else(|_| Uuid::new_v4()));
 
-    session.apply(Command::InsertText {
+    if !session.apply(Command::InsertText {
         run_id,
         offset: offset as usize,
         text,
-    });
-    wait_for_document(session)
+    }) {
+        return -4;
+    }
+    drop(guard);
+    wait_for_document_edit()
 }
 
 #[no_mangle]
@@ -145,31 +212,17 @@ pub extern "C" fn tw_get_document_text(out_ptr: *mut *const u8, out_len: *mut us
 
 #[no_mangle]
 pub extern "C" fn tw_save_document(out_ptr: *mut *const u8, out_len: *mut usize) -> i32 {
-    let guard = SESSION.lock();
-    let Some(session) = guard.as_ref() else {
-        return -1;
+    let enqueued = {
+        let guard = SESSION.lock();
+        let Some(session) = guard.as_ref() else {
+            return -1;
+        };
+        session.save()
     };
-    session.save();
-
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while std::time::Instant::now() < deadline {
-        if let Some(event) = session.poll_event() {
-            if let tw_core::BridgeEvent::DocumentSaved { data } = event {
-                let leaked = data.clone();
-                unsafe {
-                    *out_ptr = leaked.as_ptr();
-                    *out_len = leaked.len();
-                }
-                std::mem::forget(leaked);
-                return 0;
-            }
-            if let tw_core::BridgeEvent::Error { .. } = event {
-                return -2;
-            }
-        }
-        std::thread::sleep(Duration::from_millis(5));
+    if !enqueued {
+        return -4;
     }
-    -3
+    wait_for_document_saved(out_ptr, out_len)
 }
 
 #[no_mangle]
@@ -197,8 +250,11 @@ pub extern "C" fn tw_open_document_with_path(
                 .into_owned(),
         )
     };
-    session.open_bytes_with_path(bytes, path_hint);
-    wait_for_document(session)
+    if !session.open_bytes_with_path(bytes, path_hint) {
+        return -4;
+    }
+    drop(guard);
+    wait_for_document_ready()
 }
 
 #[no_mangle]
@@ -217,8 +273,11 @@ pub extern "C" fn tw_set_current_page(page: u32) -> i32 {
     let Some(session) = guard.as_ref() else {
         return -1;
     };
-    session.set_current_page(page);
-    wait_for_document(session)
+    if !session.set_current_page(page) {
+        return -4;
+    }
+    drop(guard);
+    wait_for_document_edit()
 }
 
 #[no_mangle]
@@ -227,8 +286,24 @@ pub extern "C" fn tw_apply_heading1() -> i32 {
     let Some(session) = guard.as_ref() else {
         return -1;
     };
-    session.apply_heading1();
-    wait_for_document(session)
+    if !session.apply_heading1() {
+        return -4;
+    }
+    drop(guard);
+    wait_for_document_edit()
+}
+
+#[no_mangle]
+pub extern "C" fn tw_apply_numbered_list() -> i32 {
+    let guard = SESSION.lock();
+    let Some(session) = guard.as_ref() else {
+        return -1;
+    };
+    if !session.apply_numbered_list() {
+        return -4;
+    }
+    drop(guard);
+    wait_for_document_edit()
 }
 
 #[no_mangle]
@@ -237,8 +312,195 @@ pub extern "C" fn tw_apply_bullet_list() -> i32 {
     let Some(session) = guard.as_ref() else {
         return -1;
     };
-    session.apply_bullet_list();
-    wait_for_document(session)
+    if !session.apply_bullet_list() {
+        return -4;
+    }
+    drop(guard);
+    wait_for_document_edit()
+}
+
+fn parse_node_id(ptr: *const c_char) -> Option<NodeId> {
+    if ptr.is_null() {
+        return None;
+    }
+    let s = unsafe { CStr::from_ptr(ptr) }.to_string_lossy();
+    Uuid::parse_str(&s).ok().map(NodeId::from_uuid)
+}
+
+fn parse_cstr(ptr: *const c_char) -> Option<String> {
+    if ptr.is_null() {
+        return None;
+    }
+    Some(unsafe { CStr::from_ptr(ptr) }.to_string_lossy().into_owned())
+}
+
+/// Apply a character-format JSON delta over `[start, end)`.
+///
+/// `format_json` is a partial `CharFormat` object, e.g. `{"bold":true}`.
+/// When start and end describe the same collapsed caret, format from the caret
+/// to the end of that run (not the whole run from offset 0).
+#[no_mangle]
+pub extern "C" fn tw_apply_char_format(
+    start_run_id_ptr: *const c_char,
+    start_offset: u32,
+    end_run_id_ptr: *const c_char,
+    end_offset: u32,
+    format_json_ptr: *const c_char,
+) -> i32 {
+    let guard = SESSION.lock();
+    let Some(session) = guard.as_ref() else {
+        return -1;
+    };
+    let Some(start_run) = parse_node_id(start_run_id_ptr) else {
+        return -2;
+    };
+    let Some(end_run) = parse_node_id(end_run_id_ptr) else {
+        return -2;
+    };
+    let Some(json) = parse_cstr(format_json_ptr) else {
+        return -3;
+    };
+    let format: CharFormat = match serde_json::from_str(&json) {
+        Ok(f) => f,
+        Err(_) => return -3,
+    };
+
+    let collapsed = start_run == end_run && start_offset == end_offset;
+    let command = if collapsed {
+        // Format from the caret to the end of the run — avoids restyling text
+        // before the caret when toggling ribbon buttons with a collapsed selection.
+        Command::SetCharFormat {
+            run_id: start_run,
+            start: start_offset as usize,
+            end: usize::MAX,
+            format,
+            merge: true,
+        }
+    } else if start_run == end_run {
+        Command::SetCharFormat {
+            run_id: start_run,
+            start: start_offset as usize,
+            end: end_offset as usize,
+            format,
+            merge: true,
+        }
+    } else {
+        Command::SetCharFormatRange {
+            range: DocRange {
+                start: DocPosition {
+                    run_id: start_run,
+                    char_offset: start_offset as usize,
+                },
+                end: DocPosition {
+                    run_id: end_run,
+                    char_offset: end_offset as usize,
+                },
+            },
+            format,
+            merge: true,
+        }
+    };
+
+    if !session.apply(command) {
+        return -4;
+    }
+    drop(guard);
+    wait_for_document_edit()
+}
+
+/// Apply a paragraph-format JSON delta to every paragraph touched by the range.
+#[no_mangle]
+pub extern "C" fn tw_apply_para_format(
+    start_run_id_ptr: *const c_char,
+    start_offset: u32,
+    end_run_id_ptr: *const c_char,
+    end_offset: u32,
+    format_json_ptr: *const c_char,
+) -> i32 {
+    let guard = SESSION.lock();
+    let Some(session) = guard.as_ref() else {
+        return -1;
+    };
+    let Some(start_run) = parse_node_id(start_run_id_ptr) else {
+        return -2;
+    };
+    let Some(end_run) = parse_node_id(end_run_id_ptr) else {
+        return -2;
+    };
+    let Some(json) = parse_cstr(format_json_ptr) else {
+        return -3;
+    };
+    let format: ParaFormat = match serde_json::from_str(&json) {
+        Ok(f) => f,
+        Err(_) => return -3,
+    };
+
+    if !session.apply(Command::SetParaFormatRange {
+        range: DocRange {
+            start: DocPosition {
+                run_id: start_run,
+                char_offset: start_offset as usize,
+            },
+            end: DocPosition {
+                run_id: end_run,
+                char_offset: end_offset as usize,
+            },
+        },
+        format,
+        merge: true,
+    }) {
+        return -4;
+    }
+    drop(guard);
+    wait_for_document_edit()
+}
+
+/// Delete characters in a single run (`[start, end)`).
+#[no_mangle]
+pub extern "C" fn tw_apply_delete_range(
+    run_id_ptr: *const c_char,
+    start: u32,
+    end: u32,
+) -> i32 {
+    let guard = SESSION.lock();
+    let Some(session) = guard.as_ref() else {
+        return -1;
+    };
+    let Some(run_id) = parse_node_id(run_id_ptr) else {
+        return -2;
+    };
+    if start >= end {
+        return -3;
+    }
+    if !session.apply(Command::DeleteRange {
+        run_id,
+        start: start as usize,
+        end: end as usize,
+    }) {
+        return -4;
+    }
+    drop(guard);
+    wait_for_document_edit()
+}
+
+/// Split the paragraph at `(run_id, offset)` — Word Enter / Return.
+#[no_mangle]
+pub extern "C" fn tw_apply_split_paragraph(run_id_ptr: *const c_char, offset: u32) -> i32 {
+    let guard = SESSION.lock();
+    let Some(session) = guard.as_ref() else {
+        return -1;
+    };
+    let Some(run_id) = parse_node_id(run_id_ptr) else {
+        return -2;
+    };
+    if !session.apply(Command::SplitParagraphAt {
+        run_id,
+        offset: offset as usize,
+    }) {
+        return -4;
+    }
+    drop(guard);
+    wait_for_document_edit()
 }
 
 #[no_mangle]
@@ -247,8 +509,11 @@ pub extern "C" fn tw_insert_table(rows: u32, cols: u32) -> i32 {
     let Some(session) = guard.as_ref() else {
         return -1;
     };
-    session.insert_table(rows, cols);
-    wait_for_document(session)
+    if !session.insert_table(rows, cols) {
+        return -4;
+    }
+    drop(guard);
+    wait_for_document_edit()
 }
 
 #[no_mangle]
@@ -257,8 +522,11 @@ pub extern "C" fn tw_insert_image(width: f32, height: f32) -> i32 {
     let Some(session) = guard.as_ref() else {
         return -1;
     };
-    session.insert_image(width, height);
-    wait_for_document(session)
+    if !session.insert_image(width, height) {
+        return -4;
+    }
+    drop(guard);
+    wait_for_document_edit()
 }
 
 #[no_mangle]
@@ -267,8 +535,11 @@ pub extern "C" fn tw_undo() -> i32 {
     let Some(session) = guard.as_ref() else {
         return -1;
     };
-    session.undo();
-    wait_for_document(session)
+    if !session.undo() {
+        return -4;
+    }
+    drop(guard);
+    wait_for_document_edit()
 }
 
 #[no_mangle]
@@ -277,37 +548,26 @@ pub extern "C" fn tw_redo() -> i32 {
     let Some(session) = guard.as_ref() else {
         return -1;
     };
-    session.redo();
-    wait_for_document(session)
+    if !session.redo() {
+        return -4;
+    }
+    drop(guard);
+    wait_for_document_edit()
 }
 
 #[no_mangle]
 pub extern "C" fn tw_export_pdf(out_ptr: *mut *const u8, out_len: *mut usize) -> i32 {
-    let guard = SESSION.lock();
-    let Some(session) = guard.as_ref() else {
-        return -1;
+    let enqueued = {
+        let guard = SESSION.lock();
+        let Some(session) = guard.as_ref() else {
+            return -1;
+        };
+        session.export_pdf()
     };
-    session.export_pdf();
-
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while std::time::Instant::now() < deadline {
-        if let Some(event) = session.poll_event() {
-            if let tw_core::BridgeEvent::DocumentSaved { data } = event {
-                let leaked = data.clone();
-                unsafe {
-                    *out_ptr = leaked.as_ptr();
-                    *out_len = leaked.len();
-                }
-                std::mem::forget(leaked);
-                return 0;
-            }
-            if let tw_core::BridgeEvent::Error { .. } = event {
-                return -2;
-            }
-        }
-        std::thread::sleep(Duration::from_millis(5));
+    if !enqueued {
+        return -4;
     }
-    -3
+    wait_for_document_saved(out_ptr, out_len)
 }
 
 fn format_from_extension_str(ext: &str) -> tw_core::DetectedFormat {
@@ -320,32 +580,18 @@ pub extern "C" fn tw_save_document_as(
     out_ptr: *mut *const u8,
     out_len: *mut usize,
 ) -> i32 {
-    let guard = SESSION.lock();
-    let Some(session) = guard.as_ref() else {
-        return -1;
+    let enqueued = {
+        let guard = SESSION.lock();
+        let Some(session) = guard.as_ref() else {
+            return -1;
+        };
+        let format_str = unsafe { CStr::from_ptr(format_ptr) }.to_string_lossy();
+        session.save_as(format_from_extension_str(&format_str))
     };
-    let format_str = unsafe { CStr::from_ptr(format_ptr) }.to_string_lossy();
-    session.save_as(format_from_extension_str(&format_str));
-
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while std::time::Instant::now() < deadline {
-        if let Some(event) = session.poll_event() {
-            if let tw_core::BridgeEvent::DocumentSaved { data } = event {
-                let leaked = data.clone();
-                unsafe {
-                    *out_ptr = leaked.as_ptr();
-                    *out_len = leaked.len();
-                }
-                std::mem::forget(leaked);
-                return 0;
-            }
-            if let tw_core::BridgeEvent::Error { .. } = event {
-                return -2;
-            }
-        }
-        std::thread::sleep(Duration::from_millis(5));
+    if !enqueued {
+        return -4;
     }
-    -3
+    wait_for_document_saved(out_ptr, out_len)
 }
 
 #[no_mangle]
@@ -353,32 +599,17 @@ pub extern "C" fn tw_spell_check_document(
     out_ptr: *mut *const u8,
     out_len: *mut usize,
 ) -> i32 {
-    let guard = SESSION.lock();
-    let Some(session) = guard.as_ref() else {
-        return -1;
+    let enqueued = {
+        let guard = SESSION.lock();
+        let Some(session) = guard.as_ref() else {
+            return -1;
+        };
+        session.spell_check()
     };
-    session.spell_check();
-
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while std::time::Instant::now() < deadline {
-        if let Some(event) = session.poll_event() {
-            if let tw_core::BridgeEvent::SpellCheckResult { misspellings } = event {
-                let text = misspellings.join("\n");
-                let leaked = text.into_bytes();
-                unsafe {
-                    *out_ptr = leaked.as_ptr();
-                    *out_len = leaked.len();
-                }
-                std::mem::forget(leaked);
-                return 0;
-            }
-            if let tw_core::BridgeEvent::Error { .. } = event {
-                return -2;
-            }
-        }
-        std::thread::sleep(Duration::from_millis(5));
+    if !enqueued {
+        return -4;
     }
-    -3
+    wait_for_spell_check(out_ptr, out_len)
 }
 
 #[no_mangle]
@@ -465,6 +696,44 @@ pub extern "C" fn tw_caret_geometry(
         }
     }
     let _ = result;
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn tw_caret_at_position(
+    page: u32,
+    run_id_ptr: *const c_char,
+    char_offset: u32,
+    out_x: *mut f32,
+    out_y: *mut f32,
+    out_height: *mut f32,
+) -> i32 {
+    let guard = SESSION.lock();
+    let Some(session) = guard.as_ref() else {
+        return -1;
+    };
+    if run_id_ptr.is_null() {
+        return -2;
+    }
+    let run_id_str = unsafe { CStr::from_ptr(run_id_ptr) }.to_string_lossy();
+    let Ok(uuid) = Uuid::parse_str(&run_id_str) else {
+        return -2;
+    };
+    let run_id = NodeId::from_uuid(uuid);
+    let Some((cx, cy, height)) = session.caret_at(page, run_id, char_offset as usize) else {
+        return -3;
+    };
+    unsafe {
+        if !out_x.is_null() {
+            *out_x = cx;
+        }
+        if !out_y.is_null() {
+            *out_y = cy;
+        }
+        if !out_height.is_null() {
+            *out_height = height;
+        }
+    }
     0
 }
 

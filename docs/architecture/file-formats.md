@@ -1,5 +1,7 @@
 # File Formats
 
+> **Implementation status:** HTML import uses a hand-rolled scanner today; the HTML section below describes `html5ever` as the target parser. Markdown lists and links are partial. PDF export uses fixed Helvetica 12pt. See [Long-Tail Gaps](../long-tail-gaps.md) §§1 and 3.
+
 This document specifies the file format support matrix, the native on-disk format, and the common import/export architecture shared by all format crates.
 
 ## Format Matrix
@@ -17,18 +19,27 @@ This document specifies the file format support matrix, the native on-disk forma
 | Plain Text | `.txt` | Yes | Yes | 1 | Built into `tw-native` |
 | Legacy Word | `.doc` | — | — | — | Out of scope |
 
-## Format Handler Trait
+## Per-Crate Import/Export Functions
 
-All format crates implement a common trait:
+Format crates expose free functions rather than a shared trait. Each crate defines its own error type and result structs where needed.
 
 ```rust
-pub trait FormatHandler {
-    fn import(&self, source: &[u8]) -> Result<ImportResult, ImportError>;
-    fn export(&self, doc: &Document, options: &ExportOptions) -> Result<Vec<u8>, ExportError>;
-    fn extensions(&self) -> &[&str];
-    fn mime_types(&self) -> &[&str];
-}
+// tw-native
+NativeFormat::import(data: &[u8]) -> Result<Document, NativeError>
+NativeFormat::export(doc: &Document) -> Result<Vec<u8>, NativeError>
 
+// tw-docx
+import(source: &[u8]) -> Result<ImportResult, DocxError>   // ImportResult { document, package }
+export(doc: &Document, package: &DocxPackage) -> Result<Vec<u8>, DocxError>
+
+// tw-markdown, tw-html, tw-rtf — similar import/export pairs
+```
+
+`tw-core::import_document` and `tw-core::export_document` detect the format and dispatch to the appropriate crate. DOCX/ODT import returns a package alongside the document so passthrough export can preserve unmodified OPC parts — see [docx-compatibility.md](docx-compatibility.md).
+
+Shared result types used at the core layer:
+
+```rust
 pub struct ImportResult {
     pub document: Document,
     pub warnings: Vec<ImportWarning>,
@@ -44,8 +55,6 @@ pub struct ExportOptions {
     pub passthrough: Option<PassthroughPackage>,
 }
 ```
-
-The `passthrough` field is critical for DOCX fidelity — see [docx-compatibility.md](docx-compatibility.md).
 
 ## Native Format (`.twdoc`)
 

@@ -38,45 +38,66 @@ PageLayout (from tw-layout)
   canvas.drawRawAtlas() + drawRect() + drawPath() + drawImageRect()
 ```
 
-## Display List Format
+## Display List Format (v3)
 
-The display list is a flat, ordered sequence of draw commands. Commands are stored in render order (back to front, painter's algorithm).
+The display list is a single flat byte buffer — not a command array. After a fixed header and embedded glyph atlas pixels, four batches are appended in order: atlas (glyphs), rects, paths, images. There are no clip-stack commands; clipping is handled implicitly by batch bounds.
 
 ### Binary Layout
 
 ```
-DisplayListHeader {
-    version: u32,           // format version (currently 1)
-    page_width: f32,
-    page_height: f32,
-    atlas_width: u32,       // glyph atlas texture width
-    atlas_height: u32,      // glyph atlas texture height
-    atlas_data_offset: u32, // offset to RGBA atlas pixels
-    atlas_data_size: u32,   // size of atlas pixel data
-    command_count: u32,
-    commands_offset: u32,   // offset to command array
-}
+u32                     file_version (3)
+u64                     snapshot version
+f32                     page_width
+f32                     page_height
+u32                     atlas_width
+u32                     atlas_height
+u32                     atlas_pixel_len
+u8[atlas_pixel_len]     RGBA atlas pixels
 
-Command {
-    command_type: u8,
-    data_offset: u32,       // offset to command-specific data
-    data_size: u32,
+// AtlasBatch (glyphs)
+u32                     glyph_count
+f32[glyph_count * 2]    transforms ([x, y] per glyph)
+f32[glyph_count * 4]    atlas rects ([atlasX, atlasY, atlasW, atlasH])
+u32[glyph_count]        colors (ARGB tint)
+
+// RectBatch
+u32                     rect_count
+f32[rect_count * 4]     rects ([x, y, w, h])
+u32[rect_count]         colors (ARGB fill)
+
+// PathBatch (v2+)
+u32                     line_count
+f32[line_count * 4]     line segments ([x1, y1, x2, y2])
+u32[line_count]         colors
+
+// ImageBatch (v2+; payloads added in v3)
+u32                     image_count
+f32[image_count * 2]    transforms
+f32[image_count * 2]    sizes ([w, h])
+image_count × { u32 len; u8[len] }   asset_id (UTF-8)
+image_count × { u32 len; u8[len] }   payload (v3 only; empty in v2)
+```
+
+All multi-byte values are little-endian. Version 1 readers stop after the rect batch; version 2 adds path and image batches without payloads; version 3 adds encoded image payloads inline.
+
+The in-memory struct mirrors the wire format:
+
+```rust
+pub struct DisplayList {
+    pub version: u64,
+    pub page_width: f32,
+    pub page_height: f32,
+    pub atlas_width: u32,
+    pub atlas_height: u32,
+    pub atlas_pixels: Vec<u8>,
+    pub atlas_batch: AtlasBatch,
+    pub rect_batch: RectBatch,
+    pub path_batch: PathBatch,
+    pub image_batch: ImageBatch,
 }
 ```
 
-All multi-byte values are little-endian. The entire display list is a single contiguous byte buffer suitable for zero-copy transfer across FFI.
-
-### Command Types
-
-| Type | ID | Data | Flutter API |
-|------|----|------|-------------|
-| `AtlasDraw` | 0x01 | AtlasBatch | `canvas.drawRawAtlas()` |
-| `RectDraw` | 0x02 | RectBatch | `canvas.drawRect()` / `canvas.drawRRect()` |
-| `PathDraw` | 0x03 | PathBatch | `canvas.drawPath()` |
-| `ImageDraw` | 0x04 | ImageBatch | `canvas.drawImageRect()` |
-| `ClipRect` | 0x05 | Rect | `canvas.clipRect()` |
-| `ClipPath` | 0x06 | Path | `canvas.clipPath()` |
-| `RestoreClip` | 0x07 | — | `canvas.restore()` |
+Serialization: `DisplayListBuilder::to_bytes(&list)`. Deserialization: `DisplayListBuilder::from_bytes(&bytes)`.
 
 ## Glyph Atlas
 
@@ -191,17 +212,8 @@ Each glyph is drawn as a separate entry in the batch. For a typical page with ~2
 
 ```rust
 pub struct RectBatch {
-    pub count: u32,
-    pub rects: Vec<f32>,        // [x, y, w, h] per rect
-    pub colors: Vec<u32>,       // ARGB fill color
-    pub radii: Vec<f32>,        // corner radius (0 = sharp corners)
-    pub strokes: Vec<StrokeInfo>, // optional border stroke
-}
-
-pub struct StrokeInfo {
-    pub color: u32,
-    pub width: f32,
-    pub style: StrokeStyle,     // Solid, Dashed, Dotted
+    pub rects: Vec<f32>,   // [x, y, w, h] per rect
+    pub colors: Vec<u32>,  // ARGB fill color
 }
 ```
 
@@ -213,28 +225,16 @@ Used for:
 - Selection highlight
 - Cursor (blinking rect)
 
-### PathBatch (Shapes, Lines, Curves)
+### PathBatch (Table Grid Lines)
 
 ```rust
 pub struct PathBatch {
-    pub count: u32,
-    pub paths: Vec<EncodedPath>,
-    pub fills: Vec<Option<u32>>,   // ARGB fill color (None = no fill)
-    pub strokes: Vec<Option<StrokeInfo>>,
-}
-
-pub struct EncodedPath {
-    pub verbs: Vec<u8>,          // MoveTo, LineTo, CubicTo, Close
-    pub points: Vec<f32>,        // [x, y] pairs
+    pub points: Vec<f32>,   // [x1, y1, x2, y2] per line segment
+    pub colors: Vec<u32>,   // ARGB color per segment
 }
 ```
 
-Used for:
-- Drawing shapes (rectangles, ellipses, arrows)
-- Horizontal/vertical rules
-- Underline/strikethrough (when not using glyph decorations)
-- Diagonal cell borders in tables
-- Equation rendering (MathML layout → paths)
+Used for table grid lines. Each segment is a straight line between two points.
 
 ### ImageBatch (Embedded Images)
 
@@ -278,26 +278,17 @@ Version 2 readers stop after the asset ids and see empty payloads.
 class DocumentPainter extends CustomPainter {
   final DisplayListSnapshot snapshot;
   final ui.Image atlasImage;
-  final Map<int, ui.Image> embeddedImages;
+  final Map<String, ui.Image> embeddedImages;
 
   @override
   void paint(Canvas canvas, Size size) {
-    for (final command in snapshot.commands) {
-      switch (command.type) {
-        case CommandType.atlasDraw:
-          _paintAtlas(canvas, command.asAtlasBatch(), atlasImage);
-        case CommandType.rectDraw:
-          _paintRects(canvas, command.asRectBatch());
-        case CommandType.pathDraw:
-          _paintPaths(canvas, command.asPathBatch());
-        case CommandType.imageDraw:
-          _paintImages(canvas, command.asImageBatch(), embeddedImages);
-        case CommandType.clipRect:
-          canvas.clipRect(command.asRect());
-        case CommandType.restoreClip:
-          canvas.restore();
-      }
+    final list = snapshot.displayList;
+    if (list.atlasBatch.transforms.isNotEmpty) {
+      _paintAtlas(canvas, list.atlasBatch, atlasImage);
     }
+    _paintRects(canvas, list.rectBatch);
+    _paintPaths(canvas, list.pathBatch);
+    _paintImages(canvas, list.imageBatch, embeddedImages);
   }
 
   @override

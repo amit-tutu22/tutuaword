@@ -1,4 +1,4 @@
-use tw_model::{Alignment, LineSpacing, Paragraph};
+use tw_model::{Alignment, LineSpacing, Paragraph, RevisionType};
 use tw_shape::{AtlasKey, GlyphAtlas, TextShaper};
 use unicode_linebreak::{linebreaks, BreakOpportunity};
 
@@ -6,13 +6,20 @@ const MARKER_GUTTER: f32 = 24.0;
 
 /// Word's default tab grid (`w:defaultTabStop` of 720 twips), measured from the
 /// paragraph's text origin. Explicit `w:tabs` stops are not modelled yet.
-const DEFAULT_TAB_INTERVAL: f32 = 36.0;
+/// Word's default tab grid (`w:defaultTabStop` of 720 twips).
+pub const DEFAULT_TAB_INTERVAL: f32 = 36.0;
 
 /// Next tab stop strictly after `cursor_x`, so a tab always advances.
-fn next_tab_stop(cursor_x: f32, origin_x: f32) -> f32 {
+fn next_tab_stop(cursor_x: f32, origin_x: f32, tab_interval: f32) -> f32 {
+    let interval = tab_interval.max(1.0);
     let offset = cursor_x - origin_x;
-    let stops = (offset / DEFAULT_TAB_INTERVAL).floor() + 1.0;
-    origin_x + stops * DEFAULT_TAB_INTERVAL
+    let stops = (offset / interval).floor() + 1.0;
+    origin_x + stops * interval
+}
+
+fn with_opacity(argb: u32, factor: f32) -> u32 {
+    let a = (((argb >> 24) as f32) * factor.clamp(0.0, 1.0)) as u32;
+    (a << 24) | (argb & 0x00FF_FFFF)
 }
 
 /// Where a paragraph is placed and how wide it may run.
@@ -25,6 +32,8 @@ pub struct ParagraphFrame {
     /// Left edge of the containing column. Word measures the default tab grid
     /// from here, so an indent shifts the text but not the tab stops.
     pub tab_origin: f32,
+    /// Distance between default tab stops (`DocumentSettings.default_tab_stop`).
+    pub tab_interval: f32,
 }
 
 impl ParagraphFrame {
@@ -36,7 +45,13 @@ impl ParagraphFrame {
             y,
             max_width,
             tab_origin: x,
+            tab_interval: DEFAULT_TAB_INTERVAL,
         }
+    }
+
+    pub fn with_tab_interval(mut self, tab_interval: f32) -> Self {
+        self.tab_interval = tab_interval.max(1.0);
+        self
     }
 
     pub fn indented_in(column_x: f32, indent: f32, y: f32, column_width: f32) -> Self {
@@ -45,6 +60,7 @@ impl ParagraphFrame {
             y,
             max_width: column_width - indent,
             tab_origin: column_x,
+            tab_interval: DEFAULT_TAB_INTERVAL,
         }
     }
 }
@@ -61,6 +77,7 @@ pub fn layout_paragraph(
         y,
         max_width,
         tab_origin,
+        tab_interval,
     } = frame;
     let font_id = shaper.default_font();
     let mut lines = Vec::new();
@@ -72,8 +89,9 @@ pub fn layout_paragraph(
         .fold(0.0f32, f32::max)
         .max(12.0);
     let line_height = line_height_for(para, size);
-    let ascent = size;
-    let descent = size * 0.25;
+    let (ascent, descent, _) = font_id
+        .map(|fid| shaper.vertical_metrics(fid, size))
+        .unwrap_or((size, size * 0.25, size * 0.1));
 
     let text = para.full_text();
     if text.trim().is_empty() {
@@ -88,6 +106,8 @@ pub fn layout_paragraph(
             paragraph_id: para.id,
             run_map: vec![(x, x, para.runs[0].id, 0)],
             list_marker: None,
+            justify_stops: Vec::new(),
+            decorations: Vec::new(),
         });
         return (lines, line_height);
     }
@@ -104,12 +124,29 @@ pub fn layout_paragraph(
 
         let mandatory = matches!(opportunity, BreakOpportunity::Mandatory);
         if mandatory {
+            let tail = &text[byte_idx..];
+            // unicode-linebreak marks spaces as mandatory breaks. A trailing
+            // whitespace-only tail (e.g. "A " while typing) must stay on the
+            // current line so the gap and caret advance immediately.
+            if tail.is_empty() || tail.chars().all(char::is_whitespace) {
+                continue;
+            }
             emit_line(
                 shaper,
                 atlas,
-                atlas_ctx(para, &text, line_start, byte_idx, x, current_y + ascent, tab_origin),
+                atlas_ctx(
+                    para,
+                    &text,
+                    line_start,
+                    byte_idx,
+                    x,
+                    current_y + ascent,
+                    tab_origin,
+                    tab_interval,
+                ),
                 font_id,
                 default_color,
+                true,
                 &mut lines,
             );
             current_y += line_height;
@@ -119,7 +156,15 @@ pub fn layout_paragraph(
         }
 
         let candidate = trim_trailing(&text, line_start, byte_idx);
-        let width = measure_range(shaper, para, line_start, candidate, tab_origin - x, font_id);
+        let width = measure_range(
+            shaper,
+            para,
+            line_start,
+            candidate,
+            tab_origin - x,
+            tab_interval,
+            font_id,
+        );
 
         if width <= max_width {
             last_fit = Some(byte_idx);
@@ -134,9 +179,19 @@ pub fn layout_paragraph(
         emit_line(
             shaper,
             atlas,
-            atlas_ctx(para, &text, line_start, break_at, x, current_y + ascent, tab_origin),
+            atlas_ctx(
+                para,
+                &text,
+                line_start,
+                break_at,
+                x,
+                current_y + ascent,
+                tab_origin,
+                tab_interval,
+            ),
             font_id,
             default_color,
+            true,
             &mut lines,
         );
         current_y += line_height;
@@ -149,12 +204,24 @@ pub fn layout_paragraph(
     }
 
     if line_start < text.len() {
+        // Keep trailing whitespace on the paragraph's last line so a typed space
+        // is visible and the caret can advance before the next character.
         emit_line(
             shaper,
             atlas,
-            atlas_ctx(para, &text, line_start, text.len(), x, current_y + ascent, tab_origin),
+            atlas_ctx(
+                para,
+                &text,
+                line_start,
+                text.len(),
+                x,
+                current_y + ascent,
+                tab_origin,
+                tab_interval,
+            ),
             font_id,
             default_color,
+            false,
             &mut lines,
         );
         current_y += line_height;
@@ -172,6 +239,8 @@ pub fn layout_paragraph(
             paragraph_id: para.id,
             run_map: vec![(x, x, para.runs[0].id, 0)],
             list_marker: None,
+            justify_stops: Vec::new(),
+            decorations: Vec::new(),
         });
         current_y += line_height;
     }
@@ -206,6 +275,7 @@ struct LineContext<'a> {
     x: f32,
     baseline_y: f32,
     tab_origin: f32,
+    tab_interval: f32,
 }
 
 fn atlas_ctx<'a>(
@@ -216,6 +286,7 @@ fn atlas_ctx<'a>(
     x: f32,
     baseline_y: f32,
     tab_origin: f32,
+    tab_interval: f32,
 ) -> LineContext<'a> {
     LineContext {
         para,
@@ -225,6 +296,7 @@ fn atlas_ctx<'a>(
         x,
         baseline_y,
         tab_origin,
+        tab_interval,
     }
 }
 
@@ -234,9 +306,14 @@ fn emit_line(
     ctx: LineContext<'_>,
     font_id: Option<tw_shape::FontId>,
     default_color: u32,
+    trim_end: bool,
     lines: &mut Vec<super::types::TextLine>,
 ) {
-    let end = trim_trailing(ctx.text, ctx.start, ctx.end);
+    let end = if trim_end && ctx.end < ctx.text.len() {
+        trim_trailing(ctx.text, ctx.start, ctx.end)
+    } else {
+        ctx.end
+    };
     let line_text = &ctx.text[ctx.start..end];
     let (line, _) = shape_line(
         shaper,
@@ -247,6 +324,7 @@ fn emit_line(
         ctx.x,
         ctx.baseline_y,
         ctx.tab_origin,
+        ctx.tab_interval,
         font_id,
         default_color,
     );
@@ -277,6 +355,7 @@ fn measure_range(
     start_byte: usize,
     end_byte: usize,
     tab_origin_offset: f32,
+    tab_interval: f32,
     font_id: Option<tw_shape::FontId>,
 ) -> f32 {
     let Some(fid) = font_id.or_else(|| shaper.default_font()) else {
@@ -292,7 +371,7 @@ fn measure_range(
         let run_font = font_for(shaper, &run.format, fid);
         for (piece_index, piece) in segment_text.split('\t').enumerate() {
             if piece_index > 0 {
-                width = next_tab_stop(width, tab_origin_offset);
+                width = next_tab_stop(width, tab_origin_offset, tab_interval);
             }
             if piece.is_empty() {
                 continue;
@@ -328,6 +407,7 @@ pub fn apply_list_markers(
         marker_x,
         baseline,
         marker_x,
+        DEFAULT_TAB_INTERVAL,
         font_id,
         default_color,
     );
@@ -345,6 +425,7 @@ fn shape_line(
     x: f32,
     baseline_y: f32,
     tab_origin: f32,
+    tab_interval: f32,
     font_id: Option<tw_shape::FontId>,
     default_color: u32,
 ) -> (super::types::TextLine, f32) {
@@ -356,35 +437,53 @@ fn shape_line(
 
     let segments = run_segments_for_range(para, line_start_byte, line_end_byte);
     let default_size = para.runs.first().and_then(|r| r.format.font_size).unwrap_or(12.0);
-    let ascent = default_size;
-    let descent = default_size * 0.25;
-    let line_height = default_size * 1.35;
+    let mut line_ascent = 0.0f32;
+    let mut line_descent = 0.0f32;
+    let mut line_gap = 0.0f32;
+    let mut justify_stops = Vec::new();
+    let mut decorations = Vec::new();
 
     for (segment_text, run, char_offset) in segments {
         if segment_text.is_empty() {
             continue;
         }
         let size = run.format.font_size.unwrap_or(default_size);
-        let color = run
+        let run_font = font_for(shaper, &run.format, fid);
+        let (run_ascent, run_descent, run_gap) = shaper.vertical_metrics(run_font, size);
+        line_ascent = line_ascent.max(run_ascent);
+        line_descent = line_descent.max(run_descent);
+        line_gap = line_gap.max(run_gap);
+        let mut color = run
             .format
             .color
             .map(|c| c.to_argb())
             .unwrap_or(default_color);
+        let is_deleted = run
+            .revision
+            .as_ref()
+            .is_some_and(|rev| rev.revision_type == RevisionType::Delete);
+        if is_deleted {
+            color = with_opacity(color, 0.45);
+        }
         let seg_start_x = cursor_x;
-        let run_font = font_for(shaper, &run.format, fid);
 
         // Tabs jump to the next stop rather than being shaped, which would
         // render them as `.notdef` boxes.
         for (piece_index, piece) in segment_text.split('\t').enumerate() {
             if piece_index > 0 {
-                cursor_x = next_tab_stop(cursor_x, tab_origin);
+                cursor_x = next_tab_stop(cursor_x, tab_origin, tab_interval);
             }
             if piece.is_empty() {
                 continue;
             }
 
+            let piece_chars: Vec<char> = piece.chars().collect();
             let shaped = shaper.shape(piece, &run.format, run_font);
             for g in &shaped.glyphs {
+                let codepoint = piece_chars
+                    .get(g.cluster as usize)
+                    .copied()
+                    .unwrap_or('\u{FFFD}');
                 let key = AtlasKey::new(g.font_key(), g.glyph_id, size);
                 let entry = match atlas.get(&key).cloned() {
                     Some(entry) => Some(entry),
@@ -406,6 +505,7 @@ fn shape_line(
                     let tint = if entry.is_color { 0xFFFF_FFFF } else { color };
                     glyphs.push(super::types::PositionedGlyph {
                         glyph_id: g.glyph_id,
+                        codepoint,
                         x: cursor_x + g.x_offset + entry.bearing_x,
                         y: baseline_y + g.y_offset - entry.bearing_y,
                         width: entry.width as f32,
@@ -420,11 +520,51 @@ fn shape_line(
                 }
                 cursor_x += g.x_advance;
             }
+            for ch in piece.chars() {
+                if ch == ' ' {
+                    justify_stops.push(cursor_x);
+                }
+            }
+        }
+
+        let seg_end_x = cursor_x;
+        if run.format.highlight.is_some() {
+            decorations.push(super::types::TextDecoration {
+                x: seg_start_x,
+                y: baseline_y - line_ascent,
+                width: seg_end_x - seg_start_x,
+                height: line_ascent + line_descent,
+                color: run.format.highlight.map(|c| c.to_argb()).unwrap_or(0xFFFFFF00),
+                kind: super::types::DecorationKind::Highlight,
+            });
+        }
+        if run.format.underline.is_some_and(|u| u != tw_model::UnderlineStyle::None) {
+            decorations.push(super::types::TextDecoration {
+                x: seg_start_x,
+                y: baseline_y + (line_descent * 0.25),
+                width: seg_end_x - seg_start_x,
+                height: (size * 0.05).max(1.0),
+                color,
+                kind: super::types::DecorationKind::Underline,
+            });
+        }
+        if run.format.strikethrough == Some(true) || is_deleted {
+            decorations.push(super::types::TextDecoration {
+                x: seg_start_x,
+                y: baseline_y - line_ascent * 0.35,
+                width: seg_end_x - seg_start_x,
+                height: (size * 0.05).max(1.0),
+                color,
+                kind: super::types::DecorationKind::Strikethrough,
+            });
         }
 
         run_map.push((seg_start_x, cursor_x, run.id, char_offset));
     }
 
+    let ascent = line_ascent.max(default_size);
+    let descent = line_descent.max(default_size * 0.25);
+    let line_height = (ascent + descent + line_gap).max(default_size * 1.2);
     let width = cursor_x - x;
     let line = super::types::TextLine {
         y: baseline_y,
@@ -437,6 +577,8 @@ fn shape_line(
         paragraph_id: para.id,
         run_map,
         list_marker: None,
+        justify_stops,
+        decorations,
     };
     (line, width)
 }
@@ -481,12 +623,24 @@ fn run_segments_for_range(
 }
 
 fn apply_alignment(lines: &mut [super::types::TextLine], max_width: f32, alignment: Alignment) {
-    for line in lines.iter_mut() {
+    if lines.is_empty() {
+        return;
+    }
+    let last = lines.len() - 1;
+    for (index, line) in lines.iter_mut().enumerate() {
         let offset = match alignment {
-            Alignment::Left | Alignment::Justify => 0.0,
+            Alignment::Left => 0.0,
             Alignment::Center => (max_width - line.width) / 2.0,
             Alignment::Right => max_width - line.width,
+            Alignment::Justify if index < last => {
+                justify_line(line, max_width);
+                0.0
+            }
+            Alignment::Justify => 0.0,
         };
+        if offset.abs() < f32::EPSILON {
+            continue;
+        }
         line.x += offset;
         for g in &mut line.glyphs {
             g.x += offset;
@@ -495,5 +649,39 @@ fn apply_alignment(lines: &mut [super::types::TextLine], max_width: f32, alignme
             entry.0 += offset;
             entry.1 += offset;
         }
+        for stop in &mut line.justify_stops {
+            *stop += offset;
+        }
+        for deco in &mut line.decorations {
+            deco.x += offset;
+        }
     }
+}
+
+fn justify_line(line: &mut super::types::TextLine, target_width: f32) {
+    if line.justify_stops.is_empty() || line.width >= target_width {
+        return;
+    }
+    let extra_per = (target_width - line.width) / line.justify_stops.len() as f32;
+    for stop in &line.justify_stops {
+        for g in &mut line.glyphs {
+            if g.x >= *stop - 0.01 {
+                g.x += extra_per;
+            }
+        }
+        for entry in &mut line.run_map {
+            if entry.0 >= *stop - 0.01 {
+                entry.0 += extra_per;
+            }
+            if entry.1 >= *stop - 0.01 {
+                entry.1 += extra_per;
+            }
+        }
+        for deco in &mut line.decorations {
+            if deco.x >= *stop - 0.01 {
+                deco.x += extra_per;
+            }
+        }
+    }
+    line.width = target_width;
 }

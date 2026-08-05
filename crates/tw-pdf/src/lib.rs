@@ -1,5 +1,5 @@
 use thiserror::Error;
-use tw_layout::LayoutEngine;
+use tw_layout::{LayoutBox, LayoutEngine, PageLayout, TextLine};
 use tw_model::Document;
 use tw_render::DisplayListBuilder;
 
@@ -28,7 +28,7 @@ impl PdfExporter for DisplayListPdfExporter {
 
         for page in &layout.pages {
             let list = DisplayListBuilder::from_page(page, engine.atlas(), 1);
-            pdf.add_page(page.width, page.height, &list);
+            pdf.add_page(page.width, page.height, &list, page);
         }
 
         Ok(pdf.finish())
@@ -53,28 +53,10 @@ impl MinimalPdfWriter {
         Self { pages: Vec::new() }
     }
 
-    fn add_page(&mut self, width: f32, height: f32, list: &tw_render::DisplayList) {
+    fn add_page(&mut self, width: f32, height: f32, list: &tw_render::DisplayList, page: &PageLayout) {
         let mut content = String::new();
         content.push_str("BT\n/F1 12 Tf\n");
-        let mut y = height - 72.0;
-        let mut line = String::new();
-        let glyph_count = list.atlas_batch.transforms.len() / 2;
-        for i in 0..glyph_count {
-            let x = list.atlas_batch.transforms[i * 2];
-            let gy = list.atlas_batch.transforms[i * 2 + 1];
-            if (gy - y).abs() > 14.0 {
-                if !line.is_empty() {
-                    content.push_str(&format!("1 0 0 1 72 {y:.2} Tm ({}) Tj\n", escape_pdf_text(&line)));
-                    line.clear();
-                }
-                y = gy;
-            }
-            line.push('X');
-            let _ = x;
-        }
-        if !line.is_empty() {
-            content.push_str(&format!("1 0 0 1 72 {y:.2} Tm ({}) Tj\n", escape_pdf_text(&line)));
-        }
+        append_page_text(&mut content, height, page);
         content.push_str("ET\n");
 
         for chunk in list.rect_batch.rects.chunks(4) {
@@ -159,6 +141,42 @@ impl MinimalPdfWriter {
 
 fn escape_pdf_text(text: &str) -> String {
     text.replace('\\', "\\\\").replace('(', "\\(").replace(')', "\\)")
+}
+
+fn append_page_text(content: &mut String, page_height: f32, page: &PageLayout) {
+    for layout_box in &page.boxes {
+        match layout_box {
+            LayoutBox::TextLine(line) => append_line_text(content, page_height, line),
+            LayoutBox::Table(table) => {
+                for cell in &table.cells {
+                    for line in &cell.lines {
+                        append_line_text(content, page_height, line);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn append_line_text(content: &mut String, page_height: f32, line: &TextLine) {
+    let mut text = String::new();
+    for glyph in &line.glyphs {
+        if glyph.codepoint.is_control() {
+            continue;
+        }
+        text.push(glyph.codepoint);
+    }
+    if text.is_empty() {
+        return;
+    }
+    let pdf_y = page_height - line.y;
+    content.push_str(&format!(
+        "BT /F1 12 Tf 1 0 0 1 {:.2} {:.2} Tm ({}) Tj ET\n",
+        line.x,
+        pdf_y,
+        escape_pdf_text(&text)
+    ));
 }
 
 #[cfg(test)]

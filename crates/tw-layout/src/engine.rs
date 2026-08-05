@@ -44,10 +44,12 @@ impl LayoutEngine {
     }
 
     pub fn layout_document(&mut self, doc: &Document) -> DocumentLayout {
-        let section = doc.sections.first();
-        let format = section.map(|s| s.format.clone()).unwrap_or_default();
-        let content_width = format.page_width - format.margin_left - format.margin_right;
-        let content_bottom = format.page_height - format.margin_bottom;
+        let tab_interval = doc.settings.default_tab_stop.max(1.0);
+        let mut format = doc
+            .sections
+            .first()
+            .map(|s| s.format.clone())
+            .unwrap_or_default();
 
         let mut pages: Vec<PageLayout> = Vec::new();
         let mut current_boxes: Vec<LayoutBox> = Vec::new();
@@ -57,7 +59,28 @@ impl LayoutEngine {
 
         let mut list_counters: HashMap<(u32, u32), u32> = HashMap::new();
 
-        if let Some(section) = section {
+        for (section_idx, section) in doc.sections.iter().enumerate() {
+            if section_idx > 0 {
+                if !current_boxes.is_empty() {
+                    flush_page(
+                        &mut pages,
+                        &mut current_boxes,
+                        &mut current_lines,
+                        page_index,
+                        &format,
+                        tab_interval,
+                        &mut self.shaper,
+                        &mut self.atlas,
+                    );
+                    page_index += 1;
+                }
+                format = section.format.clone();
+                y = format.margin_top;
+            }
+
+            let content_width = format.page_width - format.margin_left - format.margin_right;
+            let content_bottom = format.page_height - format.margin_bottom;
+
             for block in &section.blocks {
                 match block {
                     Block::Paragraph(para) => {
@@ -69,6 +92,7 @@ impl LayoutEngine {
                                     &mut current_lines,
                                     page_index,
                                     &format,
+                                    tab_interval,
                                     &mut self.shaper,
                                     &mut self.atlas,
                                 );
@@ -133,56 +157,95 @@ impl LayoutEngine {
 
                             y += resolved_para.space_before.unwrap_or(0.0);
 
-                            loop {
-                                let (mut lines, height) = layout_paragraph(
+                            let (mut lines, _) = layout_paragraph(
+                                &mut self.shaper,
+                                &mut self.atlas,
+                                &effective_para,
+                                ParagraphFrame::indented_in(
+                                    format.margin_left,
+                                    indent,
+                                    y,
+                                    content_width,
+                                )
+                                .with_tab_interval(tab_interval),
+                                tw_model::Color::BLACK.to_argb(),
+                            );
+
+                            if let Some(ref marker) = list_marker {
+                                apply_list_markers(
                                     &mut self.shaper,
                                     &mut self.atlas,
-                                    &effective_para,
-                                    ParagraphFrame::indented_in(
-                                        format.margin_left,
-                                        indent,
-                                        y,
-                                        content_width,
-                                    ),
+                                    &mut lines,
+                                    marker,
+                                    format.margin_left + indent - hanging,
                                     tw_model::Color::BLACK.to_argb(),
                                 );
+                                for line in &mut lines {
+                                    line.list_marker = Some(marker.clone());
+                                }
+                            }
 
-                                if let Some(ref marker) = list_marker {
-                                    apply_list_markers(
-                                        &mut self.shaper,
-                                        &mut self.atlas,
-                                        &mut lines,
-                                        marker,
-                                        format.margin_left + indent - hanging,
-                                        tw_model::Color::BLACK.to_argb(),
-                                    );
-                                    for line in &mut lines {
-                                        line.list_marker = Some(marker.clone());
+                            let mut line_idx = 0usize;
+                            'lines: while line_idx < lines.len() {
+                                let available = content_bottom - y;
+                                let mut count = 0usize;
+                                let mut batch_height = 0.0f32;
+
+                                while line_idx + count < lines.len() {
+                                    let lh = lines[line_idx + count].line_height;
+                                    if batch_height + lh > available && count > 0 {
+                                        break;
                                     }
+                                    if batch_height + lh > available
+                                        && count == 0
+                                        && !current_boxes.is_empty()
+                                    {
+                                        flush_page(
+                                            &mut pages,
+                                            &mut current_boxes,
+                                            &mut current_lines,
+                                            page_index,
+                                            &format,
+                                            tab_interval,
+                                            &mut self.shaper,
+                                            &mut self.atlas,
+                                        );
+                                        page_index += 1;
+                                        y = format.margin_top;
+                                        continue 'lines;
+                                    }
+                                    batch_height += lh;
+                                    count += 1;
                                 }
 
-                                if y + height > content_bottom && !current_boxes.is_empty() {
+                                if count == 0 {
+                                    count = 1;
+                                    batch_height = lines[line_idx].line_height;
+                                }
+
+                                for line in lines[line_idx..line_idx + count].iter().cloned() {
+                                    current_lines.push(line.clone());
+                                    current_boxes.push(LayoutBox::TextLine(line));
+                                }
+                                line_idx += count;
+                                y += batch_height;
+
+                                if line_idx < lines.len() {
                                     flush_page(
                                         &mut pages,
                                         &mut current_boxes,
                                         &mut current_lines,
                                         page_index,
                                         &format,
+                                        tab_interval,
                                         &mut self.shaper,
                                         &mut self.atlas,
                                     );
                                     page_index += 1;
                                     y = format.margin_top;
-                                    continue;
                                 }
-
-                                for line in lines {
-                                    current_lines.push(line.clone());
-                                    current_boxes.push(LayoutBox::TextLine(line));
-                                }
-                                y += height + resolved_para.space_after.unwrap_or(0.0);
-                                break;
                             }
+                            y += resolved_para.space_after.unwrap_or(0.0);
                         }
                     }
                     Block::Table(table) => {
@@ -201,6 +264,7 @@ impl LayoutEngine {
                                 content_width,
                                 content_bottom - y,
                                 tw_model::Color::BLACK.to_argb(),
+                                tab_interval,
                             );
 
                             let overflows = y + slice.layout.height > content_bottom;
@@ -211,6 +275,7 @@ impl LayoutEngine {
                                     &mut current_lines,
                                     page_index,
                                     &format,
+                                    tab_interval,
                                     &mut self.shaper,
                                     &mut self.atlas,
                                 );
@@ -235,6 +300,7 @@ impl LayoutEngine {
                                     &mut current_lines,
                                     page_index,
                                     &format,
+                                    tab_interval,
                                     &mut self.shaper,
                                     &mut self.atlas,
                                 );
@@ -271,6 +337,7 @@ impl LayoutEngine {
                                 &mut current_lines,
                                 page_index,
                                 &format,
+                                tab_interval,
                                 &mut self.shaper,
                                 &mut self.atlas,
                             );
@@ -301,6 +368,7 @@ impl LayoutEngine {
                 &mut current_lines,
                 page_index,
                 &format,
+                tab_interval,
                 &mut self.shaper,
                 &mut self.atlas,
             );
@@ -366,6 +434,7 @@ fn flush_page(
     lines: &mut Vec<TextLine>,
     page_index: PageIndex,
     format: &SectionFormat,
+    tab_interval: f32,
     shaper: &mut TextShaper,
     atlas: &mut GlyphAtlas,
 ) {
@@ -382,7 +451,8 @@ fn flush_page(
                 format.margin_left,
                 format.margin_top * 0.25,
                 content_width,
-            ),
+            )
+            .with_tab_interval(tab_interval),
             tw_model::Color {
                 r: 128,
                 g: 128,
@@ -403,7 +473,8 @@ fn flush_page(
             shaper,
             atlas,
             &footer_para,
-            ParagraphFrame::new(format.margin_left, footer_y, content_width),
+            ParagraphFrame::new(format.margin_left, footer_y, content_width)
+                .with_tab_interval(tab_interval),
             tw_model::Color {
                 r: 128,
                 g: 128,
@@ -451,10 +522,15 @@ fn anchor_position(format: &tw_model::SectionFormat, anchor: tw_model::ImageAnch
 
 fn split_paragraph_at_page_breaks(para: &tw_model::Paragraph) -> Vec<ParagraphSegment> {
     let mut segments = Vec::new();
-    let mut current = Paragraph::new();
-    current.id = para.id;
-    current.format = para.format.clone();
-    current.style_id = para.style_id;
+    // Start with an empty run list — Paragraph::new() would inject a fresh
+    // empty run whose NodeId is not in the document model, breaking hit-test
+    // → edit routing for blank paragraphs.
+    let mut current = Paragraph {
+        id: para.id,
+        format: para.format.clone(),
+        style_id: para.style_id,
+        runs: Vec::new(),
+    };
     let mut page_break_before = para.format.page_break_before == Some(true);
 
     for run in &para.runs {
@@ -465,9 +541,12 @@ fn split_paragraph_at_page_breaks(para: &tw_model::Paragraph) -> Vec<ParagraphSe
                         paragraph: current,
                         page_break_before,
                     });
-                    current = Paragraph::new();
-                    current.format = para.format.clone();
-                    current.style_id = para.style_id;
+                    current = Paragraph {
+                        id: para.id,
+                        format: para.format.clone(),
+                        style_id: para.style_id,
+                        runs: Vec::new(),
+                    };
                     page_break_before = true;
                 } else {
                     page_break_before = true;
@@ -588,5 +667,39 @@ mod tests {
             p.boxes.iter().any(|b| matches!(b, LayoutBox::Table(_)))
         });
         assert!(has_table);
+    }
+
+    #[test]
+    fn layouts_all_sections_not_only_first() {
+        let mut doc = Document::new();
+        doc.sections[0].blocks = vec![Block::Paragraph(Paragraph::with_text(
+            "Section one paragraph.",
+        ))];
+        let mut section_two = tw_model::Section::new();
+        section_two.blocks = vec![Block::Paragraph(Paragraph::with_text(
+            "Section two paragraph.",
+        ))];
+        doc.sections.push(section_two);
+
+        let mut engine = LayoutEngine::new();
+        let layout = engine.layout_document(&doc);
+        let text: String = layout
+            .pages
+            .iter()
+            .flat_map(|p| &p.boxes)
+            .filter_map(|b| match b {
+                LayoutBox::TextLine(l) => Some(
+                    l.glyphs
+                        .iter()
+                        .map(|g| g.codepoint)
+                        .collect::<String>(),
+                ),
+                _ => None,
+            })
+            .collect();
+        assert!(text.contains('S'));
+        assert!(text.contains('t'));
+        assert!(text.contains('w'));
+        assert!(text.contains('o'));
     }
 }

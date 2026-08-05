@@ -21,6 +21,7 @@ pub fn layout_table(
     y: f32,
     max_width: f32,
     default_color: u32,
+    tab_interval: f32,
 ) -> TableLayout {
     layout_table_slice(
         shaper,
@@ -32,6 +33,7 @@ pub fn layout_table(
         max_width,
         f32::INFINITY,
         default_color,
+        tab_interval,
     )
     .layout
 }
@@ -50,6 +52,7 @@ pub fn layout_table_slice(
     max_width: f32,
     max_height: f32,
     default_color: u32,
+    tab_interval: f32,
 ) -> TableSlice {
     let col_count = column_count(table);
     let col_widths = fit_column_widths(table, col_count, max_width);
@@ -105,7 +108,8 @@ pub fn layout_table_slice(
                         shaper,
                         atlas,
                         para,
-                        ParagraphFrame::new(col_x + CELL_PADDING, cursor_y, text_width),
+                        ParagraphFrame::new(col_x + CELL_PADDING, cursor_y, text_width)
+                            .with_tab_interval(tab_interval),
                         default_color,
                     );
                     cell_lines.extend(lines);

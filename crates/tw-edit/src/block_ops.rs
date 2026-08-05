@@ -95,8 +95,15 @@ pub fn merge_table_cells(
 
     if let Some(row) = table.rows.get_mut(sr) {
         if let Some(cell) = row.cells.get_mut(sc) {
+            let old_colspan = cell.format.colspan;
+            let old_rowspan = cell.format.rowspan;
             cell.format.colspan = (ec - sc + 1) as u32;
             cell.format.rowspan = (er - sr + 1) as u32;
+            return Ok(EditResult {
+                affected_nodes: vec![table_id],
+                old_cell_span: Some((old_colspan, old_rowspan)),
+                ..Default::default()
+            });
         }
     }
 
@@ -104,6 +111,40 @@ pub fn merge_table_cells(
         affected_nodes: vec![table_id],
         ..Default::default()
     })
+}
+
+pub fn set_table_cell_span(
+    doc: &mut Document,
+    table_id: NodeId,
+    row: u32,
+    col: u32,
+    colspan: u32,
+    rowspan: u32,
+) -> Result<EditResult, EditError> {
+    let (si, bi) = doc
+        .find_block_location(table_id)
+        .ok_or(EditError::TableNotFound(table_id))?;
+
+    let block = doc.block_at_mut(si, bi).ok_or(EditError::TableNotFound(table_id))?;
+    let Some(table) = block.table_mut() else {
+        return Err(EditError::TableNotFound(table_id));
+    };
+
+    let ri = row as usize;
+    let ci = col as usize;
+    if let Some(cell) = table.rows.get_mut(ri).and_then(|r| r.cells.get_mut(ci)) {
+        let old_colspan = cell.format.colspan;
+        let old_rowspan = cell.format.rowspan;
+        cell.format.colspan = colspan.max(1);
+        cell.format.rowspan = rowspan.max(1);
+        return Ok(EditResult {
+            affected_nodes: vec![table_id],
+            old_cell_span: Some((old_colspan, old_rowspan)),
+            ..Default::default()
+        });
+    }
+
+    Err(EditError::TableNotFound(table_id))
 }
 
 pub fn resize_table_column(
@@ -123,8 +164,14 @@ pub fn resize_table_column(
 
     let col = column as usize;
     if col < table.format.column_widths.len() {
+        let old_width = table.format.column_widths[col];
         table.format.column_widths[col] = width;
         table.format.width = Some(table.format.column_widths.iter().sum());
+        return Ok(EditResult {
+            affected_nodes: vec![table_id],
+            old_column_width: Some(old_width),
+            ..Default::default()
+        });
     }
 
     Ok(EditResult {

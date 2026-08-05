@@ -27,7 +27,7 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "MPL-2.0"
-repository = "https://github.com/Hypersdk/tutuaword"
+repository = "https://github.com/amit-tutu22/tutuaword"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -46,3 +46,4 @@ chrono = { version = "0.4", features = ["serde"] }
 parking_lot = "0.12"
 quick-xml = { version = "0.37", features = ["serialize"] }
 pulldown-cmark = "0.12"
+criterion = "0.5"

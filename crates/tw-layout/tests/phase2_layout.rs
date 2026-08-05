@@ -26,7 +26,8 @@ fn heading1_style_changes_line_metrics() {
         })
         .expect("text line");
 
-    assert!(line.ascent >= 16.0);
+    // Real OS/2/hhea metrics: ascent is typically ~70–80% of em size, not 1:1.
+    assert!(line.ascent >= 10.0 && line.ascent <= 18.0, "ascent={}", line.ascent);
 }
 
 #[test]

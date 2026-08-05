@@ -31,48 +31,40 @@ impl Session {
         }
     }
 
-    pub fn apply(&self, command: Command) {
-        let _ = self
-            .worker
-            .cmd_tx
-            .send(BridgeCommand::ApplyEdit { command });
+    fn send_command(&self, command: BridgeCommand) -> bool {
+        self.worker.cmd_tx.try_send(command).is_ok()
     }
 
-    pub fn new_document(&self) {
-        let _ = self.worker.cmd_tx.send(BridgeCommand::NewDocument);
+    pub fn apply(&self, command: Command) -> bool {
+        self.send_command(BridgeCommand::ApplyEdit { command })
     }
 
-    pub fn open_bytes(&self, data: Vec<u8>) {
-        self.open_bytes_with_path(data, None);
+    pub fn new_document(&self) -> bool {
+        self.send_command(BridgeCommand::NewDocument)
     }
 
-    pub fn open_bytes_with_path(&self, data: Vec<u8>, path_hint: Option<String>) {
-        let _ = self.worker.cmd_tx.send(BridgeCommand::OpenDocument {
-            data,
-            path_hint,
-        });
+    pub fn open_bytes(&self, data: Vec<u8>) -> bool {
+        self.open_bytes_with_path(data, None)
     }
 
-    pub fn save(&self) {
-        let _ = self.worker.cmd_tx.send(BridgeCommand::SaveDocument);
+    pub fn open_bytes_with_path(&self, data: Vec<u8>, path_hint: Option<String>) -> bool {
+        self.send_command(BridgeCommand::OpenDocument { data, path_hint })
     }
 
-    pub fn save_as(&self, format: DetectedFormat) {
-        let _ = self
-            .worker
-            .cmd_tx
-            .send(BridgeCommand::SaveDocumentAs { format });
+    pub fn save(&self) -> bool {
+        self.send_command(BridgeCommand::SaveDocument)
     }
 
-    pub fn spell_check(&self) {
-        let _ = self.worker.cmd_tx.send(BridgeCommand::SpellCheckDocument);
+    pub fn save_as(&self, format: DetectedFormat) -> bool {
+        self.send_command(BridgeCommand::SaveDocumentAs { format })
     }
 
-    pub fn set_track_changes(&self, enabled: bool) {
-        let _ = self
-            .worker
-            .cmd_tx
-            .send(BridgeCommand::ToggleTrackChanges { enabled });
+    pub fn spell_check(&self) -> bool {
+        self.send_command(BridgeCommand::SpellCheckDocument)
+    }
+
+    pub fn set_track_changes(&self, enabled: bool) -> bool {
+        self.send_command(BridgeCommand::ToggleTrackChanges { enabled })
     }
 
     pub fn poll_event(&self) -> Option<BridgeEvent> {
@@ -91,45 +83,40 @@ impl Session {
         self.snapshot.read().pages.get(page as usize).cloned()
     }
 
-    pub fn set_current_page(&self, page: u32) {
-        let _ = self
-            .worker
-            .cmd_tx
-            .send(BridgeCommand::SetCurrentPage { page });
+    pub fn set_current_page(&self, page: u32) -> bool {
+        self.send_command(BridgeCommand::SetCurrentPage { page })
     }
 
-    pub fn undo(&self) {
-        let _ = self.worker.cmd_tx.send(BridgeCommand::Undo);
+    pub fn undo(&self) -> bool {
+        self.send_command(BridgeCommand::Undo)
     }
 
-    pub fn redo(&self) {
-        let _ = self.worker.cmd_tx.send(BridgeCommand::Redo);
+    pub fn redo(&self) -> bool {
+        self.send_command(BridgeCommand::Redo)
     }
 
-    pub fn apply_heading1(&self) {
-        let _ = self.worker.cmd_tx.send(BridgeCommand::ApplyHeading1);
+    pub fn apply_heading1(&self) -> bool {
+        self.send_command(BridgeCommand::ApplyHeading1)
     }
 
-    pub fn apply_bullet_list(&self) {
-        let _ = self.worker.cmd_tx.send(BridgeCommand::ApplyBulletList);
+    pub fn apply_bullet_list(&self) -> bool {
+        self.send_command(BridgeCommand::ApplyBulletList)
     }
 
-    pub fn insert_table(&self, rows: u32, cols: u32) {
-        let _ = self
-            .worker
-            .cmd_tx
-            .send(BridgeCommand::InsertTable { rows, cols });
+    pub fn apply_numbered_list(&self) -> bool {
+        self.send_command(BridgeCommand::ApplyNumberedList)
     }
 
-    pub fn insert_image(&self, width: f32, height: f32) {
-        let _ = self.worker.cmd_tx.send(BridgeCommand::InsertImage {
-            width,
-            height,
-        });
+    pub fn insert_table(&self, rows: u32, cols: u32) -> bool {
+        self.send_command(BridgeCommand::InsertTable { rows, cols })
     }
 
-    pub fn export_pdf(&self) {
-        let _ = self.worker.cmd_tx.send(BridgeCommand::ExportPdf);
+    pub fn insert_image(&self, width: f32, height: f32) -> bool {
+        self.send_command(BridgeCommand::InsertImage { width, height })
+    }
+
+    pub fn export_pdf(&self) -> bool {
+        self.send_command(BridgeCommand::ExportPdf)
     }
 
     pub fn page_count(&self) -> u32 {
@@ -142,6 +129,10 @@ impl Session {
 
     pub fn caret_geometry(&self, page: u32, x: f32, y: f32) -> Option<(f32, f32, f32)> {
         self.layout_cache.read().caret_geometry(page, x, y)
+    }
+
+    pub fn caret_at(&self, page: u32, run_id: tw_model::NodeId, char_offset: usize) -> Option<(f32, f32, f32)> {
+        self.layout_cache.read().caret_at(page, run_id, char_offset)
     }
 
     pub fn selection_rects(&self, page: u32, start_x: f32, start_y: f32, end_x: f32, end_y: f32) -> Vec<f32> {

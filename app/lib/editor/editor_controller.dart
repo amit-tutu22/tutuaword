@@ -17,6 +17,12 @@ class EditorController extends ChangeNotifier {
     _statusText = _engine == null
         ? 'Mock mode (build libtw_ffi to enable Rust engine)'
         : 'Rust engine connected';
+    // Glyph-first when the engine is present; TextField fallback otherwise.
+    _preferTextRendering = _engine == null;
+    if (_engine != null) {
+      _refreshFromEngine();
+      _ensureGlyphCaret();
+    }
     _recomputePageCount();
   }
 
@@ -38,7 +44,7 @@ class EditorController extends ChangeNotifier {
   int _pageCount = 1;
   int _currentPage = 0;
   bool _printPreview = false;
-  bool _preferTextRendering = true;
+  bool _preferTextRendering = false;
   bool _trackChanges = false;
   List<String> _spellMisspellings = const [];
   String _fontFamily = 'Calibri';
@@ -54,6 +60,16 @@ class EditorController extends ChangeNotifier {
   String? _caretRunId;
   int _caretOffset = 0;
   CaretGeometry? _caretGeometry;
+  String? _selAnchorRunId;
+  int _selAnchorOffset = 0;
+  double _selAnchorX = 0;
+  double _selAnchorY = 0;
+  String? _selFocusRunId;
+  int _selFocusOffset = 0;
+  double _selFocusX = 0;
+  double _selFocusY = 0;
+  int _selPage = 0;
+  List<GlyphSelectionRect> _selectionRects = const [];
   TextEditingController? _textController;
   FocusNode? _textFocusNode;
 
@@ -184,6 +200,11 @@ class EditorController extends ChangeNotifier {
   bool get showNavigationPane => _showNavigationPane;
   String? get infoMessage => _infoMessage;
   CaretGeometry? get caretGeometry => _caretGeometry;
+  List<GlyphSelectionRect> get selectionRects => _selectionRects;
+  bool get hasGlyphSelection {
+    if (_selAnchorRunId == null || _selFocusRunId == null) return false;
+    return _selAnchorRunId != _selFocusRunId || _selAnchorOffset != _selFocusOffset;
+  }
   String? get caretRunId => _caretRunId;
   int get caretOffset => _caretOffset;
 
@@ -326,63 +347,331 @@ class EditorController extends ChangeNotifier {
     _caretRunId = result.runId;
     _caretOffset = result.charOffset;
     _caretGeometry = _engine!.caretGeometryAt(pageIndex, x, y);
+    // Collapse selection to the caret.
+    _selPage = pageIndex;
+    _selAnchorRunId = result.runId;
+    _selAnchorOffset = result.charOffset;
+    _selAnchorX = x;
+    _selAnchorY = y;
+    _selFocusRunId = result.runId;
+    _selFocusOffset = result.charOffset;
+    _selFocusX = x;
+    _selFocusY = y;
+    _selectionRects = const [];
     notifyListeners();
+  }
+
+  void moveGlyphCaretByArrow(LogicalKeyboardKey key) {
+    if (_engine == null) return;
+    if (_preferTextRendering) return; // TextField fallback handles arrows.
+    if (_caretRunId == null) return;
+
+    switch (key) {
+      case LogicalKeyboardKey.arrowLeft:
+        _moveGlyphCaretOffset(-1);
+        return;
+      case LogicalKeyboardKey.arrowRight:
+        _moveGlyphCaretOffset(1);
+        return;
+      case LogicalKeyboardKey.arrowUp:
+        _moveGlyphCaretUpDown(-1);
+        return;
+      case LogicalKeyboardKey.arrowDown:
+        _moveGlyphCaretUpDown(1);
+        return;
+      default:
+        return;
+    }
+  }
+
+  void _moveGlyphCaretOffset(int delta) {
+    final runId = _caretRunId;
+    if (runId == null) return;
+
+    final before = _engine!.caretAtPosition(_currentPage, runId, _caretOffset);
+    final candidate = (_caretOffset + delta).clamp(0, 1 << 30);
+    if (candidate != _caretOffset) {
+      final after = _engine!.caretAtPosition(_currentPage, runId, candidate);
+      if (after != null && !_sameCaretGeometry(before, after)) {
+        _setGlyphCaret(runId, candidate, after);
+        return;
+      }
+    }
+
+    // At a run boundary — nudge horizontally and hit-test the adjacent position.
+    if (before == null) return;
+    final nudge = delta > 0 ? 2.0 : -2.0;
+    final probeX = (before.x + nudge).clamp(_pageMargin, _pageWidth - _pageMargin);
+    hitTestAt(_currentPage, probeX, before.y);
+  }
+
+  bool _sameCaretGeometry(CaretGeometry? a, CaretGeometry b) {
+    if (a == null) return false;
+    const eps = 0.01;
+    return (b.x - a.x).abs() < eps && (b.y - a.y).abs() < eps;
+  }
+
+  void _setGlyphCaret(String runId, int offset, CaretGeometry geometry) {
+    _caretRunId = runId;
+    _caretOffset = offset;
+    _caretGeometry = geometry;
+    _selAnchorRunId = runId;
+    _selAnchorOffset = offset;
+    _selFocusRunId = runId;
+    _selFocusOffset = offset;
+    _selectionRects = const [];
+    notifyListeners();
+  }
+
+  void _moveGlyphCaretUpDown(int direction) {
+    if (_caretGeometry == null) return;
+    final stepY = _fontSize * _lineHeightFactor;
+    final newY = _caretGeometry!.y + stepY * direction;
+    // Keep X stable so we land on the nearest glyph segment for that line.
+    hitTestAt(_currentPage, _caretGeometry!.x, newY);
+  }
+
+  void beginGlyphSelection(int pageIndex, double x, double y) {
+    hitTestAt(pageIndex, x, y);
+  }
+
+  void updateGlyphSelection(int pageIndex, double x, double y) {
+    if (_engine == null || _selAnchorRunId == null) return;
+    final result = _engine!.hitTestPage(pageIndex, x, y);
+    if (result == null) return;
+    _selPage = pageIndex;
+    _selFocusRunId = result.runId;
+    _selFocusOffset = result.charOffset;
+    _selFocusX = x;
+    _selFocusY = y;
+    _caretRunId = result.runId;
+    _caretOffset = result.charOffset;
+    _caretGeometry = _engine!.caretGeometryAt(pageIndex, x, y);
+    _selectionRects = _engine!.selectionRectsOnPage(
+      pageIndex,
+      _selAnchorX,
+      _selAnchorY,
+      _selFocusX,
+      _selFocusY,
+    );
+    notifyListeners();
+  }
+
+  void endGlyphSelection(int pageIndex, double x, double y) {
+    updateGlyphSelection(pageIndex, x, y);
   }
 
   void insertGlyphCharacter(String char) {
     if (_engine == null) return;
+    // Never insert control characters as glyphs (Enter used to produce tofu □).
+    if (char == '\n' || char == '\r' || char.codeUnitAt(0) < 0x20) {
+      return;
+    }
     final runId = _caretRunId ?? _defaultRunId();
     if (runId == null) return;
+    final oldCaretX = _caretGeometry?.x;
+    final oldCaretOffset = _caretOffset;
     _engine!.insertText(runId, _caretOffset, char);
     _caretOffset += char.length;
+    _selAnchorRunId = runId;
+    _selAnchorOffset = _caretOffset;
+    _selFocusRunId = runId;
+    _selFocusOffset = _caretOffset;
+    _selectionRects = const [];
     _refreshFromEngine();
-    _updateRenderModeAfterEngineOpen();
+    // Whitespace can advance layout without producing a visible glyph, which
+    // can leave caret-x effectively unchanged. Ensure the caret visibly
+    // advances immediately after inserting a space.
+    if (usesGlyphRendering &&
+        oldCaretX != null &&
+        oldCaretOffset != _caretOffset &&
+        char.trim().isEmpty &&
+        _caretGeometry != null &&
+        (_caretGeometry!.x - oldCaretX).abs() < 0.5) {
+      final approxSpace = _fontSize * _avgCharWidthFactor;
+      _caretGeometry = CaretGeometry(
+        x: (oldCaretX + approxSpace).clamp(0.0, _pageWidth),
+        y: _caretGeometry!.y,
+        height: _caretGeometry!.height,
+      );
+    }
+    notifyListeners();
+  }
+
+  /// Word Enter: split the current paragraph at the caret.
+  void insertGlyphParagraphBreak() {
+    if (_engine == null) return;
+    final runId = _caretRunId ?? _defaultRunId();
+    if (runId == null) return;
+    final prevY = _caretGeometry?.y ?? (_pageMargin + _fontSize);
+    final prevX = _caretGeometry?.x ?? _pageMargin;
+    _engine!.splitParagraphAt(runId, _caretOffset);
+    _selectionRects = const [];
+    _refreshFromEngine();
+    // Place caret on the new paragraph (line below the previous caret).
+    final nextY = prevY + _fontSize * _lineHeightFactor;
+    hitTestAt(_currentPage, prevX.clamp(_pageMargin, _pageWidth - _pageMargin), nextY);
     notifyListeners();
   }
 
   void deleteGlyphBackward() {
-    if (_engine == null || _caretOffset <= 0) return;
+    if (_engine == null) return;
+    if (hasGlyphSelection) {
+      _deleteGlyphSelection();
+      return;
+    }
+    if (_caretOffset <= 0) return;
     final runId = _caretRunId ?? _defaultRunId();
     if (runId == null) return;
-    // Delete one code unit before caret via empty replacement at offset-1
-    _engine!.insertText(runId, _caretOffset - 1, '');
+    _engine!.deleteRange(runId, _caretOffset - 1, _caretOffset);
     _caretOffset = (_caretOffset - 1).clamp(0, 1 << 30);
+    _selAnchorRunId = runId;
+    _selAnchorOffset = _caretOffset;
+    _selFocusRunId = runId;
+    _selFocusOffset = _caretOffset;
+    _selectionRects = const [];
+    _refreshFromEngine();
+    notifyListeners();
+  }
+
+  void _deleteGlyphSelection() {
+    // Single-run selection delete; multi-run delete is deferred.
+    if (_engine == null || _selAnchorRunId == null || _selFocusRunId == null) return;
+    if (_selAnchorRunId != _selFocusRunId) {
+      // Collapse and delete one char at focus for now.
+      final runId = _selFocusRunId!;
+      final offset = _selFocusOffset;
+      if (offset > 0) {
+        _engine!.deleteRange(runId, offset - 1, offset);
+        _caretOffset = offset - 1;
+      }
+    } else {
+      final start = _selAnchorOffset < _selFocusOffset ? _selAnchorOffset : _selFocusOffset;
+      final end = _selAnchorOffset < _selFocusOffset ? _selFocusOffset : _selAnchorOffset;
+      if (start < end) {
+        _engine!.deleteRange(_selAnchorRunId!, start, end);
+        _caretOffset = start;
+      }
+    }
+    _selAnchorOffset = _caretOffset;
+    _selFocusOffset = _caretOffset;
+    _selAnchorRunId = _caretRunId;
+    _selFocusRunId = _caretRunId;
+    _selectionRects = const [];
     _refreshFromEngine();
     notifyListeners();
   }
 
   String? _defaultRunId() {
-    if (_documentText.isEmpty) return null;
-    return '00000000-0000-0000-0000-000000000004';
+    if (_caretRunId != null) return _caretRunId;
+    _ensureGlyphCaret();
+    return _caretRunId;
+  }
+
+  /// Place the caret on the first editable run if none is set yet.
+  void ensureGlyphCaret() {
+    if (_caretRunId != null) return;
+    _ensureGlyphCaret();
+    if (_caretRunId != null) notifyListeners();
+  }
+
+  void _ensureGlyphCaret() {
+    if (_engine == null || _caretRunId != null) return;
+    final result = _engine!.hitTestPage(_currentPage, _pageMargin, _pageMargin + _fontSize);
+    if (result == null) return;
+    _caretRunId = result.runId;
+    _caretOffset = result.charOffset;
+    _selAnchorRunId = result.runId;
+    _selAnchorOffset = result.charOffset;
+    _selFocusRunId = result.runId;
+    _selFocusOffset = result.charOffset;
+    _caretGeometry = _engine!.caretGeometryAt(
+      _currentPage,
+      _pageMargin,
+      _pageMargin + _fontSize,
+    );
+  }
+
+  (String, int, String, int)? _formatRange() {
+    final runId = _caretRunId ?? _defaultRunId();
+    if (runId == null) return null;
+    if (hasGlyphSelection && _selAnchorRunId != null && _selFocusRunId != null) {
+      return (
+        _selAnchorRunId!,
+        _selAnchorOffset,
+        _selFocusRunId!,
+        _selFocusOffset,
+      );
+    }
+    return (runId, _caretOffset, runId, _caretOffset);
+  }
+
+  void _applyCharFormatJson(String json) {
+    final range = _formatRange();
+    if (range == null || _engine == null || !usesGlyphRendering) return;
+    final (startRun, startOff, endRun, endOff) = range;
+    _engine!.applyCharFormatJson(
+      startRunId: startRun,
+      startOffset: startOff,
+      endRunId: endRun,
+      endOffset: endOff,
+      formatJson: json,
+    );
+    _refreshFromEngine();
+  }
+
+  void _applyParaFormatJson(String json) {
+    final range = _formatRange();
+    if (range == null || _engine == null || !usesGlyphRendering) return;
+    final (startRun, startOff, endRun, endOff) = range;
+    _engine!.applyParaFormatJson(
+      startRunId: startRun,
+      startOffset: startOff,
+      endRunId: endRun,
+      endOffset: endOff,
+      formatJson: json,
+    );
+    _refreshFromEngine();
   }
 
   void toggleBold() {
-    if (usesGlyphRendering && _engine != null) {
-      // Format commands route through engine when dedicated FFI lands; refresh layout.
-      _refreshFromEngine();
-    }
     _bold = !_bold;
+    if (usesGlyphRendering && _engine != null) {
+      _applyCharFormatJson('{"bold":$_bold}');
+    }
     notifyListeners();
   }
 
   void toggleItalic() {
     _italic = !_italic;
+    if (usesGlyphRendering && _engine != null) {
+      _applyCharFormatJson('{"italic":$_italic}');
+    }
     notifyListeners();
   }
 
   void toggleUnderline() {
     _underline = !_underline;
+    if (usesGlyphRendering && _engine != null) {
+      _applyCharFormatJson(_underline ? '{"underline":"Single"}' : '{"underline":"None"}');
+    }
     notifyListeners();
   }
 
   void setFontFamily(String family) {
     _fontFamily = family;
+    if (usesGlyphRendering && _engine != null) {
+      final escaped = family.replaceAll(r'\', r'\\').replaceAll('"', r'\"');
+      _applyCharFormatJson('{"font_family":"$escaped"}');
+    }
     notifyListeners();
   }
 
   void setFontSize(double size) {
     _fontSize = size.clamp(6, 96);
-    if (_preferTextRendering) {
+    if (usesGlyphRendering && _engine != null) {
+      _applyCharFormatJson('{"font_size":$_fontSize}');
+    } else if (_preferTextRendering) {
       _recomputePageCount();
     }
     notifyListeners();
@@ -398,23 +687,45 @@ class EditorController extends ChangeNotifier {
 
   void setAlignment(TextAlign align) {
     _alignment = align;
+    if (usesGlyphRendering && _engine != null) {
+      final name = switch (align) {
+        TextAlign.left || TextAlign.start => 'Left',
+        TextAlign.center => 'Center',
+        TextAlign.right || TextAlign.end => 'Right',
+        TextAlign.justify => 'Justify',
+      };
+      _applyParaFormatJson('{"alignment":"$name"}');
+    }
     notifyListeners();
   }
 
   void toggleStrikethrough() {
     _strikethrough = !_strikethrough;
+    if (usesGlyphRendering && _engine != null) {
+      _applyCharFormatJson('{"strikethrough":$_strikethrough}');
+    }
     notifyListeners();
   }
 
   void toggleSubscript() {
     _subscript = !_subscript;
     if (_subscript) _superscript = false;
+    if (usesGlyphRendering && _engine != null) {
+      _applyCharFormatJson(
+        '{"subscript":$_subscript,"superscript":false}',
+      );
+    }
     notifyListeners();
   }
 
   void toggleSuperscript() {
     _superscript = !_superscript;
     if (_superscript) _subscript = false;
+    if (usesGlyphRendering && _engine != null) {
+      _applyCharFormatJson(
+        '{"superscript":$_superscript,"subscript":false}',
+      );
+    }
     notifyListeners();
   }
 
@@ -470,6 +781,17 @@ class EditorController extends ChangeNotifier {
       _statusText = 'Heading 1 applied';
     } else {
       _statusText = 'Heading 1 applied (mock)';
+    }
+    notifyListeners();
+  }
+
+  void applyNumberedList() {
+    if (_engine != null && _engine!.applyNumberedListStyle()) {
+      _refreshFromEngine();
+      _updateRenderModeAfterEngineOpen();
+      _statusText = 'Numbered list applied';
+    } else {
+      _statusText = 'Numbered list applied (mock)';
     }
     notifyListeners();
   }
@@ -706,6 +1028,16 @@ class EditorController extends ChangeNotifier {
     if (_currentPage >= _pageCount) {
       _currentPage = _pageCount - 1;
     }
+    _syncCaretGeometry();
+  }
+
+  void _syncCaretGeometry() {
+    if (_engine == null || _caretRunId == null || _preferTextRendering) return;
+    _caretGeometry = _engine!.caretAtPosition(
+      _currentPage,
+      _caretRunId!,
+      _caretOffset,
+    );
   }
 
   void _recomputePageCount() {
@@ -725,12 +1057,13 @@ class EditorController extends ChangeNotifier {
   }
 
   void _updateRenderModeAfterEngineOpen() {
-    if (_engineHasPaintableDisplayList()) {
-      _preferTextRendering = false;
-    } else {
+    if (_engine == null) {
       _preferTextRendering = true;
       _recomputePageCount();
+      return;
     }
+    // Keep the engine as the editing path even for empty documents.
+    _preferTextRendering = false;
   }
 
   bool _engineHasPaintableDisplayList() {
@@ -739,8 +1072,8 @@ class EditorController extends ChangeNotifier {
     return snapshot.hasPaintableGlyphs || snapshot.hasPaintableContent;
   }
 
-  /// Whether the active page should paint via Rust display list glyphs.
-  bool get usesGlyphRendering => !_preferTextRendering && _engineHasPaintableDisplayList();
+  /// Whether the UI is in glyph/engine editing mode (vs TextField fallback).
+  bool get usesGlyphRendering => !_preferTextRendering;
 
   /// Test hook: inject display list bytes and switch to glyph rendering mode.
   @visibleForTesting
