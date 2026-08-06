@@ -96,15 +96,35 @@ impl Session {
     }
 
     pub fn apply_heading1(&self) -> bool {
-        self.send_command(BridgeCommand::ApplyHeading1)
+        self.apply_heading1_at(None)
+    }
+
+    pub fn apply_heading1_at(&self, caret_run_id: Option<tw_model::NodeId>) -> bool {
+        self.send_command(BridgeCommand::ApplyHeading1 { caret_run_id })
+    }
+
+    pub fn apply_normal_style(&self) -> bool {
+        self.apply_normal_style_at(None)
+    }
+
+    pub fn apply_normal_style_at(&self, caret_run_id: Option<tw_model::NodeId>) -> bool {
+        self.send_command(BridgeCommand::ApplyNormalStyle { caret_run_id })
     }
 
     pub fn apply_bullet_list(&self) -> bool {
-        self.send_command(BridgeCommand::ApplyBulletList)
+        self.apply_bullet_list_at(None)
+    }
+
+    pub fn apply_bullet_list_at(&self, caret_run_id: Option<tw_model::NodeId>) -> bool {
+        self.send_command(BridgeCommand::ApplyBulletList { caret_run_id })
     }
 
     pub fn apply_numbered_list(&self) -> bool {
-        self.send_command(BridgeCommand::ApplyNumberedList)
+        self.apply_numbered_list_at(None)
+    }
+
+    pub fn apply_numbered_list_at(&self, caret_run_id: Option<tw_model::NodeId>) -> bool {
+        self.send_command(BridgeCommand::ApplyNumberedList { caret_run_id })
     }
 
     pub fn insert_table(&self, rows: u32, cols: u32) -> bool {
@@ -113,6 +133,14 @@ impl Session {
 
     pub fn insert_image(&self, width: f32, height: f32) -> bool {
         self.send_command(BridgeCommand::InsertImage { width, height })
+    }
+
+    pub fn insert_page_break(&self) -> bool {
+        self.insert_page_break_at(None)
+    }
+
+    pub fn insert_page_break_at(&self, caret_run_id: Option<tw_model::NodeId>) -> bool {
+        self.send_command(BridgeCommand::InsertPageBreak { caret_run_id })
     }
 
     pub fn export_pdf(&self) -> bool {
@@ -137,6 +165,35 @@ impl Session {
 
     pub fn selection_rects(&self, page: u32, start_x: f32, start_y: f32, end_x: f32, end_y: f32) -> Vec<f32> {
         self.layout_cache.read().selection_rects(page, start_x, start_y, end_x, end_y)
+    }
+
+    pub fn text_in_range(
+        &self,
+        start_run: tw_model::NodeId,
+        start_offset: usize,
+        end_run: tw_model::NodeId,
+        end_offset: usize,
+    ) -> Option<String> {
+        self.layout_cache
+            .read()
+            .text_in_range(start_run, start_offset, end_run, end_offset)
+    }
+
+    pub fn caret_format_json(&self, run_id: tw_model::NodeId) -> Option<String> {
+        let (char_format, para_format, style_name) =
+            self.layout_cache.read().format_at(run_id)?;
+        #[derive(serde::Serialize)]
+        struct CaretFormatResponse {
+            char_format: tw_model::CharFormat,
+            para_format: tw_model::ParaFormat,
+            style_name: Option<String>,
+        }
+        serde_json::to_string(&CaretFormatResponse {
+            char_format,
+            para_format,
+            style_name,
+        })
+        .ok()
     }
 
     pub fn layout_page_count(&self) -> u32 {

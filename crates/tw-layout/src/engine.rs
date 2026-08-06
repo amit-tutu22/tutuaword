@@ -9,6 +9,26 @@ use tw_model::{
 };
 use tw_shape::{GlyphAtlas, TextShaper};
 
+/// Shift remaining paragraph lines (and their glyphs/decorations) to a new page origin.
+fn rebase_lines_from(lines: &mut [TextLine], start: usize, new_origin_y: f32) {
+    if start >= lines.len() {
+        return;
+    }
+    let dy = new_origin_y - lines[start].y;
+    if dy.abs() < 0.01 {
+        return;
+    }
+    for line in &mut lines[start..] {
+        line.y += dy;
+        for glyph in &mut line.glyphs {
+            glyph.y += dy;
+        }
+        for decoration in &mut line.decorations {
+            decoration.y += dy;
+        }
+    }
+}
+
 pub struct LayoutEngine {
     shaper: TextShaper,
     atlas: GlyphAtlas,
@@ -44,6 +64,10 @@ impl LayoutEngine {
     }
 
     pub fn layout_document(&mut self, doc: &Document) -> DocumentLayout {
+        self.shaper.configure_from_theme(
+            &doc.settings.theme.minor_font,
+            &doc.settings.theme.major_font,
+        );
         let tab_interval = doc.settings.default_tab_stop.max(1.0);
         let mut format = doc
             .sections
@@ -69,6 +93,7 @@ impl LayoutEngine {
                         page_index,
                         &format,
                         tab_interval,
+                        doc,
                         &mut self.shaper,
                         &mut self.atlas,
                     );
@@ -81,7 +106,7 @@ impl LayoutEngine {
             let content_width = format.page_width - format.margin_left - format.margin_right;
             let content_bottom = format.page_height - format.margin_bottom;
 
-            for block in &section.blocks {
+            for (block_idx, block) in section.blocks.iter().enumerate() {
                 match block {
                     Block::Paragraph(para) => {
                         for segment in split_paragraph_at_page_breaks(para) {
@@ -93,6 +118,7 @@ impl LayoutEngine {
                                     page_index,
                                     &format,
                                     tab_interval,
+                                    doc,
                                     &mut self.shaper,
                                     &mut self.atlas,
                                 );
@@ -105,6 +131,7 @@ impl LayoutEngine {
                                 .styles
                                 .resolve_para_format(para.style_id, &para.format);
                             let mut effective_para = para.clone();
+                            effective_para.format = resolved_para.clone();
                             if effective_para.runs.is_empty() {
                                 effective_para.runs.push(Run::new_text(""));
                             }
@@ -116,9 +143,18 @@ impl LayoutEngine {
                                     .resolve_char_format(para.style_id, &run.format);
                             }
 
+                            let level = para.format.numbering.and_then(|nr| {
+                                doc.settings.numbering.get(nr.numbering_id).and_then(|d| {
+                                    d.levels.iter().find(|l| l.level == nr.level)
+                                })
+                            });
+
                             let list_marker = para.format.numbering.map(|nr| {
                                 let key = (nr.numbering_id, nr.level);
-                                let counter = list_counters.entry(key).or_insert(0);
+                                let start_at = level
+                                    .map(|l| l.start.saturating_sub(1))
+                                    .unwrap_or(0);
+                                let counter = list_counters.entry(key).or_insert(start_at);
                                 let marker = doc
                                     .settings
                                     .numbering
@@ -127,12 +163,6 @@ impl LayoutEngine {
                                     .unwrap_or_else(|| "•".into());
                                 *counter += 1;
                                 marker
-                            });
-
-                            let level = para.format.numbering.and_then(|nr| {
-                                doc.settings.numbering.get(nr.numbering_id).and_then(|d| {
-                                    d.levels.iter().find(|l| l.level == nr.level)
-                                })
                             });
 
                             // Indents override rather than accumulate. Direct
@@ -157,6 +187,28 @@ impl LayoutEngine {
 
                             y += resolved_para.space_before.unwrap_or(0.0);
 
+                            if resolved_para.keep_with_next == Some(true) {
+                                let next_min = next_paragraph_min_height(doc, &section.blocks, block_idx);
+                                let rough_para = lines_estimated_min_height(&resolved_para);
+                                if y + rough_para + next_min > content_bottom
+                                    && !current_boxes.is_empty()
+                                {
+                                    flush_page(
+                                        &mut pages,
+                                        &mut current_boxes,
+                                        &mut current_lines,
+                                        page_index,
+                                        &format,
+                                        tab_interval,
+                                        doc,
+                                        &mut self.shaper,
+                                        &mut self.atlas,
+                                    );
+                                    page_index += 1;
+                                    y = format.margin_top;
+                                }
+                            }
+
                             let (mut lines, _) = layout_paragraph(
                                 &mut self.shaper,
                                 &mut self.atlas,
@@ -167,11 +219,18 @@ impl LayoutEngine {
                                     y,
                                     content_width,
                                 )
-                                .with_tab_interval(tab_interval),
+                                .with_tab_interval(tab_interval)
+                                .with_tab_stops(resolved_para.tab_stops.clone()),
                                 tw_model::Color::BLACK.to_argb(),
                             );
 
                             if let Some(ref marker) = list_marker {
+                                let mut marker_format = level
+                                    .map(|l| l.char_format.clone())
+                                    .unwrap_or_default();
+                                marker_format = doc
+                                    .styles
+                                    .resolve_char_format(para.style_id, &marker_format);
                                 apply_list_markers(
                                     &mut self.shaper,
                                     &mut self.atlas,
@@ -179,9 +238,33 @@ impl LayoutEngine {
                                     marker,
                                     format.margin_left + indent - hanging,
                                     tw_model::Color::BLACK.to_argb(),
+                                    &marker_format,
                                 );
                                 for line in &mut lines {
                                     line.list_marker = Some(marker.clone());
+                                }
+                            }
+
+                            let keep_together = resolved_para.keep_together == Some(true);
+                            let widow_control = resolved_para.widow_orphan_control != Some(false);
+
+                            if keep_together && !lines.is_empty() {
+                                let total: f32 = lines.iter().map(|l| l.line_height).sum();
+                                if y + total > content_bottom && !current_boxes.is_empty() {
+                                    flush_page(
+                                        &mut pages,
+                                        &mut current_boxes,
+                                        &mut current_lines,
+                                        page_index,
+                                        &format,
+                                        tab_interval,
+                                        doc,
+                                        &mut self.shaper,
+                                        &mut self.atlas,
+                                    );
+                                    page_index += 1;
+                                    y = format.margin_top;
+                                    rebase_lines_from(&mut lines, 0, y);
                                 }
                             }
 
@@ -207,11 +290,13 @@ impl LayoutEngine {
                                             page_index,
                                             &format,
                                             tab_interval,
+                                            doc,
                                             &mut self.shaper,
                                             &mut self.atlas,
                                         );
                                         page_index += 1;
                                         y = format.margin_top;
+                                        rebase_lines_from(&mut lines, line_idx, y);
                                         continue 'lines;
                                     }
                                     batch_height += lh;
@@ -221,6 +306,62 @@ impl LayoutEngine {
                                 if count == 0 {
                                     count = 1;
                                     batch_height = lines[line_idx].line_height;
+                                }
+
+                                if widow_control && lines.len() > 1 {
+                                    let remaining_after = lines.len() - line_idx - count;
+                                    if count == 1
+                                        && remaining_after >= 1
+                                        && !current_boxes.is_empty()
+                                    {
+                                        flush_page(
+                                            &mut pages,
+                                            &mut current_boxes,
+                                            &mut current_lines,
+                                            page_index,
+                                            &format,
+                                            tab_interval,
+                                            doc,
+                                            &mut self.shaper,
+                                            &mut self.atlas,
+                                        );
+                                        page_index += 1;
+                                        y = format.margin_top;
+                                        rebase_lines_from(&mut lines, line_idx, y);
+                                        continue 'lines;
+                                    }
+                                    if remaining_after == 1 && count > 1 {
+                                        count -= 1;
+                                        batch_height = lines[line_idx..line_idx + count]
+                                            .iter()
+                                            .map(|l| l.line_height)
+                                            .sum();
+                                    }
+                                }
+
+                                if keep_together && count < lines.len() - line_idx {
+                                    if !current_boxes.is_empty() {
+                                        flush_page(
+                                            &mut pages,
+                                            &mut current_boxes,
+                                            &mut current_lines,
+                                            page_index,
+                                            &format,
+                                            tab_interval,
+                                            doc,
+                                            &mut self.shaper,
+                                            &mut self.atlas,
+                                        );
+                                        page_index += 1;
+                                        y = format.margin_top;
+                                        rebase_lines_from(&mut lines, line_idx, y);
+                                        continue 'lines;
+                                    }
+                                    count = lines.len() - line_idx;
+                                    batch_height = lines[line_idx..]
+                                        .iter()
+                                        .map(|l| l.line_height)
+                                        .sum();
                                 }
 
                                 for line in lines[line_idx..line_idx + count].iter().cloned() {
@@ -238,11 +379,13 @@ impl LayoutEngine {
                                         page_index,
                                         &format,
                                         tab_interval,
+                                        doc,
                                         &mut self.shaper,
                                         &mut self.atlas,
                                     );
                                     page_index += 1;
                                     y = format.margin_top;
+                                    rebase_lines_from(&mut lines, line_idx, y);
                                 }
                             }
                             y += resolved_para.space_after.unwrap_or(0.0);
@@ -254,6 +397,28 @@ impl LayoutEngine {
                         // spilling past the bottom margin.
                         let mut start_row = 0usize;
                         while start_row < table.rows.len() {
+                            let available = content_bottom - y;
+
+                            // Not enough vertical room for a row — start a fresh page.
+                            if available < crate::tables::MIN_ROW_HEIGHT
+                                && y > format.margin_top + 0.01
+                            {
+                                flush_page(
+                                    &mut pages,
+                                    &mut current_boxes,
+                                    &mut current_lines,
+                                    page_index,
+                                    &format,
+                                    tab_interval,
+                                    doc,
+                                    &mut self.shaper,
+                                    &mut self.atlas,
+                                );
+                                page_index += 1;
+                                y = format.margin_top;
+                                continue;
+                            }
+
                             let slice = layout_table_slice(
                                 &mut self.shaper,
                                 &mut self.atlas,
@@ -262,10 +427,14 @@ impl LayoutEngine {
                                 format.margin_left,
                                 y,
                                 content_width,
-                                content_bottom - y,
+                                available,
                                 tw_model::Color::BLACK.to_argb(),
                                 tab_interval,
                             );
+
+                            if slice.rows_placed == 0 {
+                                break;
+                            }
 
                             let overflows = y + slice.layout.height > content_bottom;
                             if overflows && !current_boxes.is_empty() {
@@ -276,6 +445,7 @@ impl LayoutEngine {
                                     page_index,
                                     &format,
                                     tab_interval,
+                                    doc,
                                     &mut self.shaper,
                                     &mut self.atlas,
                                 );
@@ -290,7 +460,7 @@ impl LayoutEngine {
                                 }
                             }
                             y += slice.layout.height + 8.0;
-                            start_row += slice.rows_placed.max(1);
+                            start_row += slice.rows_placed;
                             current_boxes.push(LayoutBox::Table(slice.layout));
 
                             if start_row < table.rows.len() {
@@ -301,6 +471,7 @@ impl LayoutEngine {
                                     page_index,
                                     &format,
                                     tab_interval,
+                                    doc,
                                     &mut self.shaper,
                                     &mut self.atlas,
                                 );
@@ -338,6 +509,7 @@ impl LayoutEngine {
                                 page_index,
                                 &format,
                                 tab_interval,
+                                doc,
                                 &mut self.shaper,
                                 &mut self.atlas,
                             );
@@ -368,8 +540,9 @@ impl LayoutEngine {
                 &mut current_lines,
                 page_index,
                 &format,
-                tab_interval,
-                &mut self.shaper,
+    tab_interval,
+    doc,
+    &mut self.shaper,
                 &mut self.atlas,
             );
         }
@@ -435,13 +608,36 @@ fn flush_page(
     page_index: PageIndex,
     format: &SectionFormat,
     tab_interval: f32,
+    doc: &Document,
     shaper: &mut TextShaper,
     atlas: &mut GlyphAtlas,
 ) {
     let content_width = format.page_width - format.margin_left - format.margin_right;
     let mut page_boxes = std::mem::take(boxes);
+    let margin_color = tw_model::Color {
+        r: 128,
+        g: 128,
+        b: 128,
+        a: 255,
+    }
+    .to_argb();
 
-    if let Some(ref header) = format.header_text {
+    if !format.header_blocks.is_empty() {
+        let header_boxes = layout_margin_blocks(
+            doc,
+            &format.header_blocks,
+            shaper,
+            atlas,
+            format.margin_left,
+            format.margin_top * 0.25,
+            content_width,
+            tab_interval,
+            margin_color,
+        );
+        for item in header_boxes.into_iter().rev() {
+            page_boxes.insert(0, item);
+        }
+    } else if let Some(ref header) = format.header_text {
         let header_para = tw_model::Paragraph::with_text(header.clone());
         let (header_lines, _) = layout_paragraph(
             shaper,
@@ -453,20 +649,27 @@ fn flush_page(
                 content_width,
             )
             .with_tab_interval(tab_interval),
-            tw_model::Color {
-                r: 128,
-                g: 128,
-                b: 128,
-                a: 255,
-            }
-            .to_argb(),
+            margin_color,
         );
         for line in header_lines {
             page_boxes.insert(0, LayoutBox::TextLine(line));
         }
     }
 
-    if let Some(ref footer) = format.footer_text {
+    if !format.footer_blocks.is_empty() {
+        let footer_y = format.page_height - format.margin_bottom * 0.75;
+        page_boxes.extend(layout_margin_blocks(
+            doc,
+            &format.footer_blocks,
+            shaper,
+            atlas,
+            format.margin_left,
+            footer_y,
+            content_width,
+            tab_interval,
+            margin_color,
+        ));
+    } else if let Some(ref footer) = format.footer_text {
         let footer_para = tw_model::Paragraph::with_text(footer.clone());
         let footer_y = format.page_height - format.margin_bottom * 0.75;
         let (footer_lines, _) = layout_paragraph(
@@ -475,13 +678,7 @@ fn flush_page(
             &footer_para,
             ParagraphFrame::new(format.margin_left, footer_y, content_width)
                 .with_tab_interval(tab_interval),
-            tw_model::Color {
-                r: 128,
-                g: 128,
-                b: 128,
-                a: 255,
-            }
-            .to_argb(),
+            margin_color,
         );
         for line in footer_lines {
             page_boxes.push(LayoutBox::TextLine(line));
@@ -501,9 +698,90 @@ fn flush_page(
     lines.clear();
 }
 
+fn layout_margin_blocks(
+    doc: &Document,
+    blocks: &[Block],
+    shaper: &mut TextShaper,
+    atlas: &mut GlyphAtlas,
+    x: f32,
+    mut y: f32,
+    content_width: f32,
+    tab_interval: f32,
+    color: u32,
+) -> Vec<LayoutBox> {
+    let mut out = Vec::new();
+    for block in blocks {
+        match block {
+            Block::Paragraph(para) => {
+                let resolved_para = doc
+                    .styles
+                    .resolve_para_format(para.style_id, &para.format);
+                let mut effective = para.clone();
+                effective.format = resolved_para.clone();
+                if effective.runs.is_empty() {
+                    effective.runs.push(Run::new_text(""));
+                }
+                for run in &mut effective.runs {
+                    run.format = doc
+                        .styles
+                        .resolve_char_format(para.style_id, &run.format);
+                }
+                let (lines, height) = layout_paragraph(
+                    shaper,
+                    atlas,
+                    &effective,
+                    ParagraphFrame::new(x, y, content_width)
+                        .with_tab_interval(tab_interval)
+                        .with_tab_stops(resolved_para.tab_stops.clone()),
+                    color,
+                );
+                for line in lines {
+                    out.push(LayoutBox::TextLine(line));
+                }
+                y += height;
+            }
+            Block::ImageBlock(image) => {
+                let encoded = std::sync::Arc::new(image.data.bytes.clone());
+                out.push(LayoutBox::Image(ImageLayout {
+                    x,
+                    y,
+                    width: image.display_width,
+                    height: image.display_height,
+                    image_id: image.id,
+                    asset_id: image.data.asset_id.clone(),
+                    encoded,
+                }));
+                y += image.display_height;
+            }
+            Block::Table(_) => {}
+        }
+    }
+    out
+}
+
 struct ParagraphSegment {
     paragraph: Paragraph,
     page_break_before: bool,
+}
+
+/// Minimum vertical space the next paragraph likely needs (keep-with-next).
+fn next_paragraph_min_height(doc: &Document, blocks: &[Block], idx: usize) -> f32 {
+    blocks
+        .get(idx + 1)
+        .and_then(|block| {
+            if let Block::Paragraph(para) = block {
+                let resolved = doc.styles.resolve_para_format(para.style_id, &para.format);
+                Some(resolved.space_before.unwrap_or(0.0) + 14.0)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0.0)
+}
+
+/// Rough single-line height before layout (keep-with-next pre-check).
+fn lines_estimated_min_height(para: &tw_model::ParaFormat) -> f32 {
+    para.space_before.unwrap_or(0.0) + 14.0
 }
 
 /// Resolves an anchor offset against the box it is measured from.

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
+import 'package:tutuaword/ui/ribbon_widgets.dart';
 import 'package:tutuaword/ui/word_theme.dart';
 
 class WordTitleBar extends StatelessWidget {
@@ -17,8 +18,8 @@ class WordTitleBar extends StatelessWidget {
           const SizedBox(width: WordTheme.trafficLightInset),
           _QuickAccessIcon(
             icon: Icons.home_outlined,
-            tooltip: 'Home',
-            onPressed: () {},
+            tooltip: kComingSoonTooltip,
+            onPressed: null,
           ),
           _QuickAccessIcon(
             icon: Icons.save_outlined,

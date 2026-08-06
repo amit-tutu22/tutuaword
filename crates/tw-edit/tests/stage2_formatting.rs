@@ -458,3 +458,101 @@ fn split_paragraph_mid_text_moves_suffix() {
     assert_eq!(session.document.paragraph_at(0, 0).unwrap().full_text(), "Hello");
     assert_eq!(session.document.paragraph_at(0, 1).unwrap().full_text(), "World");
 }
+
+#[test]
+fn undo_split_paragraph_restores_full_text() {
+    let mut session = EditSession::new();
+    let run_id = first_run(&session);
+    session
+        .apply(Command::InsertText {
+            run_id,
+            offset: 0,
+            text: "HelloWorld".into(),
+        })
+        .unwrap();
+
+    session
+        .apply(Command::SplitParagraphAt {
+            run_id,
+            offset: 5,
+        })
+        .unwrap();
+
+    session.undo().unwrap();
+
+    assert_eq!(
+        session.document.paragraph_at(0, 0).unwrap().full_text(),
+        "HelloWorld"
+    );
+    assert!(session.document.paragraph_at(0, 1).is_none());
+}
+
+#[test]
+fn font_size_at_collapsed_run_end_formats_visible_text() {
+    let mut session = EditSession::new();
+    let run_id = first_run(&session);
+    session
+        .apply(Command::InsertText {
+            run_id,
+            offset: 0,
+            text: "Hello".into(),
+        })
+        .unwrap();
+
+    session
+        .apply(Command::SetCharFormat {
+            run_id,
+            start: 5,
+            end: usize::MAX,
+            format: CharFormat {
+                font_size: Some(24.0),
+                ..Default::default()
+            },
+            merge: true,
+        })
+        .unwrap();
+
+    let para = session.document.paragraph_at(0, 0).unwrap();
+    assert_eq!(para.full_text(), "Hello");
+    assert!(
+        para.runs
+            .iter()
+            .all(|run| run.format.font_size == Some(24.0)),
+        "font size should apply when caret is at run end"
+    );
+}
+
+#[test]
+fn font_family_at_collapsed_run_end_formats_visible_text() {
+    let mut session = EditSession::new();
+    let run_id = first_run(&session);
+    session
+        .apply(Command::InsertText {
+            run_id,
+            offset: 0,
+            text: "Hello".into(),
+        })
+        .unwrap();
+
+    session
+        .apply(Command::SetCharFormat {
+            run_id,
+            start: 5,
+            end: usize::MAX,
+            format: CharFormat {
+                font_family: Some("Georgia".into()),
+                ..Default::default()
+            },
+            merge: true,
+        })
+        .unwrap();
+
+    let para = session.document.paragraph_at(0, 0).unwrap();
+    assert_eq!(para.full_text(), "Hello");
+    assert!(
+        para.runs
+            .iter()
+            .all(|run| run.format.font_family.as_deref() == Some("Georgia")),
+        "font family should apply when caret is at run end"
+    );
+}

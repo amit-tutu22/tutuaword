@@ -21,6 +21,7 @@ Read these documents in order if you are new to the project:
 12. [Performance Budgets](performance-budgets.md) — targets and measurement methods
 13. [Testing Strategy](testing-strategy.md) — golden images, round-trip corpus, benchmarks
 14. [Long-Tail Gaps](long-tail-gaps.md) — partial/peripheral features not yet built (PDF fonts, Hunspell, parsers, plugins, AI)
+15. [UI Functionality Audit](ui-functionality-audit.md) — ribbon/menu wiring vs engine; P0/P1/P2 control status
 
 ### Later Phases (interface specs only)
 

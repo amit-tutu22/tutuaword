@@ -6,6 +6,7 @@ pub type PartName = String;
 
 mod export;
 mod fingerprint;
+mod image_convert;
 mod import;
 mod media;
 mod numbering;

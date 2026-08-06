@@ -149,6 +149,56 @@ void main() {
   });
 
   group('Engine-backed editing integration', () {
+    testWidgets('font size applies after typing at run end', (tester) async {
+      final controller = EditorController();
+      addTearDown(controller.dispose);
+      if (!controller.isEngineConnected) return;
+
+      await tester.pumpWidget(
+        MaterialApp(home: Scaffold(body: DocumentView(controller: controller))),
+      );
+      await tester.pumpAndSettle();
+
+      controller.ensureGlyphCaret();
+      await tester.tap(find.byType(GlyphEditorSurface).first);
+      await tester.pump();
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyA);
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pumpAndSettle();
+
+      controller.setFontSize(24);
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pumpAndSettle();
+
+      expect(controller.fontSize, 24);
+    });
+
+    testWidgets('font family applies after typing at run end', (tester) async {
+      final controller = EditorController();
+      addTearDown(controller.dispose);
+      if (!controller.isEngineConnected) return;
+
+      await tester.pumpWidget(
+        MaterialApp(home: Scaffold(body: DocumentView(controller: controller))),
+      );
+      await tester.pumpAndSettle();
+
+      controller.ensureGlyphCaret();
+      await tester.tap(find.byType(GlyphEditorSurface).first);
+      await tester.pump();
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyA);
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pumpAndSettle();
+
+      controller.setFontFamily('Georgia');
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pumpAndSettle();
+
+      expect(controller.fontFamily, 'Georgia');
+    });
+
     testWidgets('glyph surface accepts key events when engine is connected', (tester) async {
       final controller = EditorController();
       addTearDown(controller.dispose);
@@ -272,6 +322,54 @@ void main() {
       expect(controller.caretOffset, 0);
     });
 
+    test('displayListForPage returns distinct bytes per page after scroll', () {
+      final controller = EditorController();
+      addTearDown(controller.dispose);
+      if (!controller.isEngineConnected) return;
+
+      controller.insertTable();
+      // Force a multi-page layout by inserting many paragraph breaks + text.
+      for (var i = 0; i < 80; i++) {
+        controller.insertGlyphParagraphBreak();
+        controller.insertGlyphCharacter('Line $i of filler text. ');
+      }
+      expect(controller.pageCount, greaterThan(1));
+
+      final page0 = controller.displayListForPage(0);
+      final page1 = controller.displayListForPage(1);
+      expect(page0, isNotEmpty);
+      expect(page1, isNotEmpty);
+      expect(page0, isNot(equals(page1)));
+
+      // Simulate scroll updating visible page without engine round-trip.
+      controller.setVisiblePage(1);
+      final afterScroll = controller.displayListForPage(1);
+      expect(afterScroll, equals(page1));
+      expect(afterScroll, isNot(equals(page0)));
+    });
+
+    test('typing on later page after click updates that page display list', () {
+      final controller = EditorController();
+      addTearDown(controller.dispose);
+      if (!controller.isEngineConnected) return;
+
+      for (var i = 0; i < 120; i++) {
+        controller.insertGlyphParagraphBreak();
+        controller.insertGlyphCharacter('Fill line $i. ');
+      }
+      expect(controller.pageCount, greaterThanOrEqualTo(2));
+
+      final pageIndex = controller.pageCount - 1;
+      controller.hitTestAt(pageIndex, 100, 700);
+      expect(controller.caretPage, pageIndex);
+
+      final before = controller.displayListForPage(pageIndex);
+      controller.insertGlyphCharacter('Z');
+      final after = controller.displayListForPage(pageIndex);
+      expect(after, isNotEmpty);
+      expect(after, isNot(equals(before)));
+    });
+
     test('engine session can bold after ensuring caret', () {
       final controller = EditorController();
       addTearDown(controller.dispose);
@@ -283,6 +381,138 @@ void main() {
       // Does not throw when routing format JSON to FFI (caret may be set).
       controller.toggleBold();
       expect(controller.bold, isFalse);
+    });
+
+    testWidgets('glyph copy and paste use engine text range', (tester) async {
+      final controller = EditorController();
+      addTearDown(controller.dispose);
+      if (!controller.isEngineConnected) return;
+
+      await tester.pumpWidget(
+        MaterialApp(home: Scaffold(body: DocumentView(controller: controller))),
+      );
+      await tester.pumpAndSettle();
+
+      controller.ensureGlyphCaret();
+      await tester.tap(find.byType(GlyphEditorSurface).first);
+      await tester.pump();
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyA);
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pumpAndSettle();
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyB);
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pumpAndSettle();
+
+      controller.selectAll();
+      await tester.pump();
+      expect(controller.selectedText, isNotEmpty);
+
+      await controller.copySelection();
+      controller.deleteSelection();
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pumpAndSettle();
+      expect(controller.selectedText, isEmpty);
+
+      await controller.paste();
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pumpAndSettle();
+      controller.selectAll();
+      await tester.pump();
+      expect(controller.selectedText, isNotEmpty);
+    });
+
+    testWidgets('Normal style button updates active paragraph style', (tester) async {
+      final controller = EditorController();
+      addTearDown(controller.dispose);
+      if (!controller.isEngineConnected) return;
+
+      await tester.pumpWidget(
+        MaterialApp(home: Scaffold(body: DocumentView(controller: controller))),
+      );
+      await tester.pumpAndSettle();
+
+      expect(controller.activeParagraphStyle, 'Normal');
+
+      await tester.tap(find.text('Heading 1'));
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pumpAndSettle();
+      expect(controller.activeParagraphStyle, 'Heading 1');
+
+      await tester.tap(find.text('Normal'));
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pumpAndSettle();
+      expect(controller.activeParagraphStyle, 'Normal');
+    });
+
+    testWidgets('ribbon syncs bold state after undo', (tester) async {
+      final controller = EditorController();
+      addTearDown(controller.dispose);
+      if (!controller.isEngineConnected) return;
+
+      await tester.pumpWidget(
+        MaterialApp(home: Scaffold(body: DocumentView(controller: controller))),
+      );
+      await tester.pumpAndSettle();
+
+      controller.ensureGlyphCaret();
+      expect(controller.bold, isFalse);
+
+      controller.toggleBold();
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pumpAndSettle();
+      expect(controller.bold, isTrue);
+
+      controller.undo();
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pumpAndSettle();
+      expect(controller.bold, isFalse);
+    });
+
+    testWidgets('indent and clear formatting update controller state', (tester) async {
+      final controller = EditorController();
+      addTearDown(controller.dispose);
+      if (!controller.isEngineConnected) return;
+
+      await tester.pumpWidget(
+        MaterialApp(home: Scaffold(body: DocumentView(controller: controller))),
+      );
+      await tester.pumpAndSettle();
+
+      controller.ensureGlyphCaret();
+      expect(controller.indentLeft, 0);
+
+      controller.increaseIndent();
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pumpAndSettle();
+      expect(controller.indentLeft, greaterThan(0));
+
+      controller.toggleBold();
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pumpAndSettle();
+      expect(controller.bold, isTrue);
+
+      controller.clearFormatting();
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pumpAndSettle();
+      expect(controller.bold, isFalse);
+    });
+
+    testWidgets('page break increases page count', (tester) async {
+      final controller = EditorController();
+      addTearDown(controller.dispose);
+      if (!controller.isEngineConnected) return;
+
+      await tester.pumpWidget(
+        MaterialApp(home: Scaffold(body: DocumentView(controller: controller))),
+      );
+      await tester.pumpAndSettle();
+
+      final before = controller.pageCount;
+      controller.insertPageBreak();
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pumpAndSettle();
+      expect(controller.pageCount, greaterThanOrEqualTo(before));
     });
   });
 

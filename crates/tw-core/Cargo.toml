@@ -21,6 +21,8 @@ tw-pdf = { path = "../tw-pdf" }
 tw-spell = { path = "../tw-spell" }
 crossbeam-channel = { workspace = true }
 parking_lot = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 zip = { workspace = true }
 

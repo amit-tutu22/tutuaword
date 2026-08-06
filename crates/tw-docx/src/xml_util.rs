@@ -137,12 +137,39 @@ pub fn take_element<'a>(xml: &'a str, tag: &str) -> Option<(&'a str, &'a str)> {
         return None;
     }
     let head_end = after.find('>')?;
-    let end = if after[..head_end].ends_with('/') {
-        head_end + 1
-    } else {
-        after.find(&close)? + close.len()
-    };
-    Some((&after[..end], &after[end..]))
+    if after[..head_end].ends_with('/') {
+        let end = head_end + 1;
+        return Some((&after[..end], &after[end..]));
+    }
+
+    let mut depth = 0usize;
+    let mut scan = 0usize;
+    while scan < after.len() {
+        // Only inspect tag starts; byte-wise `scan += 1` breaks on multi-byte
+        // UTF-8 inside `<w:t>` (e.g. U+2002 en space).
+        let rel = after[scan..].find('<').unwrap_or(after.len() - scan);
+        if rel > 0 {
+            scan += rel;
+        }
+        if scan >= after.len() {
+            break;
+        }
+        if after[scan..].starts_with(&open) && is_name_boundary(&after[scan + open.len()..]) {
+            depth += 1;
+            scan += open.len();
+            continue;
+        }
+        if after[scan..].starts_with(&close) {
+            depth = depth.saturating_sub(1);
+            scan += close.len();
+            if depth == 0 {
+                return Some((&after[..scan], &after[scan..]));
+            }
+            continue;
+        }
+        scan += 1;
+    }
+    None
 }
 
 /// Reads an attribute from an element's opening tag given the full element slice.
@@ -332,5 +359,13 @@ mod tests {
         assert_eq!(blocks[0].1, BlockKind::Paragraph);
         assert_eq!(blocks[1].1, BlockKind::Table);
         assert_eq!(blocks[2].1, BlockKind::Paragraph);
+    }
+
+    #[test]
+    fn take_element_handles_multibyte_text_between_tags() {
+        let xml = format!(r#"<w:r><w:t>Hi{}there</w:t></w:r>"#, '\u{2002}');
+        let (element, rest) = take_element(&xml, "w:r").expect("element");
+        assert!(element.contains('\u{2002}'));
+        assert!(rest.is_empty());
     }
 }

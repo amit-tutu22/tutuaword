@@ -23,9 +23,10 @@ class ViewTab extends StatelessWidget {
                 RibbonLargeButton(
                   icon: Icons.print_outlined,
                   label: 'Print\nLayout',
-                  onPressed: () {
-                    if (controller.printPreview) controller.togglePrintPreview();
-                  },
+                  tooltip: controller.printPreview
+                      ? 'Return to print layout'
+                      : 'Print layout view',
+                  onPressed: controller.togglePrintPreview,
                 ),
                 RibbonLargeButton(icon: Icons.web, label: 'Web\nLayout', onPressed: null),
               ],

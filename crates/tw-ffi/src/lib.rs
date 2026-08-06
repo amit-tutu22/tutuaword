@@ -211,6 +211,42 @@ pub extern "C" fn tw_get_document_text(out_ptr: *mut *const u8, out_len: *mut us
 }
 
 #[no_mangle]
+pub extern "C" fn tw_get_text_range(
+    start_run_id_ptr: *const c_char,
+    start_offset: u32,
+    end_run_id_ptr: *const c_char,
+    end_offset: u32,
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    let guard = SESSION.lock();
+    let Some(session) = guard.as_ref() else {
+        return -1;
+    };
+    let Some(start_run) = parse_node_id(start_run_id_ptr) else {
+        return -2;
+    };
+    let Some(end_run) = parse_node_id(end_run_id_ptr) else {
+        return -2;
+    };
+    let Some(text) = session.text_in_range(
+        start_run,
+        start_offset as usize,
+        end_run,
+        end_offset as usize,
+    ) else {
+        return -3;
+    };
+    let leaked = text.into_bytes();
+    unsafe {
+        *out_ptr = leaked.as_ptr();
+        *out_len = leaked.len();
+    }
+    std::mem::forget(leaked);
+    0
+}
+
+#[no_mangle]
 pub extern "C" fn tw_save_document(out_ptr: *mut *const u8, out_len: *mut usize) -> i32 {
     let enqueued = {
         let guard = SESSION.lock();
@@ -281,12 +317,13 @@ pub extern "C" fn tw_set_current_page(page: u32) -> i32 {
 }
 
 #[no_mangle]
-pub extern "C" fn tw_apply_heading1() -> i32 {
+pub extern "C" fn tw_apply_heading1(caret_run_id_ptr: *const c_char) -> i32 {
     let guard = SESSION.lock();
     let Some(session) = guard.as_ref() else {
         return -1;
     };
-    if !session.apply_heading1() {
+    let caret_run_id = parse_node_id(caret_run_id_ptr);
+    if !session.apply_heading1_at(caret_run_id) {
         return -4;
     }
     drop(guard);
@@ -294,12 +331,13 @@ pub extern "C" fn tw_apply_heading1() -> i32 {
 }
 
 #[no_mangle]
-pub extern "C" fn tw_apply_numbered_list() -> i32 {
+pub extern "C" fn tw_apply_normal_style(caret_run_id_ptr: *const c_char) -> i32 {
     let guard = SESSION.lock();
     let Some(session) = guard.as_ref() else {
         return -1;
     };
-    if !session.apply_numbered_list() {
+    let caret_run_id = parse_node_id(caret_run_id_ptr);
+    if !session.apply_normal_style_at(caret_run_id) {
         return -4;
     }
     drop(guard);
@@ -307,12 +345,27 @@ pub extern "C" fn tw_apply_numbered_list() -> i32 {
 }
 
 #[no_mangle]
-pub extern "C" fn tw_apply_bullet_list() -> i32 {
+pub extern "C" fn tw_apply_numbered_list(caret_run_id_ptr: *const c_char) -> i32 {
     let guard = SESSION.lock();
     let Some(session) = guard.as_ref() else {
         return -1;
     };
-    if !session.apply_bullet_list() {
+    let caret_run_id = parse_node_id(caret_run_id_ptr);
+    if !session.apply_numbered_list_at(caret_run_id) {
+        return -4;
+    }
+    drop(guard);
+    wait_for_document_edit()
+}
+
+#[no_mangle]
+pub extern "C" fn tw_apply_bullet_list(caret_run_id_ptr: *const c_char) -> i32 {
+    let guard = SESSION.lock();
+    let Some(session) = guard.as_ref() else {
+        return -1;
+    };
+    let caret_run_id = parse_node_id(caret_run_id_ptr);
+    if !session.apply_bullet_list_at(caret_run_id) {
         return -4;
     }
     drop(guard);
@@ -455,6 +508,114 @@ pub extern "C" fn tw_apply_para_format(
     wait_for_document_edit()
 }
 
+#[no_mangle]
+pub extern "C" fn tw_get_caret_format(
+    run_id_ptr: *const c_char,
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    let guard = SESSION.lock();
+    let Some(session) = guard.as_ref() else {
+        return -1;
+    };
+    let Some(run_id) = parse_node_id(run_id_ptr) else {
+        return -2;
+    };
+    let Some(json) = session.caret_format_json(run_id) else {
+        return -3;
+    };
+    let leaked = json.into_bytes();
+    unsafe {
+        *out_ptr = leaked.as_ptr();
+        *out_len = leaked.len();
+    }
+    std::mem::forget(leaked);
+    0
+}
+
+/// Remove direct character and paragraph formatting for the given range.
+#[no_mangle]
+pub extern "C" fn tw_clear_format(
+    start_run_id_ptr: *const c_char,
+    start_offset: u32,
+    end_run_id_ptr: *const c_char,
+    end_offset: u32,
+) -> i32 {
+    let guard = SESSION.lock();
+    let Some(session) = guard.as_ref() else {
+        return -1;
+    };
+    let Some(start_run) = parse_node_id(start_run_id_ptr) else {
+        return -2;
+    };
+    let Some(end_run) = parse_node_id(end_run_id_ptr) else {
+        return -2;
+    };
+
+    let range = DocRange {
+        start: DocPosition {
+            run_id: start_run,
+            char_offset: start_offset as usize,
+        },
+        end: DocPosition {
+            run_id: end_run,
+            char_offset: end_offset as usize,
+        },
+    };
+
+    let collapsed = start_run == end_run && start_offset == end_offset;
+    let char_command = if collapsed {
+        Command::SetCharFormat {
+            run_id: start_run,
+            start: start_offset as usize,
+            end: usize::MAX,
+            format: CharFormat::default(),
+            merge: false,
+        }
+    } else if start_run == end_run {
+        Command::SetCharFormat {
+            run_id: start_run,
+            start: start_offset as usize,
+            end: end_offset as usize,
+            format: CharFormat::default(),
+            merge: false,
+        }
+    } else {
+        Command::SetCharFormatRange {
+            range: range.clone(),
+            format: CharFormat::default(),
+            merge: false,
+        }
+    };
+
+    if !session.apply(char_command) {
+        return -4;
+    }
+    if !session.apply(Command::SetParaFormatRange {
+        range,
+        format: ParaFormat::default(),
+        merge: false,
+    }) {
+        return -4;
+    }
+    drop(guard);
+    wait_for_document_edit()
+}
+
+#[no_mangle]
+pub extern "C" fn tw_insert_page_break(caret_run_id_ptr: *const c_char) -> i32 {
+    let guard = SESSION.lock();
+    let Some(session) = guard.as_ref() else {
+        return -1;
+    };
+    let caret_run_id = parse_node_id(caret_run_id_ptr);
+    if !session.insert_page_break_at(caret_run_id) {
+        return -4;
+    }
+    drop(guard);
+    wait_for_document_edit()
+}
+
 /// Delete characters in a single run (`[start, end)`).
 #[no_mangle]
 pub extern "C" fn tw_apply_delete_range(
@@ -476,6 +637,42 @@ pub extern "C" fn tw_apply_delete_range(
         run_id,
         start: start as usize,
         end: end as usize,
+    }) {
+        return -4;
+    }
+    drop(guard);
+    wait_for_document_edit()
+}
+
+/// Delete characters across an arbitrary document range (possibly spanning runs).
+#[no_mangle]
+pub extern "C" fn tw_apply_delete_doc_range(
+    start_run_id_ptr: *const c_char,
+    start_offset: u32,
+    end_run_id_ptr: *const c_char,
+    end_offset: u32,
+) -> i32 {
+    let guard = SESSION.lock();
+    let Some(session) = guard.as_ref() else {
+        return -1;
+    };
+    let Some(start_run_id) = parse_node_id(start_run_id_ptr) else {
+        return -2;
+    };
+    let Some(end_run_id) = parse_node_id(end_run_id_ptr) else {
+        return -2;
+    };
+    if !session.apply(Command::DeleteDocRange {
+        range: DocRange {
+            start: DocPosition {
+                run_id: start_run_id,
+                char_offset: start_offset as usize,
+            },
+            end: DocPosition {
+                run_id: end_run_id,
+                char_offset: end_offset as usize,
+            },
+        },
     }) {
         return -4;
     }

@@ -18,7 +18,11 @@ class InsertTab extends StatelessWidget {
             label: 'Pages',
             child: Row(
               children: [
-                RibbonLargeButton(icon: Icons.insert_page_break, label: 'Page\nBreak', onPressed: null),
+                RibbonLargeButton(
+                  icon: Icons.insert_page_break,
+                  label: 'Page\nBreak',
+                  onPressed: controller.insertPageBreak,
+                ),
                 RibbonLargeButton(icon: Icons.view_agenda_outlined, label: 'Cover\nPage', onPressed: null),
               ],
             ),

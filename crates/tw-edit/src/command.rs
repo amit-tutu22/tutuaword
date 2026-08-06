@@ -24,6 +24,10 @@ pub enum Command {
         start: usize,
         end: usize,
     },
+    /// Delete characters across an arbitrary document range (possibly spanning runs).
+    DeleteDocRange {
+        range: DocRange,
+    },
     SetCharFormat {
         run_id: NodeId,
         start: usize,
@@ -67,6 +71,11 @@ pub enum Command {
         offset: usize,
     },
     DeleteParagraph {
+        id: NodeId,
+    },
+    /// Undo helper for [`Command::SplitParagraphAt`]: merge a split-off paragraph
+    /// back into its predecessor.
+    MergeSplitParagraph {
         id: NodeId,
     },
     InsertTable {
@@ -150,20 +159,26 @@ impl Command {
                     text: deleted,
                 })
             }
-            Command::SetCharFormat {
-                run_id,
-                start,
-                end,
-                ..
-            } => {
-                let old = result.old_char_format.clone()?;
-                Some(Command::SetCharFormat {
-                    run_id: *run_id,
-                    start: *start,
-                    end: *end,
-                    format: old,
-                    merge: false,
-                })
+            Command::DeleteDocRange { .. } => {
+                let segments = result.find_replace_undo.clone()?;
+                Some(Command::RestoreFindReplace { segments })
+            }
+            Command::SetCharFormat { .. } => {
+                if !result.old_run_formats.is_empty() {
+                    Some(Command::RestoreRunFormats {
+                        formats: result.old_run_formats.clone(),
+                    })
+                } else {
+                    let old = result.old_char_format.clone()?;
+                    let run_id = result.affected_nodes.first().copied()?;
+                    Some(Command::SetCharFormat {
+                        run_id,
+                        start: 0,
+                        end: usize::MAX,
+                        format: old,
+                        merge: false,
+                    })
+                }
             }
             Command::SetCharFormatRange { .. } => {
                 if result.old_run_formats.is_empty() {
@@ -199,11 +214,17 @@ impl Command {
                 let new_id = result.created_node_id?;
                 Some(Command::DeleteParagraph { id: new_id })
             }
-            // Stage 2: undo of a split removes the new paragraph (content merge
-            // is deferred — prefer undo immediately after Enter).
+            // Undo Enter by merging the new paragraph back into its predecessor.
             Command::SplitParagraphAt { .. } => {
                 let new_id = result.created_node_id?;
-                Some(Command::DeleteParagraph { id: new_id })
+                Some(Command::MergeSplitParagraph { id: new_id })
+            }
+            Command::MergeSplitParagraph { .. } => {
+                let (run_id, offset) = result.split_boundary?;
+                Some(Command::SplitParagraphAt {
+                    run_id,
+                    offset,
+                })
             }
             Command::DeleteParagraph { .. } => {
                 let after_id = result.previous_paragraph_id?;
@@ -314,6 +335,8 @@ pub struct EditResult {
     pub old_cell_span: Option<(u32, u32)>,
     pub old_column_width: Option<f32>,
     pub find_replace_undo: Option<Vec<(NodeId, usize, String, String)>>,
+    /// Character boundary to re-split when undoing/redoing paragraph merges.
+    pub split_boundary: Option<(NodeId, usize)>,
 }
 
 #[derive(Debug, thiserror::Error)]

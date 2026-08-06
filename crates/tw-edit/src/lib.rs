@@ -2,11 +2,12 @@ mod access;
 mod block_ops;
 mod command;
 mod normalize;
-mod range;
+pub mod range;
 mod session;
 
 pub use command::*;
 pub use session::*;
+pub use range::paragraph_id_for_run;
 
 use access::{with_paragraph_mut, with_run_mut};
 use tw_model::{Document, NodeId, NumberingRef, Revision, Run, StyleId};
@@ -26,6 +27,7 @@ pub fn apply(
             start,
             end,
         } => delete_range(doc, buffer, *run_id, *start, *end)?,
+        Command::DeleteDocRange { range } => delete_doc_range(doc, buffer, range)?,
         Command::SetCharFormat {
             run_id,
             start,
@@ -55,6 +57,7 @@ pub fn apply(
             split_paragraph_at(doc, buffer, *run_id, *offset)?
         }
         Command::DeleteParagraph { id } => delete_paragraph(doc, buffer, *id)?,
+        Command::MergeSplitParagraph { id } => merge_split_paragraph(doc, buffer, *id)?,
         Command::InsertTable {
             after_block_id,
             rows,
@@ -194,6 +197,78 @@ fn delete_range(
     .ok_or(EditError::RunNotFound(run_id))?
 }
 
+fn delete_doc_range(
+    doc: &mut Document,
+    buffer: &mut TextBuffer,
+    range: &DocRange,
+) -> Result<EditResult, EditError> {
+    let range = crate::range::normalize_range(doc, range)?;
+    if crate::range::positions_equal(&range.start, &range.end) {
+        return Err(EditError::InvalidRange);
+    }
+    if range.start.run_id == range.end.run_id {
+        return delete_range(
+            doc,
+            buffer,
+            range.start.run_id,
+            range.start.char_offset,
+            range.end.char_offset,
+        );
+    }
+
+    let start_loc = doc
+        .find_run_location(range.start.run_id)
+        .ok_or(EditError::RunNotFound(range.start.run_id))?;
+    let end_loc = doc
+        .find_run_location(range.end.run_id)
+        .ok_or(EditError::RunNotFound(range.end.run_id))?;
+
+    let mut segments = Vec::new();
+    for (si, section) in doc.sections.iter().enumerate() {
+        for (bi, block) in section.blocks.iter().enumerate() {
+            if (si, bi) < (start_loc.0, start_loc.1) || (si, bi) > (end_loc.0, end_loc.1) {
+                continue;
+            }
+            let Some(para) = block.paragraph() else {
+                continue;
+            };
+            for run in &para.runs {
+                if !run_in_doc_range(run.id, start_loc, end_loc, doc) {
+                    continue;
+                }
+                let run_start = if run.id == range.start.run_id {
+                    range.start.char_offset
+                } else {
+                    0
+                };
+                let run_end = if run.id == range.end.run_id {
+                    range.end.char_offset
+                } else {
+                    buffer.len(run.id)
+                };
+                if run_start < run_end {
+                    segments.push((run.id, run_start, run_end));
+                }
+            }
+        }
+    }
+
+    let mut undo_segments = Vec::new();
+    let mut affected = Vec::new();
+    for (run_id, start, end) in segments.into_iter().rev() {
+        let deleted = buffer.slice(run_id, start..end).into_owned();
+        undo_segments.push((run_id, start, deleted, String::new()));
+        delete_range(doc, buffer, run_id, start, end)?;
+        affected.push(run_id);
+    }
+
+    Ok(EditResult {
+        affected_nodes: affected,
+        find_replace_undo: Some(undo_segments),
+        ..Default::default()
+    })
+}
+
 fn track_delete_range(
     doc: &mut Document,
     buffer: &mut TextBuffer,
@@ -240,7 +315,26 @@ fn set_char_format(
         return Err(EditError::InvalidRange);
     }
     if start == end {
-        return Ok(EditResult::default());
+        if run_len == 0 {
+            return with_run_mut(doc, run_id, |run| {
+                let old = run.format.clone();
+                if merge {
+                    run.format.merge(&format);
+                } else {
+                    run.format = format;
+                }
+                Ok(EditResult {
+                    affected_nodes: vec![run_id],
+                    old_char_format: Some(old.clone()),
+                    old_run_formats: vec![(run_id, old)],
+                    ..Default::default()
+                })
+            })
+            .ok_or(EditError::RunNotFound(run_id))?;
+        }
+        // Collapsed caret (often at run end via FFI `usize::MAX`) — apply to the
+        // whole run so ribbon font/size changes affect visible text.
+        return set_char_format(doc, buffer, run_id, 0, run_len, format, merge);
     }
 
     // Whole-run fast path.
@@ -304,7 +398,15 @@ fn set_char_format_range(
 ) -> Result<EditResult, EditError> {
     let range = range::normalize_range(doc, range)?;
     if range::positions_equal(&range.start, &range.end) {
-        return Ok(EditResult::default());
+        return set_char_format(
+            doc,
+            buffer,
+            range.start.run_id,
+            range.start.char_offset,
+            usize::MAX,
+            format,
+            merge,
+        );
     }
 
     let start_loc = doc
@@ -729,6 +831,8 @@ fn split_paragraph_at(
             return Ok(EditResult {
                 affected_nodes: vec![new_run_id, new_para_id],
                 created_node_id: Some(new_para_id),
+                previous_paragraph_id: Some(after_id),
+                split_boundary: Some((run_id, offset)),
                 ..Default::default()
             });
         }
@@ -779,6 +883,67 @@ fn split_paragraph_at(
     Ok(EditResult {
         affected_nodes: vec![new_run_id, new_para_id],
         created_node_id: Some(new_para_id),
+        previous_paragraph_id: Some(doc.sections[si].blocks[bi].paragraph().unwrap().id),
+        split_boundary: Some((run_id, offset)),
+        ..Default::default()
+    })
+}
+
+/// Merge a paragraph created by [`split_paragraph_at`] back into its predecessor.
+fn merge_split_paragraph(
+    doc: &mut Document,
+    buffer: &mut TextBuffer,
+    id: NodeId,
+) -> Result<EditResult, EditError> {
+    let (si, bi) = doc
+        .find_paragraph_location(id)
+        .ok_or(EditError::ParagraphNotFound(id))?;
+
+    if bi == 0 {
+        return Err(EditError::InvalidRange);
+    }
+
+    let tw_model::Block::Paragraph(new_para) = doc.sections[si].blocks.remove(bi) else {
+        return Err(EditError::ParagraphNotFound(id));
+    };
+
+    let prev = doc.sections[si].blocks[bi - 1]
+        .paragraph_mut()
+        .ok_or(EditError::ParagraphNotFound(id))?;
+
+    let boundary_run = prev
+        .runs
+        .last()
+        .map(|r| r.id)
+        .ok_or(EditError::InvalidRange)?;
+    let boundary_offset = buffer.len(boundary_run);
+
+    for run in new_para.runs {
+        if let Some(last) = prev.runs.last_mut() {
+            if last.format.equals(&run.format) && last.revision == run.revision {
+                let suffix = buffer.to_string(run.id);
+                let last_id = last.id;
+                if let Some(text) = last.text_mut() {
+                    text.push_str(&suffix);
+                    let merged = text.clone();
+                    buffer.sync_from_run(last_id, &merged);
+                }
+                buffer.unregister(run.id);
+                continue;
+            }
+        }
+        prev.runs.push(run);
+    }
+
+    if prev.runs.is_empty() {
+        let empty = Run::new_text("");
+        buffer.register(empty.id, "");
+        prev.runs.push(empty);
+    }
+
+    Ok(EditResult {
+        affected_nodes: vec![prev.id],
+        split_boundary: Some((boundary_run, boundary_offset)),
         ..Default::default()
     })
 }
@@ -970,6 +1135,64 @@ fn run_in_doc_range(
         .is_some_and(|loc| loc >= start_loc && loc <= end_loc)
 }
 
+/// Read plain text for a document-order range without mutating the model.
+pub fn text_in_range(
+    doc: &Document,
+    buffer: &TextBuffer,
+    range: &DocRange,
+) -> Result<String, EditError> {
+    let range = crate::range::normalize_range(doc, range)?;
+    if crate::range::positions_equal(&range.start, &range.end) {
+        return Ok(String::new());
+    }
+    if range.start.run_id == range.end.run_id {
+        return Ok(buffer
+            .slice(
+                range.start.run_id,
+                range.start.char_offset..range.end.char_offset,
+            )
+            .into_owned());
+    }
+
+    let start_loc = doc
+        .find_run_location(range.start.run_id)
+        .ok_or(EditError::RunNotFound(range.start.run_id))?;
+    let end_loc = doc
+        .find_run_location(range.end.run_id)
+        .ok_or(EditError::RunNotFound(range.end.run_id))?;
+
+    let mut out = String::new();
+    for (si, section) in doc.sections.iter().enumerate() {
+        for (bi, block) in section.blocks.iter().enumerate() {
+            if (si, bi) < (start_loc.0, start_loc.1) || (si, bi) > (end_loc.0, end_loc.1) {
+                continue;
+            }
+            let Some(para) = block.paragraph() else {
+                continue;
+            };
+            for run in &para.runs {
+                if !run_in_doc_range(run.id, start_loc, end_loc, doc) {
+                    continue;
+                }
+                let run_start = if run.id == range.start.run_id {
+                    range.start.char_offset
+                } else {
+                    0
+                };
+                let run_end = if run.id == range.end.run_id {
+                    range.end.char_offset
+                } else {
+                    buffer.len(run.id)
+                };
+                if run_start < run_end {
+                    out.push_str(&buffer.slice(run.id, run_start..run_end));
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
 fn restore_find_replace(
     doc: &mut Document,
     buffer: &mut TextBuffer,
@@ -977,9 +1200,13 @@ fn restore_find_replace(
 ) -> Result<EditResult, EditError> {
     let mut affected = Vec::new();
     for (run_id, offset, find, replace) in segments.iter().rev() {
-        let replace_len = replace.chars().count();
-        delete_range(doc, buffer, *run_id, *offset, *offset + replace_len)?;
-        insert_text(doc, buffer, *run_id, *offset, find)?;
+        if !replace.is_empty() {
+            let replace_len = replace.chars().count();
+            delete_range(doc, buffer, *run_id, *offset, *offset + replace_len)?;
+        }
+        if !find.is_empty() {
+            insert_text(doc, buffer, *run_id, *offset, find)?;
+        }
         affected.push(*run_id);
     }
     Ok(EditResult {
@@ -1027,6 +1254,40 @@ mod phase2_tests {
 
         assert_eq!(session.document.sections[0].blocks.len(), 2);
         assert!(session.document.sections[0].blocks[1].table().is_some());
+    }
+
+    #[test]
+    fn text_in_range_reads_selection() {
+        let mut session = EditSession::new();
+        let run_id = session.document.sections[0].blocks[0]
+            .paragraph()
+            .unwrap()
+            .runs[0]
+            .id;
+        session
+            .apply(Command::InsertText {
+                run_id,
+                offset: 0,
+                text: "Hello world".into(),
+            })
+            .unwrap();
+
+        let text = text_in_range(
+            &session.document,
+            &session.buffer,
+            &DocRange {
+                start: DocPosition {
+                    run_id,
+                    char_offset: 0,
+                },
+                end: DocPosition {
+                    run_id,
+                    char_offset: 5,
+                },
+            },
+        )
+        .unwrap();
+        assert_eq!(text, "Hello");
     }
 
     #[test]

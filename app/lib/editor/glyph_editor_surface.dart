@@ -87,8 +87,8 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
     }
     if (char != null &&
         char.isNotEmpty &&
-        char.length == 1 &&
-        !HardwareKeyboard.instance.isControlPressed) {
+        !HardwareKeyboard.instance.isControlPressed &&
+        !HardwareKeyboard.instance.isMetaPressed) {
       widget.controller.insertGlyphCharacter(char);
       return KeyEventResult.handled;
     }
@@ -141,8 +141,9 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
 
   @override
   Widget build(BuildContext context) {
-    final caret = widget.controller.caretGeometry;
-    final selection = widget.controller.selectionRects;
+    final onCaretPage = widget.pageIndex == widget.controller.caretPage;
+    final caret = onCaretPage ? widget.controller.caretGeometry : null;
+    final selection = onCaretPage ? widget.controller.selectionRects : const <GlyphSelectionRect>[];
     return Focus(
       focusNode: _focusNode,
       onKeyEvent: _handleKey,

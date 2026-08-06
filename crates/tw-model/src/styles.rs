@@ -1,4 +1,4 @@
-use crate::format::{CharFormat, ParaFormat};
+use crate::format::{BorderSpec, CharFormat, ParaFormat};
 use crate::ids::StyleId;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -26,14 +26,26 @@ pub struct CharacterStyle {
     pub char_format: CharFormat,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TableStyle {
+    pub id: StyleId,
+    pub name: String,
+    pub border: Option<BorderSpec>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StyleSheet {
     pub defaults: DocumentDefaults,
     pub paragraph_styles: HashMap<StyleId, ParagraphStyle>,
     pub character_styles: HashMap<StyleId, CharacterStyle>,
+    #[serde(default)]
+    pub table_styles: HashMap<StyleId, TableStyle>,
     /// OOXML `w:styleId` string → internal style id (from import).
     #[serde(default)]
     pub ooxml_style_ids: HashMap<String, StyleId>,
+    /// OOXML table style ids → internal style id.
+    #[serde(default)]
+    pub ooxml_table_style_ids: HashMap<String, StyleId>,
 }
 
 impl StyleSheet {
@@ -79,7 +91,9 @@ impl StyleSheet {
             defaults: DocumentDefaults::default(),
             paragraph_styles,
             character_styles: HashMap::new(),
+            table_styles: HashMap::new(),
             ooxml_style_ids: HashMap::new(),
+            ooxml_table_style_ids: HashMap::new(),
         }
     }
 
@@ -109,7 +123,9 @@ impl StyleSheet {
             defaults: DocumentDefaults::default(),
             paragraph_styles: styles,
             character_styles: HashMap::new(),
+            table_styles: HashMap::new(),
             ooxml_style_ids: HashMap::new(),
+            ooxml_table_style_ids: HashMap::new(),
         }
     }
 

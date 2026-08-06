@@ -1,12 +1,12 @@
 use tw_model::{
     Alignment, CharFormat, Color, LineSpacing, NumberingRef, ParaFormat, SectionFormat, StyleId,
-    CharacterStyle, DocumentTheme, ListLevel, ListMarkerFormat, ListSuffix,
-    NumberingCatalog, NumberingDefinition, ParagraphStyle, StyleSheet,
+    CharacterStyle, DocumentTheme, ListLevel, ListMarkerFormat, ListSuffix, TabAlignment, TabStop,
+    NumberingCatalog, NumberingDefinition, ParagraphStyle, StyleSheet, TableStyle, BorderSpec,
 };
 
 use crate::xml_util::{
-    half_points_to_points, read_attr_value, read_numeric_attr, read_own_attr, read_toggle,
-    split_elements, twips_to_points,
+    half_points_to_points, read_attr_value, read_int_attr, read_numeric_attr, read_own_attr,
+    read_toggle, split_elements, twips_to_points,
 };
 
 /// Marks a `font_family` that names a theme slot rather than a real family.
@@ -109,7 +109,19 @@ pub fn parse_styles_xml(xml: &str) -> StyleSheet {
                     },
                 );
             }
-            "table" | "numbering" => {}
+            "table" => {
+                let border = parse_tbl_borders(chunk);
+                sheet.ooxml_table_style_ids.insert(style_id_str.clone(), id);
+                sheet.table_styles.insert(
+                    id,
+                    TableStyle {
+                        id,
+                        name,
+                        border,
+                    },
+                );
+            }
+            "numbering" => {}
             _ => {}
         }
     }
@@ -150,12 +162,25 @@ pub fn parse_numbering_xml(xml: &str) -> NumberingCatalog {
             let hanging = read_numeric_attr(lvl, "w:ind", "w:hanging")
                 .map(twips_to_points)
                 .unwrap_or(18.0);
+            let suffix = match read_tag_text_in(lvl, "w:suff", "w:val").as_deref() {
+                Some("space") => ListSuffix::Space,
+                Some("nothing") => ListSuffix::Nothing,
+                _ => ListSuffix::Tab,
+            };
+            let marker_text = read_tag_text_in(lvl, "w:lvlText", "w:val");
+            let start = read_tag_text_in(lvl, "w:start", "w:val")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(1);
+            let char_format = parse_char_properties(lvl);
             levels.push(ListLevel {
                 level,
                 format,
                 indent,
                 hanging,
-                suffix: ListSuffix::Tab,
+                suffix,
+                marker_text,
+                start,
+                char_format,
             });
         }
         abstract_defs.insert(
@@ -209,10 +234,51 @@ pub fn parse_theme_xml(xml: &str) -> DocumentTheme {
             }
         }
     }
-    if let Some(font) = read_attr_value(xml, "a:latin", "typeface") {
+    if let Some(font) = theme_font_latin(xml, "a:majorFont") {
         theme.major_font = font;
     }
+    if let Some(font) = theme_font_latin(xml, "a:minorFont") {
+        theme.minor_font = font;
+    }
     theme
+}
+
+fn theme_font_latin(xml: &str, marker: &str) -> Option<String> {
+    let start = xml.find(&format!("<{marker}"))?;
+    let chunk = &xml[start..];
+    let end = chunk.find(&format!("</{marker}>")).unwrap_or(chunk.len());
+    read_attr_value(&chunk[..end], "a:latin", "typeface")
+}
+
+fn parse_tbl_borders(style_xml: &str) -> Option<BorderSpec> {
+    if !style_xml.contains("w:tblBorders") {
+        return None;
+    }
+    let width = ["w:top", "w:left", "w:bottom", "w:right"]
+        .iter()
+        .filter_map(|edge| read_int_attr(style_xml, edge, "w:sz"))
+        .filter(|v| *v > 0)
+        .map(|v| v as f32 / 8.0)
+        .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))?;
+    let color = ["w:top", "w:left", "w:bottom", "w:right"]
+        .iter()
+        .find_map(|edge| {
+            read_attr_value(style_xml, edge, "w:color").and_then(|v| parse_fill_color(&v))
+        })
+        .unwrap_or(Color::BLACK);
+    Some(BorderSpec { width, color })
+}
+
+fn parse_fill_color(value: &str) -> Option<Color> {
+    if value == "auto" || value.len() != 6 {
+        return None;
+    }
+    Some(Color {
+        r: u8::from_str_radix(&value[0..2], 16).ok()?,
+        g: u8::from_str_radix(&value[2..4], 16).ok()?,
+        b: u8::from_str_radix(&value[4..6], 16).ok()?,
+        a: 255,
+    })
 }
 
 pub fn parse_para_properties(xml: &str) -> ParaFormat {
@@ -227,7 +293,7 @@ pub fn parse_para_properties(xml: &str) -> ParaFormat {
         format.space_after = Some(twips_to_points(after));
     }
     if let Some(line) = read_numeric_attr(xml, "w:spacing", "w:line") {
-        format.line_spacing = Some(LineSpacing::Multiple(line / 240.0));
+        format.line_spacing = Some(parse_line_spacing(line, xml));
     }
     if let Some(left) = read_numeric_attr(xml, "w:ind", "w:left") {
         format.indent_left = Some(twips_to_points(left));
@@ -248,7 +314,48 @@ pub fn parse_para_properties(xml: &str) -> ParaFormat {
             .unwrap_or(0);
         format.numbering = Some(NumberingRef { numbering_id: num_id, level });
     }
+    format.tab_stops = parse_tab_stops(xml);
+    if read_toggle(xml, "w:keepNext").unwrap_or(false) {
+        format.keep_with_next = Some(true);
+    }
+    if read_toggle(xml, "w:keepLines").unwrap_or(false) {
+        format.keep_together = Some(true);
+    }
+    if xml.contains("<w:widowControl") {
+        format.widow_orphan_control = read_toggle(xml, "w:widowControl");
+    }
     format
+}
+
+/// Default character formatting declared on a paragraph via `w:pPr/w:rPr`.
+pub fn parse_para_default_char_format(ppr_xml: &str) -> CharFormat {
+    split_elements(ppr_xml, "w:rPr")
+        .into_iter()
+        .next()
+        .map(parse_char_properties)
+        .unwrap_or_default()
+}
+
+fn parse_tab_stops(xml: &str) -> Vec<TabStop> {
+    let mut stops = Vec::new();
+    for tab in split_elements(xml, "w:tab") {
+        let Some(pos) = read_own_attr(tab, "w:pos")
+            .and_then(|v| v.parse::<f32>().ok())
+            .map(twips_to_points)
+        else {
+            continue;
+        };
+        let alignment = match read_own_attr(tab, "w:val").as_deref() {
+            Some("center") => TabAlignment::Center,
+            Some("right") => TabAlignment::Right,
+            Some("decimal") => TabAlignment::Decimal,
+            Some("bar") => TabAlignment::Bar,
+            _ => TabAlignment::Left,
+        };
+        stops.push(TabStop { position: pos, alignment });
+    }
+    stops.sort_by(|a, b| a.position.total_cmp(&b.position));
+    stops
 }
 
 pub fn parse_char_properties(xml: &str) -> CharFormat {
@@ -292,6 +399,23 @@ pub fn parse_char_properties(xml: &str) -> CharFormat {
     if let Some(highlight) = read_tag_text_in(xml, "w:highlight", "w:val") {
         format.highlight = parse_highlight(&highlight);
     }
+    if let Some(align) = read_tag_text_in(xml, "w:vertAlign", "w:val") {
+        match align.as_str() {
+            "superscript" => {
+                format.superscript = Some(true);
+                format.subscript = Some(false);
+            }
+            "subscript" => {
+                format.subscript = Some(true);
+                format.superscript = Some(false);
+            }
+            "baseline" => {
+                format.superscript = Some(false);
+                format.subscript = Some(false);
+            }
+            _ => {}
+        }
+    }
     format
 }
 
@@ -316,6 +440,19 @@ pub fn parse_section_properties(xml: &str) -> SectionFormat {
         format.margin_right = twips_to_points(v);
     }
     format
+}
+
+/// OOXML `w:line` meaning depends on `w:lineRule`: multiples of a line under
+/// `auto`, absolute twips under `exact` / `atLeast`.
+fn parse_line_spacing(line: f32, xml: &str) -> LineSpacing {
+    let rule = read_attr_value(xml, "w:spacing", "w:lineRule").unwrap_or_default();
+    match rule.as_str() {
+        "exact" => LineSpacing::Exactly(twips_to_points(line)),
+        "atLeast" => LineSpacing::AtLeast(twips_to_points(line)),
+        _ if (line - 240.0).abs() < f32::EPSILON => LineSpacing::Single,
+        _ if (line - 480.0).abs() < f32::EPSILON => LineSpacing::Double,
+        _ => LineSpacing::Multiple(line / 240.0),
+    }
 }
 
 fn parse_alignment(value: &str) -> Alignment {
@@ -503,6 +640,56 @@ mod tests {
         assert_eq!(
             doc.styles.defaults.char_format.font_family.as_deref(),
             Some("Times New Roman")
+        );
+    }
+
+    #[test]
+    fn auto_line_spacing_is_a_multiple_of_a_line() {
+        let xml = r#"<w:spacing w:line="360" w:lineRule="auto"/>"#;
+        assert_eq!(
+            parse_para_properties(xml).line_spacing,
+            Some(LineSpacing::Multiple(1.5))
+        );
+    }
+
+    #[test]
+    fn exact_line_spacing_is_in_points_not_multiples() {
+        // 480 twips = 24 pt — must not become Multiple(2.0) which would balloon layout.
+        let xml = r#"<w:spacing w:line="480" w:lineRule="exact"/>"#;
+        assert_eq!(
+            parse_para_properties(xml).line_spacing,
+            Some(LineSpacing::Exactly(24.0))
+        );
+    }
+
+    #[test]
+    fn at_least_line_spacing_is_in_points() {
+        let xml = r#"<w:spacing w:line="240" w:lineRule="atLeast"/>"#;
+        assert_eq!(
+            parse_para_properties(xml).line_spacing,
+            Some(LineSpacing::AtLeast(12.0))
+        );
+    }
+
+    #[test]
+    fn explicit_tab_stops_are_parsed_in_twips() {
+        let xml = r#"<w:tabs><w:tab w:val="right" w:pos="2880"/></w:tabs>"#;
+        let stops = parse_para_properties(xml).tab_stops;
+        assert_eq!(stops.len(), 1);
+        assert!((stops[0].position - 144.0).abs() < 0.01);
+        assert_eq!(stops[0].alignment, TabAlignment::Right);
+    }
+
+    #[test]
+    fn superscript_and_subscript_import() {
+        assert_eq!(
+            parse_char_properties(r#"<w:rPr><w:vertAlign w:val="superscript"/></w:rPr>"#)
+                .superscript,
+            Some(true)
+        );
+        assert_eq!(
+            parse_char_properties(r#"<w:rPr><w:vertAlign w:val="subscript"/></w:rPr>"#).subscript,
+            Some(true)
         );
     }
 }

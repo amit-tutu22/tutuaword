@@ -24,11 +24,23 @@ pub enum BridgeCommand {
     ToggleTrackChanges { enabled: bool },
     ApplyEdit { command: Command },
     SetCurrentPage { page: u32 },
-    ApplyHeading1,
-    ApplyBulletList,
-    ApplyNumberedList,
+    ApplyHeading1 {
+        caret_run_id: Option<NodeId>,
+    },
+    ApplyNormalStyle {
+        caret_run_id: Option<NodeId>,
+    },
+    ApplyBulletList {
+        caret_run_id: Option<NodeId>,
+    },
+    ApplyNumberedList {
+        caret_run_id: Option<NodeId>,
+    },
     InsertTable { rows: u32, cols: u32 },
     InsertImage { width: f32, height: f32 },
+    InsertPageBreak {
+        caret_run_id: Option<NodeId>,
+    },
     Undo,
     Redo,
     ExportPdf,
@@ -110,7 +122,9 @@ fn worker_loop(
         let page_count = pages.len().max(1) as u32;
         let page_index = current_page.min(page_count.saturating_sub(1));
         snapshot.publish(snapshot_from_pages(pages, page_index, *version, text));
-        layout_cache.write().update_from_engine(layout);
+        layout_cache
+            .write()
+            .update_from_session(layout, &session.document, &session.buffer);
         *version
     };
 
@@ -203,16 +217,27 @@ fn worker_loop(
                 }
 
                 let mut apply_error = None;
+                let mut applied = 0usize;
                 for command in commands {
                     if let Err(e) = session.apply(command) {
+                        for _ in 0..applied {
+                            let _ = session.undo();
+                        }
                         apply_error = Some(e);
                         break;
                     }
+                    applied += 1;
                 }
 
                 if let Some(e) = apply_error {
+                    format_ctx.mark_document_modified();
+                    version = rebuild(&session, &mut layout, &mut version, current_page);
                     let _ = event_tx.send(BridgeEvent::Error {
                         message: e.to_string(),
+                    });
+                    let _ = event_tx.send(BridgeEvent::DisplayListReady {
+                        page: current_page,
+                        version,
                     });
                 } else {
                     format_ctx.mark_document_modified();
@@ -223,34 +248,56 @@ fn worker_loop(
                     });
                 }
             }
-            BridgeCommand::ApplyHeading1 => {
-                if let Some(cmd) = heading1_command(&session.document) {
-                    let _ = session.apply(cmd);
-                    version = rebuild(&session, &mut layout, &mut version, current_page);
-                    let _ = event_tx.send(BridgeEvent::DisplayListReady {
-                        page: current_page,
-                        version,
-                    });
+            BridgeCommand::ApplyHeading1 { caret_run_id } => {
+                let para_id = paragraph_id_from_caret(&session.document, caret_run_id);
+                if let Some(para_id) = para_id {
+                    if let Some(cmd) = heading1_command_for(para_id) {
+                        let _ = session.apply(cmd);
+                        version = rebuild(&session, &mut layout, &mut version, current_page);
+                        let _ = event_tx.send(BridgeEvent::DisplayListReady {
+                            page: current_page,
+                            version,
+                        });
+                    }
                 }
             }
-            BridgeCommand::ApplyBulletList => {
-                if let Some(cmd) = bullet_list_command(&session.document) {
-                    let _ = session.apply(cmd);
-                    version = rebuild(&session, &mut layout, &mut version, current_page);
-                    let _ = event_tx.send(BridgeEvent::DisplayListReady {
-                        page: current_page,
-                        version,
-                    });
+            BridgeCommand::ApplyNormalStyle { caret_run_id } => {
+                let para_id = paragraph_id_from_caret(&session.document, caret_run_id);
+                if let Some(para_id) = para_id {
+                    if let Some(cmd) = normal_style_command_for(para_id) {
+                        let _ = session.apply(cmd);
+                        version = rebuild(&session, &mut layout, &mut version, current_page);
+                        let _ = event_tx.send(BridgeEvent::DisplayListReady {
+                            page: current_page,
+                            version,
+                        });
+                    }
                 }
             }
-            BridgeCommand::ApplyNumberedList => {
-                if let Some(cmd) = numbered_list_command(&session.document) {
-                    let _ = session.apply(cmd);
-                    version = rebuild(&session, &mut layout, &mut version, current_page);
-                    let _ = event_tx.send(BridgeEvent::DisplayListReady {
-                        page: current_page,
-                        version,
-                    });
+            BridgeCommand::ApplyBulletList { caret_run_id } => {
+                let para_id = paragraph_id_from_caret(&session.document, caret_run_id);
+                if let Some(para_id) = para_id {
+                    if let Some(cmd) = bullet_list_command_for(para_id) {
+                        let _ = session.apply(cmd);
+                        version = rebuild(&session, &mut layout, &mut version, current_page);
+                        let _ = event_tx.send(BridgeEvent::DisplayListReady {
+                            page: current_page,
+                            version,
+                        });
+                    }
+                }
+            }
+            BridgeCommand::ApplyNumberedList { caret_run_id } => {
+                let para_id = paragraph_id_from_caret(&session.document, caret_run_id);
+                if let Some(para_id) = para_id {
+                    if let Some(cmd) = numbered_list_command_for(para_id) {
+                        let _ = session.apply(cmd);
+                        version = rebuild(&session, &mut layout, &mut version, current_page);
+                        let _ = event_tx.send(BridgeEvent::DisplayListReady {
+                            page: current_page,
+                            version,
+                        });
+                    }
                 }
             }
             BridgeCommand::InsertTable { rows, cols } => {
@@ -265,6 +312,17 @@ fn worker_loop(
             }
             BridgeCommand::InsertImage { width, height } => {
                 if let Some(cmd) = insert_image_command(&session.document, width, height) {
+                    let _ = session.apply(cmd);
+                    version = rebuild(&session, &mut layout, &mut version, current_page);
+                    let _ = event_tx.send(BridgeEvent::DisplayListReady {
+                        page: current_page,
+                        version,
+                    });
+                }
+            }
+            BridgeCommand::InsertPageBreak { caret_run_id } => {
+                if let Some(cmd) = insert_page_break_command_for(&session.document, caret_run_id)
+                {
                     let _ = session.apply(cmd);
                     version = rebuild(&session, &mut layout, &mut version, current_page);
                     let _ = event_tx.send(BridgeEvent::DisplayListReady {
@@ -338,6 +396,15 @@ fn worker_loop(
     }
 }
 
+fn paragraph_id_from_caret(
+    doc: &tw_model::Document,
+    caret_run_id: Option<NodeId>,
+) -> Option<NodeId> {
+    caret_run_id
+        .and_then(|run_id| tw_edit::paragraph_id_for_run(doc, run_id).ok())
+        .or_else(|| first_paragraph_id(doc))
+}
+
 pub fn first_paragraph_id(doc: &tw_model::Document) -> Option<NodeId> {
     doc.sections.first()?.blocks.iter().find_map(|b| match b {
         Block::Paragraph(p) => Some(p.id),
@@ -353,10 +420,9 @@ pub fn last_block_id(doc: &tw_model::Document) -> Option<NodeId> {
     })
 }
 
-pub fn numbered_list_command(doc: &tw_model::Document) -> Option<Command> {
-    let para_id = first_paragraph_id(doc)?;
+pub fn numbered_list_command_for(paragraph_id: NodeId) -> Option<Command> {
     Some(Command::SetNumbering {
-        paragraph_id: para_id,
+        paragraph_id,
         numbering: Some(NumberingRef {
             numbering_id: 2,
             level: 0,
@@ -364,10 +430,9 @@ pub fn numbered_list_command(doc: &tw_model::Document) -> Option<Command> {
     })
 }
 
-pub fn bullet_list_command(doc: &tw_model::Document) -> Option<Command> {
-    let para_id = first_paragraph_id(doc)?;
+pub fn bullet_list_command_for(paragraph_id: NodeId) -> Option<Command> {
     Some(Command::SetNumbering {
-        paragraph_id: para_id,
+        paragraph_id,
         numbering: Some(NumberingRef {
             numbering_id: 1,
             level: 0,
@@ -375,12 +440,33 @@ pub fn bullet_list_command(doc: &tw_model::Document) -> Option<Command> {
     })
 }
 
-pub fn heading1_command(doc: &tw_model::Document) -> Option<Command> {
-    let para_id = first_paragraph_id(doc)?;
+pub fn heading1_command_for(paragraph_id: NodeId) -> Option<Command> {
     Some(Command::ApplyParagraphStyle {
-        paragraph_id: para_id,
+        paragraph_id,
         style_name: "Heading 1".into(),
     })
+}
+
+pub fn normal_style_command_for(paragraph_id: NodeId) -> Option<Command> {
+    Some(Command::ApplyParagraphStyle {
+        paragraph_id,
+        style_name: "Normal".into(),
+    })
+}
+
+pub fn numbered_list_command(doc: &tw_model::Document) -> Option<Command> {
+    let para_id = first_paragraph_id(doc)?;
+    numbered_list_command_for(para_id)
+}
+
+pub fn bullet_list_command(doc: &tw_model::Document) -> Option<Command> {
+    let para_id = first_paragraph_id(doc)?;
+    bullet_list_command_for(para_id)
+}
+
+pub fn heading1_command(doc: &tw_model::Document) -> Option<Command> {
+    let para_id = first_paragraph_id(doc)?;
+    heading1_command_for(para_id)
 }
 
 pub fn insert_table_command(doc: &tw_model::Document, rows: u32, cols: u32) -> Option<Command> {
@@ -398,5 +484,15 @@ pub fn insert_image_command(doc: &tw_model::Document, width: f32, height: f32) -
         after_block_id: after,
         width,
         height,
+    })
+}
+
+pub fn insert_page_break_command_for(
+    doc: &tw_model::Document,
+    caret_run_id: Option<NodeId>,
+) -> Option<Command> {
+    let after = paragraph_id_from_caret(doc, caret_run_id)?;
+    Some(Command::InsertPageBreak {
+        after_block_id: after,
     })
 }

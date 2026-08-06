@@ -127,6 +127,10 @@ class EditorMenuBar extends StatelessWidget {
               label: 'Save as HTML…',
               onSelected: () => onSaveAs('html'),
             ),
+            PlatformMenuItem(
+              label: 'Export PDF…',
+              onSelected: controller.exportPdf,
+            ),
           ],
         ),
       ],
@@ -156,7 +160,7 @@ class EditorMenuBar extends StatelessWidget {
         PlatformMenuItem(
           label: 'Undo',
           shortcut: const SingleActivator(LogicalKeyboardKey.keyZ, meta: true),
-          onSelected: () {},
+          onSelected: controller.undo,
         ),
         PlatformMenuItem(
           label: 'Redo',
@@ -165,7 +169,7 @@ class EditorMenuBar extends StatelessWidget {
             meta: true,
             shift: true,
           ),
-          onSelected: () {},
+          onSelected: controller.redo,
         ),
         PlatformMenuItemGroup(
           members: [

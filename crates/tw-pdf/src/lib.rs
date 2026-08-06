@@ -55,9 +55,7 @@ impl MinimalPdfWriter {
 
     fn add_page(&mut self, width: f32, height: f32, list: &tw_render::DisplayList, page: &PageLayout) {
         let mut content = String::new();
-        content.push_str("BT\n/F1 12 Tf\n");
         append_page_text(&mut content, height, page);
-        content.push_str("ET\n");
 
         for chunk in list.rect_batch.rects.chunks(4) {
             if chunk.len() == 4 {

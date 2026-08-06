@@ -167,6 +167,10 @@ impl TextShaper {
         );
     }
 
+    pub fn configure_from_theme(&mut self, minor_font: &str, major_font: &str) {
+        self.fonts.configure_document(minor_font, major_font);
+    }
+
     pub fn default_font(&mut self) -> Option<FontId> {
         self.fonts.resolve(None)
     }

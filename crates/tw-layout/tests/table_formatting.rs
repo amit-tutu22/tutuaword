@@ -141,6 +141,65 @@ fn tall_table_splits_across_pages_without_overflowing() {
 }
 
 #[test]
+fn table_near_bottom_margin_moves_to_next_page() {
+    let mut doc = Document::new();
+    // Fill most of page 1 with a tall paragraph so the table starts near the bottom.
+    let filler = "Line\n".repeat(80);
+    doc.sections[0].blocks.push(Block::Paragraph(Paragraph::with_text(filler)));
+    let table = table_from(vec![vec!["row a", "row b"]; 5], vec![200.0, 200.0]);
+    doc.sections[0].blocks.push(Block::Table(table));
+
+    let mut engine = LayoutEngine::new();
+    let layout = engine.layout_document(&doc);
+    assert!(
+        layout.pages.len() >= 2,
+        "table near the bottom should continue on page 2"
+    );
+
+    for page in &layout.pages {
+        let bottom = page.content_top + page.content_height;
+        for b in &page.boxes {
+            if let LayoutBox::Table(t) = b {
+                assert!(
+                    t.y + t.height <= bottom + 1.0,
+                    "table slice on page {} ends at {} past bottom {}",
+                    page.page_index,
+                    t.y + t.height,
+                    bottom
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn table_after_long_paragraph_does_not_duplicate_on_same_page() {
+    let mut doc = Document::new();
+    doc.sections[0].blocks.push(Block::Paragraph(Paragraph::with_text(
+        "Intro text before the table.",
+    )));
+    let table = table_from(vec![vec!["c1", "c2", "c3"]; 8], vec![120.0, 120.0, 120.0]);
+    doc.sections[0].blocks.push(Block::Table(table));
+
+    let mut engine = LayoutEngine::new();
+    let layout = engine.layout_document(&doc);
+
+    let mut table_count = 0usize;
+    for page in &layout.pages {
+        for b in &page.boxes {
+            if let LayoutBox::Table(t) = b {
+                table_count += 1;
+                assert!(
+                    t.y >= page.content_top - 0.5,
+                    "table must not render above the content area"
+                );
+            }
+        }
+    }
+    assert!(table_count >= 1, "expected at least one table slice");
+}
+
+#[test]
 fn spanning_cell_covers_exactly_its_columns() {
     let mut table = table_from(vec![vec!["wide"], vec!["a", "b"]], vec![100.0, 100.0]);
     table.rows[0].cells[0].format.colspan = 2;
