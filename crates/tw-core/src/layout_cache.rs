@@ -1,5 +1,5 @@
 use parking_lot::RwLock;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tw_edit::{DocPosition, DocRange};
 use tw_layout::{HitTestResult, LayoutEngine, LineMap};
@@ -9,6 +9,9 @@ use tw_text::TextBuffer;
 #[derive(Clone, Default)]
 pub struct LayoutCache {
     line_maps: HashMap<u32, LineMap>,
+    page_epochs: HashMap<u32, u64>,
+    pending_pages: HashSet<u32>,
+    layout_epoch: u64,
     page_count: u32,
     document: Document,
     buffer: TextBuffer,
@@ -31,9 +34,53 @@ impl LayoutCache {
         document: &Document,
         buffer: &TextBuffer,
     ) {
+        self.layout_epoch += 1;
         self.update_from_engine(engine);
+        self.page_epochs.clear();
+        self.pending_pages.clear();
+        for page in 0..self.page_count {
+            self.page_epochs.insert(page, self.layout_epoch);
+        }
         self.document = document.clone();
         self.buffer = buffer.clone();
+    }
+
+    /// Incremental layout update: refresh relayouted pages, mark downstream pending.
+    pub fn update_from_session_incremental(
+        &mut self,
+        engine: &LayoutEngine,
+        document: &Document,
+        buffer: &TextBuffer,
+        epoch: u64,
+        relayout_start: u32,
+        page_count: u32,
+    ) {
+        self.layout_epoch = epoch;
+        self.page_count = page_count.max(1);
+        self.document = document.clone();
+        self.buffer = buffer.clone();
+
+        let relayout_end = relayout_start + engine.last_relayout_pages() as u32;
+        for page in relayout_start..relayout_end.min(page_count) {
+            if let Some(map) = engine.line_map(page) {
+                self.line_maps.insert(page, map.clone());
+                self.page_epochs.insert(page, epoch);
+                self.pending_pages.remove(&page);
+            }
+        }
+        for page in relayout_end..page_count {
+            if !self.line_maps.contains_key(&page) {
+                self.pending_pages.insert(page);
+            }
+        }
+    }
+
+    pub fn is_page_stale(&self, page: u32) -> bool {
+        self.pending_pages.contains(&page)
+    }
+
+    pub fn page_epoch(&self, page: u32) -> Option<u64> {
+        self.page_epochs.get(&page).copied()
     }
 
     pub fn text_in_range(
@@ -81,6 +128,9 @@ impl LayoutCache {
     }
 
     pub fn hit_test(&self, page: u32, x: f32, y: f32) -> Option<HitTestResult> {
+        if self.is_page_stale(page) {
+            return None;
+        }
         if let Some(map) = self.line_maps.get(&page) {
             if let Some(mut result) = map.hit_test(x, y) {
                 result.page = page;

@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
-/// Parsed display list from Rust tw-render binary format (v3).
+/// Parsed display list from Rust tw-render binary format (v3/v4).
 class DisplayListSnapshot {
   DisplayListSnapshot({
     required this.version,
@@ -45,7 +45,7 @@ class DisplayListSnapshot {
   final List<Uint8List> imagePayloads;
 
   factory DisplayListSnapshot.fromBytes(Uint8List bytes) {
-    if (bytes.length < 28) {
+    if (bytes.length < 20) {
       return DisplayListSnapshot.empty();
     }
     var offset = 0;
@@ -58,14 +58,20 @@ class DisplayListSnapshot {
     offset += 4;
     final pageHeight = _readF32(bytes, offset);
     offset += 4;
-    final atlasWidth = _readU32(bytes, offset);
-    offset += 4;
-    final atlasHeight = _readU32(bytes, offset);
-    offset += 4;
-    final atlasLen = _readU32(bytes, offset);
-    offset += 4;
-    final atlasPixels = bytes.sublist(offset, offset + atlasLen);
-    offset += atlasLen;
+
+    var atlasWidth = 0;
+    var atlasHeight = 0;
+    var atlasPixels = Uint8List(0);
+    if (fileVersion < 4) {
+      atlasWidth = _readU32(bytes, offset);
+      offset += 4;
+      atlasHeight = _readU32(bytes, offset);
+      offset += 4;
+      final atlasLen = _readU32(bytes, offset);
+      offset += 4;
+      atlasPixels = bytes.sublist(offset, offset + atlasLen);
+      offset += atlasLen;
+    }
 
     final glyphCount = _readU32(bytes, offset);
     offset += 4;
@@ -152,14 +158,23 @@ class DisplayListSnapshot {
   }
 
   Future<ui.Image?> buildAtlasImage() async {
-    if (atlasPixels.isEmpty || atlasWidth == 0 || atlasHeight == 0) {
+    return buildAtlasImageFromPixels(atlasPixels, atlasWidth, atlasHeight);
+  }
+
+  /// Upload RGBA atlas pixels to a GPU texture.
+  static Future<ui.Image?> buildAtlasImageFromPixels(
+    Uint8List pixels,
+    int width,
+    int height,
+  ) async {
+    if (pixels.isEmpty || width == 0 || height == 0) {
       return null;
     }
-    final buffer = await ui.ImmutableBuffer.fromUint8List(atlasPixels);
+    final buffer = await ui.ImmutableBuffer.fromUint8List(pixels);
     final descriptor = ui.ImageDescriptor.raw(
       buffer,
-      width: atlasWidth,
-      height: atlasHeight,
+      width: width,
+      height: height,
       pixelFormat: ui.PixelFormat.rgba8888,
     );
     final codec = await descriptor.instantiateCodec();
@@ -195,8 +210,12 @@ class DisplayListSnapshot {
     return decoded;
   }
 
-  bool get hasPaintableGlyphs =>
-      glyphCount > 0 && atlasPixels.isNotEmpty && atlasWidth > 0 && atlasHeight > 0;
+  bool get hasPaintableGlyphs => glyphCount > 0;
+
+  /// True when glyph draws need an atlas texture (v4 page lists omit pixels).
+  bool get needsAtlasTexture =>
+      glyphCount > 0 &&
+      (atlasPixels.isNotEmpty || atlasWidth == 0);
 
   int get glyphCount => glyphOffsets.length ~/ 2;
 

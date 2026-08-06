@@ -22,8 +22,9 @@ Read these documents in order if you are new to the project:
 14. [Performance Budgets](performance-budgets.md) — targets and measurement methods
 15. [Testing Strategy](testing-strategy.md) — golden images, round-trip corpus, benchmarks
 16. [Risk Mitigation](risk-mitigation.md) — Word-compatibility risks, staging (S0–S5), residual risk (wins on conflicts)
-17. [Long-Tail Gaps](long-tail-gaps.md) — partial/peripheral features not yet built (PDF fonts, Hunspell, parsers, plugins, AI)
-18. [UI Functionality Audit](ui-functionality-audit.md) — ribbon/menu wiring vs engine; P0/P1/P2 control status
+17. [Architecture Remediation](architecture-remediation.md) — R0–R3 fix plan when code diverges from ADRs (blocks F04+ until R1 exits)
+18. [Long-Tail Gaps](long-tail-gaps.md) — partial/peripheral features not yet built (PDF fonts, Hunspell, parsers, plugins, AI)
+19. [UI Functionality Audit](ui-functionality-audit.md) — ribbon/menu wiring vs engine; P0/P1/P2 control status
 
 ### Later Phases (interface specs only)
 
@@ -48,6 +49,7 @@ All significant technology choices are recorded in [adr/](adr/). Read ADRs when 
 | [0008](adr/0008-docx-package-passthrough.md) | DOCX package passthrough strategy |
 | [0009](adr/0009-crdt-selection.md) | CRDT selection (Yjs) |
 | [0010](adr/0010-ai-provider-abstraction.md) | AI provider abstraction |
+| [0011](adr/0011-architecture-remediation-program.md) | Architecture remediation program (R0–R3 gates) |
 
 ### Reference
 

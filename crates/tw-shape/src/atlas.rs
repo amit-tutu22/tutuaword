@@ -17,6 +17,8 @@ pub struct GlyphAtlas {
     pub width: u32,
     pub height: u32,
     pub pixels: Vec<u8>,
+    /// Monotonically increased whenever a new glyph entry is rasterized into the atlas.
+    pub generation: u64,
     entries: HashMap<AtlasKey, AtlasEntry>,
     cursor_x: u32,
     cursor_y: u32,
@@ -35,6 +37,7 @@ impl GlyphAtlas {
             width,
             height,
             pixels: vec![0; (width * height * 4) as usize],
+            generation: 0,
             entries: HashMap::new(),
             cursor_x: 0,
             cursor_y: 0,
@@ -84,6 +87,7 @@ impl GlyphAtlas {
             is_color: glyph.is_color,
         };
         self.entries.insert(key, entry.clone());
+        self.generation = self.generation.saturating_add(1);
         entry
     }
 

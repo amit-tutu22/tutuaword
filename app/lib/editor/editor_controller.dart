@@ -70,6 +70,10 @@ class EditorController extends ChangeNotifier {
   String _documentText = '';
   String? _currentPath;
   int _displayVersion = 0;
+  int _atlasGeneration = 0;
+  Uint8List _atlasPixels = Uint8List(0);
+  int _atlasWidth = 0;
+  int _atlasHeight = 0;
   double _pageWidth = 612;
   double _pageHeight = 792;
   Uint8List _displayListBytes = Uint8List(0);
@@ -90,6 +94,10 @@ class EditorController extends ChangeNotifier {
   bool _strikethrough = false;
   bool _subscript = false;
   bool _superscript = false;
+  bool _allCaps = false;
+  bool _smallCaps = false;
+  bool _hidden = false;
+  bool _ligatures = true;
   Color _fontColor = Colors.black;
   Color? _highlightColor;
   double _zoom = 1.0;
@@ -120,6 +128,8 @@ class EditorController extends ChangeNotifier {
   String? _scopedAccessPath;
   int _editGeneration = 0;
   int _lastAutosavedGeneration = 0;
+  int _nativeEditDepth = 0;
+  bool _autosaveInFlight = false;
 
   /// Active page text field — used for cut/copy/paste and Select All.
   void attachTextEditor(TextEditingController controller, FocusNode focusNode) {
@@ -395,6 +405,10 @@ class EditorController extends ChangeNotifier {
   double get pageWidth => _pageWidth;
   double get pageHeight => _pageHeight;
   int get displayVersion => _displayVersion;
+  int get atlasGeneration => _atlasGeneration;
+  Uint8List get atlasPixels => _atlasPixels;
+  int get atlasWidth => _atlasWidth;
+  int get atlasHeight => _atlasHeight;
   int get pageCount => _pageCount;
   int get currentPage => _currentPage;
   bool get printPreview => _printPreview;
@@ -407,12 +421,28 @@ class EditorController extends ChangeNotifier {
   bool get italic => _italic;
   bool get underline => _underline;
   bool get isEngineConnected => _engine != null;
+
+  @visibleForTesting
+  int get nativeEditDepth => _nativeEditDepth;
+
+  T _runNativeEdit<T>(T Function() action) {
+    _nativeEditDepth++;
+    try {
+      return action();
+    } finally {
+      _nativeEditDepth--;
+    }
+  }
   String get fontFamily => _fontFamily;
   double get fontSize => _fontSize;
   TextAlign get alignment => _alignment;
   bool get strikethrough => _strikethrough;
   bool get subscript => _subscript;
   bool get superscript => _superscript;
+  bool get allCaps => _allCaps;
+  bool get smallCaps => _smallCaps;
+  bool get hidden => _hidden;
+  bool get ligatures => _ligatures;
   Color get fontColor => _fontColor;
   Color? get highlightColor => _highlightColor;
   double get zoom => _zoom;
@@ -1044,7 +1074,7 @@ class EditorController extends ChangeNotifier {
     if (runId == null) return;
     final oldCaretX = _caretGeometry?.x;
     final oldCaretOffset = _caretOffset;
-    if (!_engine!.tryInsertText(runId, _caretOffset, char)) {
+    if (!_runNativeEdit(() => _engine!.tryInsertText(runId, _caretOffset, char))) {
       return;
     }
     _caretOffset += char.length;
@@ -1081,7 +1111,7 @@ class EditorController extends ChangeNotifier {
     if (runId == null) return;
     final prevY = _caretGeometry?.y ?? (_pageMargin + _fontSize);
     final prevX = _caretGeometry?.x ?? _pageMargin;
-    _engine!.splitParagraphAt(runId, _caretOffset);
+    _runNativeEdit(() => _engine!.splitParagraphAt(runId, _caretOffset));
     _selectionRects = const [];
     _refreshFromEngine();
     // Place caret on the new paragraph (line below the previous caret).
@@ -1100,7 +1130,9 @@ class EditorController extends ChangeNotifier {
     final runId = _caretRunId ?? _defaultRunId();
     if (runId == null) return;
     if (_caretOffset > 0) {
-      _engine!.deleteRange(runId, _caretOffset - 1, _caretOffset);
+      if (!_runNativeEdit(() => _engine!.deleteRange(runId, _caretOffset - 1, _caretOffset))) {
+        return;
+      }
       _caretOffset = _caretOffset - 1;
       _selAnchorRunId = runId;
       _selAnchorOffset = _caretOffset;
@@ -1123,7 +1155,9 @@ class EditorController extends ChangeNotifier {
 
     final startRun = prev.runId;
     final startOff = prev.charOffset > 0 ? prev.charOffset - 1 : 0;
-    if (!_engine!.deleteDocRange(startRun, startOff, runId, _caretOffset)) return;
+    if (!_runNativeEdit(() => _engine!.deleteDocRange(startRun, startOff, runId, _caretOffset))) {
+      return;
+    }
 
     _caretRunId = startRun;
     _caretOffset = startOff;
@@ -1146,7 +1180,7 @@ class EditorController extends ChangeNotifier {
     }
     final runId = _caretRunId ?? _defaultRunId();
     if (runId == null) return;
-    if (_engine!.deleteRange(runId, _caretOffset, _caretOffset + 1)) {
+    if (_runNativeEdit(() => _engine!.deleteRange(runId, _caretOffset, _caretOffset + 1))) {
       _selAnchorRunId = runId;
       _selAnchorOffset = _caretOffset;
       _selFocusRunId = runId;
@@ -1167,7 +1201,9 @@ class EditorController extends ChangeNotifier {
     if (next.runId == runId && next.charOffset == _caretOffset) return;
 
     final endOff = next.charOffset + 1;
-    if (!_engine!.deleteDocRange(runId, _caretOffset, next.runId, endOff)) return;
+    if (!_runNativeEdit(() => _engine!.deleteDocRange(runId, _caretOffset, next.runId, endOff))) {
+      return;
+    }
 
     _selAnchorRunId = runId;
     _selAnchorOffset = _caretOffset;
@@ -1191,11 +1227,14 @@ class EditorController extends ChangeNotifier {
       final start = anchorOff < focusOff ? anchorOff : focusOff;
       final end = anchorOff < focusOff ? focusOff : anchorOff;
       if (start >= end) return;
-      if (!_engine!.deleteRange(anchorRun, start, end)) return;
+      if (!_runNativeEdit(() => _engine!.deleteRange(anchorRun, start, end))) return;
       _caretRunId = anchorRun;
       _caretOffset = start;
     } else {
-      if (!_engine!.deleteDocRange(anchorRun, anchorOff, focusRun, focusOff)) return;
+      if (!_runNativeEdit(
+          () => _engine!.deleteDocRange(anchorRun, anchorOff, focusRun, focusOff))) {
+        return;
+      }
       _caretRunId = anchorRun;
       _caretOffset = anchorOff;
     }
@@ -1247,12 +1286,18 @@ class EditorController extends ChangeNotifier {
     final runId = _caretRunId ?? _defaultRunId();
     if (runId == null) return null;
     if (hasGlyphSelection && _selAnchorRunId != null && _selFocusRunId != null) {
-      return (
-        _selAnchorRunId!,
-        _selAnchorOffset,
-        _selFocusRunId!,
-        _selFocusOffset,
-      );
+      var startRun = _selAnchorRunId!;
+      var startOff = _selAnchorOffset;
+      var endRun = _selFocusRunId!;
+      var endOff = _selFocusOffset;
+      // Same-run selections dragged right-to-left must be ordered for the
+      // engine's SetCharFormat path (it rejects start > end).
+      if (startRun == endRun && startOff > endOff) {
+        final tmp = startOff;
+        startOff = endOff;
+        endOff = tmp;
+      }
+      return (startRun, startOff, endRun, endOff);
     }
     return (runId, _caretOffset, runId, _caretOffset);
   }
@@ -1304,8 +1349,12 @@ class EditorController extends ChangeNotifier {
 
   void toggleUnderline() {
     _underline = !_underline;
+    final underline = _underline;
     if (usesGlyphRendering && _engine != null) {
-      _applyCharFormatJson(_underline ? '{"underline":"Single"}' : '{"underline":"None"}');
+      _applyCharFormatJson(
+        underline ? '{"underline":"Single"}' : '{"underline":"None"}',
+      );
+      _underline = underline;
     }
     notifyListeners();
   }
@@ -1443,6 +1492,62 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void toggleAllCaps() {
+    _allCaps = !_allCaps;
+    if (_allCaps) _smallCaps = false;
+    final caps = _allCaps;
+    final smallCaps = _smallCaps;
+    if (usesGlyphRendering && _engine != null) {
+      _applyCharFormatJson(
+        jsonEncode({
+          'all_caps': caps,
+          'small_caps': false,
+        }),
+      );
+      _allCaps = caps;
+      _smallCaps = smallCaps;
+    }
+    notifyListeners();
+  }
+
+  void toggleSmallCaps() {
+    _smallCaps = !_smallCaps;
+    if (_smallCaps) _allCaps = false;
+    final caps = _allCaps;
+    final smallCaps = _smallCaps;
+    if (usesGlyphRendering && _engine != null) {
+      _applyCharFormatJson(
+        jsonEncode({
+          'small_caps': smallCaps,
+          'all_caps': false,
+        }),
+      );
+      _allCaps = caps;
+      _smallCaps = smallCaps;
+    }
+    notifyListeners();
+  }
+
+  void toggleHidden() {
+    _hidden = !_hidden;
+    final hidden = _hidden;
+    if (usesGlyphRendering && _engine != null) {
+      _applyCharFormatJson('{"hidden":$hidden}');
+      _hidden = hidden;
+    }
+    notifyListeners();
+  }
+
+  void toggleLigatures() {
+    _ligatures = !_ligatures;
+    final ligatures = _ligatures;
+    if (usesGlyphRendering && _engine != null) {
+      _applyCharFormatJson('{"ligatures":$ligatures}');
+      _ligatures = ligatures;
+    }
+    notifyListeners();
+  }
+
   void clearFormatting() {
     final range = _formatRange();
     if (range == null || _engine == null || !usesGlyphRendering) return;
@@ -1505,6 +1610,10 @@ class EditorController extends ChangeNotifier {
     _strikethrough = charFmt['strikethrough'] == true;
     _subscript = charFmt['subscript'] == true;
     _superscript = charFmt['superscript'] == true;
+    _allCaps = charFmt['all_caps'] == true;
+    _smallCaps = charFmt['small_caps'] == true;
+    _hidden = charFmt['hidden'] == true;
+    _ligatures = charFmt['ligatures'] != false;
     _fontFamily = charFmt['font_family'] as String? ?? 'Calibri';
     final fontSize = charFmt['font_size'];
     if (fontSize is num) {
@@ -1676,7 +1785,7 @@ class EditorController extends ChangeNotifier {
   }
 
   void undo() {
-    if (_engine != null && _engine!.undoEdit()) {
+    if (_engine != null && _runNativeEdit(() => _engine!.undoEdit())) {
       _refreshFromEngine();
       _syncRibbonFromCaret();
       _markDocumentDirty();
@@ -1686,7 +1795,7 @@ class EditorController extends ChangeNotifier {
   }
 
   void redo() {
-    if (_engine != null && _engine!.redoEdit()) {
+    if (_engine != null && _runNativeEdit(() => _engine!.redoEdit())) {
       _refreshFromEngine();
       _syncRibbonFromCaret();
       _markDocumentDirty();
@@ -1713,7 +1822,17 @@ class EditorController extends ChangeNotifier {
   @visibleForTesting
   Future<void> performAutosave() async {
     if (_editGeneration == _lastAutosavedGeneration) return;
+    while (_nativeEditDepth > 0) {
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+    }
+    if (_editGeneration == _lastAutosavedGeneration) return;
+    if (_autosaveInFlight) return;
+    _autosaveInFlight = true;
     try {
+      while (_nativeEditDepth > 0) {
+        await Future<void>.delayed(const Duration(milliseconds: 2));
+      }
+      if (_editGeneration == _lastAutosavedGeneration) return;
       final bytes = await _serializeDocument(formatExtension: 'twdoc');
       if (bytes.isEmpty) return;
       await _sessionStore.writeAutosave(
@@ -1724,6 +1843,8 @@ class EditorController extends ChangeNotifier {
       _lastAutosavedGeneration = _editGeneration;
     } catch (_) {
       // Autosave failures should not interrupt editing.
+    } finally {
+      _autosaveInFlight = false;
     }
   }
 
@@ -2125,6 +2246,7 @@ class EditorController extends ChangeNotifier {
     _displayVersion = data.version;
     _pageWidth = data.pageWidth;
     _pageHeight = data.pageHeight;
+    _refreshAtlasFromEngine(expectedGeneration: data.atlasGeneration);
     if (data.documentText.isNotEmpty || _documentText.isEmpty) {
       _documentText = data.documentText;
     }
@@ -2138,6 +2260,34 @@ class EditorController extends ChangeNotifier {
       _currentPage = _pageCount - 1;
     }
     _syncCaretGeometry();
+  }
+
+  void _refreshAtlasFromEngine({int? expectedGeneration}) {
+    if (_engine == null) {
+      _atlasGeneration = 0;
+      _atlasPixels = Uint8List(0);
+      _atlasWidth = 0;
+      _atlasHeight = 0;
+      return;
+    }
+    final atlas = _engine!.fetchAtlas();
+    if (atlas == null) return;
+    if (expectedGeneration != null && atlas.generation != expectedGeneration) {
+      return;
+    }
+    _atlasGeneration = atlas.generation;
+    _atlasWidth = atlas.width;
+    _atlasHeight = atlas.height;
+    _atlasPixels = _atlasPixelsFromWire(atlas.bytes);
+  }
+
+  /// Extract RGBA pixels from the atlas resource wire blob (header is 24 bytes).
+  Uint8List _atlasPixelsFromWire(Uint8List wire) {
+    if (wire.length < 24) return Uint8List(0);
+    final pixelLen =
+        ByteData.sublistView(wire, 20, 24).getUint32(0, Endian.little);
+    if (wire.length < 24 + pixelLen) return Uint8List(0);
+    return Uint8List.sublistView(wire, 24, 24 + pixelLen);
   }
 
   void _syncCaretGeometry() {

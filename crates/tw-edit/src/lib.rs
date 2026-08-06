@@ -463,7 +463,11 @@ fn set_char_format(
     merge: bool,
 ) -> Result<EditResult, EditError> {
     let run_len = buffer.len(run_id);
-    let end = end.min(run_len);
+    let mut start = start;
+    let mut end = end.min(run_len);
+    if start > end {
+        std::mem::swap(&mut start, &mut end);
+    }
     if start > end {
         return Err(EditError::InvalidRange);
     }

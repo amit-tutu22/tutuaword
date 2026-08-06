@@ -1,8 +1,20 @@
 use tw_layout::{LayoutBox, PageLayout, TextLine};
 use tw_shape::GlyphAtlas;
 
-/// v2 added path and image batches; v3 added encoded image payloads.
-pub const DISPLAY_LIST_VERSION: u32 = 3;
+/// v2 added path and image batches; v3 added encoded image payloads; v4 drops embedded atlas pixels.
+pub const DISPLAY_LIST_VERSION: u32 = 4;
+
+/// Separate atlas resource wire format version.
+pub const ATLAS_RESOURCE_VERSION: u32 = 1;
+
+/// Atlas pixels transferred independently from page display lists (R1.2).
+#[derive(Debug, Clone)]
+pub struct AtlasResource {
+    pub generation: u64,
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Vec<u8>,
+}
 
 #[derive(Debug, Clone)]
 pub struct DisplayList {
@@ -138,9 +150,74 @@ impl DisplayListBuilder {
         }
     }
 
-    pub fn to_bytes(list: &DisplayList) -> Vec<u8> {
+    /// Build a page display list without embedding atlas pixels (v4 page payload).
+    pub fn from_page_without_atlas(page: &PageLayout, version: u64) -> DisplayList {
+        let mut list = Self::from_page(page, &GlyphAtlas::default(), version);
+        list.atlas_width = 0;
+        list.atlas_height = 0;
+        list.atlas_pixels.clear();
+        list
+    }
+
+    /// Serialize a page display list without embedded atlas pixels (wire format v4).
+    pub fn to_page_bytes(list: &DisplayList) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&DISPLAY_LIST_VERSION.to_le_bytes());
+        bytes.extend_from_slice(&list.version.to_le_bytes());
+        bytes.extend_from_slice(&list.page_width.to_le_bytes());
+        bytes.extend_from_slice(&list.page_height.to_le_bytes());
+
+        write_glyph_batch(&mut bytes, &list.atlas_batch);
+        write_rect_batch(&mut bytes, &list.rect_batch);
+        write_path_batch(&mut bytes, &list.path_batch);
+        write_image_batch(&mut bytes, &list.image_batch);
+
+        bytes
+    }
+
+    /// Serialize atlas pixels as a standalone resource for FFI transfer.
+    pub fn atlas_to_bytes(atlas: &GlyphAtlas, generation: u64) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&ATLAS_RESOURCE_VERSION.to_le_bytes());
+        bytes.extend_from_slice(&generation.to_le_bytes());
+        bytes.extend_from_slice(&atlas.width.to_le_bytes());
+        bytes.extend_from_slice(&atlas.height.to_le_bytes());
+        let pixels = atlas.pixels_rgba();
+        bytes.extend_from_slice(&(pixels.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(pixels);
+        bytes
+    }
+
+    pub fn atlas_from_bytes(bytes: &[u8]) -> Option<AtlasResource> {
+        if bytes.len() < 24 {
+            return None;
+        }
+        let mut offset = 0usize;
+        let file_version = read_u32(bytes, &mut offset)?;
+        if file_version != ATLAS_RESOURCE_VERSION {
+            return None;
+        }
+        let generation = read_u64(bytes, &mut offset)?;
+        let width = read_u32(bytes, &mut offset)?;
+        let height = read_u32(bytes, &mut offset)?;
+        let pixel_len = read_u32(bytes, &mut offset)? as usize;
+        if offset + pixel_len > bytes.len() {
+            return None;
+        }
+        let pixels = bytes[offset..offset + pixel_len].to_vec();
+        Some(AtlasResource {
+            generation,
+            width,
+            height,
+            pixels,
+        })
+    }
+
+    pub fn to_bytes(list: &DisplayList) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        // Legacy v3 wire format with embedded atlas pixels (PDF export, tests).
+        const LEGACY_V3: u32 = 3;
+        bytes.extend_from_slice(&LEGACY_V3.to_le_bytes());
         bytes.extend_from_slice(&list.version.to_le_bytes());
         bytes.extend_from_slice(&list.page_width.to_le_bytes());
         bytes.extend_from_slice(&list.page_height.to_le_bytes());
@@ -160,44 +237,29 @@ impl DisplayListBuilder {
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Option<DisplayList> {
-        if bytes.len() < 28 {
+        if bytes.len() < 20 {
             return None;
         }
         let mut offset = 0usize;
-
-        fn read_u32(bytes: &[u8], offset: &mut usize) -> Option<u32> {
-            let end = *offset + 4;
-            let v = u32::from_le_bytes(bytes.get(*offset..end)?.try_into().ok()?);
-            *offset = end;
-            Some(v)
-        }
-
-        fn read_u64(bytes: &[u8], offset: &mut usize) -> Option<u64> {
-            let end = *offset + 8;
-            let v = u64::from_le_bytes(bytes.get(*offset..end)?.try_into().ok()?);
-            *offset = end;
-            Some(v)
-        }
-
-        fn read_f32(bytes: &[u8], offset: &mut usize) -> Option<f32> {
-            let end = *offset + 4;
-            let v = f32::from_le_bytes(bytes.get(*offset..end)?.try_into().ok()?);
-            *offset = end;
-            Some(v)
-        }
 
         let file_version = read_u32(bytes, &mut offset)?;
         let version = read_u64(bytes, &mut offset)?;
         let page_width = read_f32(bytes, &mut offset)?;
         let page_height = read_f32(bytes, &mut offset)?;
-        let atlas_width = read_u32(bytes, &mut offset)?;
-        let atlas_height = read_u32(bytes, &mut offset)?;
-        let atlas_len = read_u32(bytes, &mut offset)? as usize;
-        if offset + atlas_len > bytes.len() {
-            return None;
-        }
-        let atlas_pixels = bytes[offset..offset + atlas_len].to_vec();
-        offset += atlas_len;
+
+        let (atlas_width, atlas_height, atlas_pixels) = if file_version >= 4 {
+            (0, 0, Vec::new())
+        } else {
+            let atlas_width = read_u32(bytes, &mut offset)?;
+            let atlas_height = read_u32(bytes, &mut offset)?;
+            let atlas_len = read_u32(bytes, &mut offset)? as usize;
+            if offset + atlas_len > bytes.len() {
+                return None;
+            }
+            let atlas_pixels = bytes[offset..offset + atlas_len].to_vec();
+            offset += atlas_len;
+            (atlas_width, atlas_height, atlas_pixels)
+        };
 
         let atlas_batch = read_glyph_batch(bytes, &mut offset)?;
         let rect_batch = read_rect_batch(bytes, &mut offset)?;
@@ -224,6 +286,27 @@ impl DisplayListBuilder {
             path_batch,
         })
     }
+}
+
+fn read_u32(bytes: &[u8], offset: &mut usize) -> Option<u32> {
+    let end = *offset + 4;
+    let v = u32::from_le_bytes(bytes.get(*offset..end)?.try_into().ok()?);
+    *offset = end;
+    Some(v)
+}
+
+fn read_u64(bytes: &[u8], offset: &mut usize) -> Option<u64> {
+    let end = *offset + 8;
+    let v = u64::from_le_bytes(bytes.get(*offset..end)?.try_into().ok()?);
+    *offset = end;
+    Some(v)
+}
+
+fn read_f32(bytes: &[u8], offset: &mut usize) -> Option<f32> {
+    let end = *offset + 4;
+    let v = f32::from_le_bytes(bytes.get(*offset..end)?.try_into().ok()?);
+    *offset = end;
+    Some(v)
 }
 
 fn append_line_decorations(line: &TextLine, batch: &mut RectBatch) {
@@ -458,5 +541,39 @@ mod tests {
         let decoded = DisplayListBuilder::from_bytes(&bytes).unwrap();
         assert_eq!(decoded.version, 1);
         assert_eq!(decoded.atlas_batch.transforms.len(), list.atlas_batch.transforms.len());
+    }
+
+    #[test]
+    fn v4_page_bytes_omit_atlas_pixels() {
+        let doc = Document::with_paragraph("Hello World");
+        let mut engine = LayoutEngine::new();
+        let layout = engine.layout_document(&doc);
+        let page = layout.pages.first().unwrap();
+        let list = DisplayListBuilder::from_page_without_atlas(page, 2);
+        let bytes = DisplayListBuilder::to_page_bytes(&list);
+        assert_eq!(u32::from_le_bytes(bytes[0..4].try_into().unwrap()), 4);
+        let decoded = DisplayListBuilder::from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.version, 2);
+        assert!(decoded.atlas_pixels.is_empty());
+        assert_eq!(decoded.atlas_width, 0);
+        assert_eq!(
+            decoded.atlas_batch.transforms.len(),
+            list.atlas_batch.transforms.len()
+        );
+    }
+
+    #[test]
+    fn atlas_resource_round_trip() {
+        let doc = Document::with_paragraph("Hello");
+        let mut engine = LayoutEngine::new();
+        engine.layout_document(&doc);
+        let atlas = engine.atlas();
+        let generation = atlas.generation;
+        let bytes = DisplayListBuilder::atlas_to_bytes(atlas, generation);
+        let decoded = DisplayListBuilder::atlas_from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.generation, generation);
+        assert_eq!(decoded.width, atlas.width);
+        assert_eq!(decoded.height, atlas.height);
+        assert_eq!(decoded.pixels.len(), atlas.pixels_rgba().len());
     }
 }

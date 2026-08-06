@@ -8,6 +8,7 @@ Product feature backlog contract: **one phase per capability area**, each split 
 |-----|------|
 | [roadmap.md](roadmap.md) / [phase-plan.md](phase-plan.md) | Calendar phases P1–P6, team scale |
 | [risk-mitigation.md](risk-mitigation.md) | Word fidelity staging S0–S5 (wins on conflicts) |
+| [architecture-remediation.md](architecture-remediation.md) | R0–R3 engineering gates (**blocks F04+ until R1 exits**; [ADR-0011](adr/0011-architecture-remediation-program.md)) |
 | [testing-strategy.md](testing-strategy.md) | Test pyramid, CI, golden vs Word baselines |
 | [long-tail-gaps.md](long-tail-gaps.md) | Honest *code* status for deferred work |
 | [ui-functionality-audit.md](ui-functionality-audit.md) | Ribbon/menu wiring vs engine |
@@ -24,6 +25,7 @@ Product feature backlog contract: **one phase per capability area**, each split 
 | Integration tests | `I-Fnn-Sx-short-name` in `app/test/` or `crates/tw-core/tests/` |
 | Status | **Implemented** / **Partial** / **Stub** / **Missing** (baseline snapshot) |
 | Edits | All mutations via `Command` in `tw-edit` ([ADR-0007](adr/0007-single-mutation-path-for-undo-and-crdt.md)) |
+| Remediation | F04+ stages **blocked** until [R1 exits](architecture-remediation.md#r1--performance-shape) ([ADR-0011](adr/0011-architecture-remediation-program.md)) |
 | DOCX | Package passthrough + Tier A/B/C ([ADR-0008](adr/0008-docx-package-passthrough.md)) |
 
 ### Test spec template (used in each stage)
@@ -289,7 +291,7 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Tests:** `crates/tw-core/tests/f03_s4_hidden_plaintext.rs`, `crates/tw-docx/tests/f03_s4_caps_hidden_roundtrip.rs`, `crates/tw-layout/tests/f03_s4_hidden_layout.rs`, `crates/tw-shape/src/shaper.rs` (unit)
 
-**Exit:** Hidden text omitted from `document_plain_text` and layout; caps/hidden round-trip via DOCX; `liga`/`smcp` OpenType features in shaper.
+**Exit:** Hidden text omitted from `document_plain_text` and layout; caps/hidden round-trip via DOCX; `liga`/`smcp` OpenType features in shaper; Home ribbon toggles for All Caps, Small Caps, Hidden, and Ligatures.
 
 ---
 

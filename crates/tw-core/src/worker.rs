@@ -4,7 +4,8 @@ use crate::snapshot::{
     document_plain_text, document_properties_json, snapshot_from_pages, SinglePageSnapshot,
     SnapshotBuffer,
 };
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, TrySendError};
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use tw_edit::{paste, Command, EditSession};
@@ -13,6 +14,66 @@ use tw_model::{Block, NodeId, NumberingRef};
 use tw_pdf::PdfExporter;
 use tw_render::DisplayListBuilder;
 
+/// Reserved for the worker's initial document-ready event (not tied to a caller command).
+pub const STARTUP_REQUEST_ID: u64 = 0;
+
+/// Bounded command queue depth (session blocks on `send` when full).
+pub const COMMAND_QUEUE_CAPACITY: usize = 512;
+
+/// Bounded worker → session event channel; overflow uses drop-oldest backpressure.
+pub const EVENT_CHANNEL_CAPACITY: usize = 256;
+
+/// Outbound event queue with per-page `DisplayListReady` coalescing and drop-oldest.
+struct EventPublisher {
+    tx: Sender<BridgeEvent>,
+    buffer: VecDeque<BridgeEvent>,
+}
+
+impl EventPublisher {
+    fn new(tx: Sender<BridgeEvent>) -> Self {
+        Self {
+            tx,
+            buffer: VecDeque::new(),
+        }
+    }
+
+    fn send(&mut self, event: BridgeEvent) {
+        if let BridgeEvent::DisplayListReady { page, .. } = &event {
+            self.coalesce_display_ready(*page);
+        }
+        while self.buffer.len() >= EVENT_CHANNEL_CAPACITY {
+            self.buffer.pop_front();
+        }
+        self.buffer.push_back(event);
+        self.flush();
+    }
+
+    fn coalesce_display_ready(&mut self, page: u32) {
+        self.buffer.retain(|event| {
+            !matches!(
+                event,
+                BridgeEvent::DisplayListReady { page: p, .. } if *p == page
+            )
+        });
+    }
+
+    fn flush(&mut self) {
+        while let Some(event) = self.buffer.front() {
+            match self.tx.try_send(event.clone()) {
+                Ok(()) => {
+                    self.buffer.pop_front();
+                }
+                Err(TrySendError::Full(_)) => break,
+                Err(TrySendError::Disconnected(_)) => {
+                    self.buffer.clear();
+                    break;
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum BridgeCommand {
     NewDocument,
     OpenDocument {
@@ -60,25 +121,60 @@ pub enum BridgeCommand {
     Shutdown,
 }
 
+/// Command envelope with correlation id for FFI/event routing.
 #[derive(Debug, Clone)]
+pub struct QueuedCommand {
+    pub request_id: u64,
+    pub inner: BridgeCommand,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BridgeEvent {
-    DisplayListReady { page: u32, version: u64 },
-    DocumentOpened { page_count: u32 },
-    DocumentSaved { data: Vec<u8> },
-    SpellCheckResult { misspellings: Vec<String> },
-    Error { message: String },
+    DisplayListReady {
+        request_id: u64,
+        page: u32,
+        version: u64,
+    },
+    DocumentOpened {
+        request_id: u64,
+        page_count: u32,
+    },
+    DocumentSaved {
+        request_id: u64,
+        data: Vec<u8>,
+    },
+    SpellCheckResult {
+        request_id: u64,
+        misspellings: Vec<String>,
+    },
+    Error {
+        request_id: u64,
+        message: String,
+    },
+}
+
+impl BridgeEvent {
+    pub fn request_id(&self) -> u64 {
+        match self {
+            BridgeEvent::DisplayListReady { request_id, .. } => *request_id,
+            BridgeEvent::DocumentOpened { request_id, .. } => *request_id,
+            BridgeEvent::DocumentSaved { request_id, .. } => *request_id,
+            BridgeEvent::SpellCheckResult { request_id, .. } => *request_id,
+            BridgeEvent::Error { request_id, .. } => *request_id,
+        }
+    }
 }
 
 pub struct WorkerHandle {
-    pub cmd_tx: Sender<BridgeCommand>,
+    pub cmd_tx: Sender<QueuedCommand>,
     pub event_rx: Receiver<BridgeEvent>,
     join: Option<JoinHandle<()>>,
 }
 
 impl WorkerHandle {
     pub fn spawn(snapshot: Arc<SnapshotBuffer>, layout_cache: crate::SharedLayoutCache) -> Self {
-        let (cmd_tx, cmd_rx) = crossbeam_channel::bounded(512);
-        let (event_tx, event_rx) = crossbeam_channel::unbounded();
+        let (cmd_tx, cmd_rx) = crossbeam_channel::bounded(COMMAND_QUEUE_CAPACITY);
+        let (event_tx, event_rx) = crossbeam_channel::bounded(EVENT_CHANNEL_CAPACITY);
 
         let join = thread::spawn(move || {
             worker_loop(cmd_rx, event_tx, snapshot, layout_cache);
@@ -92,7 +188,10 @@ impl WorkerHandle {
     }
 
     pub fn shutdown(&mut self) {
-        let _ = self.cmd_tx.send(BridgeCommand::Shutdown);
+        let _ = self.cmd_tx.send(QueuedCommand {
+            request_id: STARTUP_REQUEST_ID,
+            inner: BridgeCommand::Shutdown,
+        });
         if let Some(join) = self.join.take() {
             let _ = join.join();
         }
@@ -100,38 +199,84 @@ impl WorkerHandle {
 }
 
 fn worker_loop(
-    cmd_rx: Receiver<BridgeCommand>,
+    cmd_rx: Receiver<QueuedCommand>,
     event_tx: Sender<BridgeEvent>,
     snapshot: Arc<SnapshotBuffer>,
     layout_cache: crate::SharedLayoutCache,
 ) {
+    let mut events = EventPublisher::new(event_tx);
     let mut session = EditSession::new();
     let mut format_ctx = FormatContext::new_document();
     let mut layout = LayoutEngine::new();
     let mut version: u64 = 0;
     let mut current_page: u32 = 0;
+    let mut cached_pages: Vec<SinglePageSnapshot> = Vec::new();
 
     let rebuild = |session: &EditSession,
                    layout: &mut LayoutEngine,
                    version: &mut u64,
-                   current_page: u32| {
-        layout.invalidate_all();
+                   current_page: u32,
+                   affected_nodes: Option<&[NodeId]>,
+                   cached_pages: &mut Vec<SinglePageSnapshot>| {
+        match affected_nodes {
+            Some(nodes) if !nodes.is_empty() => {
+                layout.invalidate_nodes(&session.document, nodes);
+            }
+            _ => layout.invalidate_all(),
+        }
         let doc_layout = layout.layout_document(&session.document);
         *version += 1;
         let text = document_plain_text(&session.document);
         let read_only = session.document.settings.read_only;
-        let pages: Vec<SinglePageSnapshot> = doc_layout
-            .pages
-            .iter()
-            .map(|page| {
-                let list = DisplayListBuilder::from_page(page, layout.atlas(), *version);
-                SinglePageSnapshot {
-                    bytes: DisplayListBuilder::to_bytes(&list),
+        let relayout_start = layout.relayout_start_page() as usize;
+        let relayout_count = layout.last_relayout_pages();
+        let is_incremental = matches!(affected_nodes, Some(nodes) if !nodes.is_empty())
+            && relayout_count < doc_layout.pages.len();
+
+        let pages: Vec<SinglePageSnapshot> = if is_incremental
+            && cached_pages.len() == doc_layout.pages.len()
+        {
+            let mut display_targets: Vec<usize> = (relayout_start
+                ..relayout_start + relayout_count)
+                .filter(|&idx| idx == current_page as usize)
+                .collect();
+            if display_targets.is_empty() {
+                display_targets.push(relayout_start);
+            }
+            for idx in display_targets {
+                let page = &doc_layout.pages[idx];
+                let list =
+                    DisplayListBuilder::from_page_without_atlas(page, *version);
+                cached_pages[idx] = SinglePageSnapshot {
+                    bytes: Arc::new(DisplayListBuilder::to_page_bytes(&list)),
                     page_width: page.width,
                     page_height: page.height,
-                }
-            })
-            .collect();
+                };
+            }
+            cached_pages.clone()
+        } else {
+            doc_layout
+                .pages
+                .iter()
+                .map(|page| {
+                    let list =
+                        DisplayListBuilder::from_page_without_atlas(page, *version);
+                    SinglePageSnapshot {
+                        bytes: Arc::new(DisplayListBuilder::to_page_bytes(&list)),
+                        page_width: page.width,
+                        page_height: page.height,
+                    }
+                })
+                .collect()
+        };
+
+        *cached_pages = pages.clone();
+
+        let atlas = layout.atlas();
+        let atlas_generation = atlas.generation;
+        let atlas_width = atlas.width;
+        let atlas_height = atlas.height;
+        let atlas_bytes = Arc::new(DisplayListBuilder::atlas_to_bytes(atlas, atlas_generation));
 
         let page_count = pages.len().max(1) as u32;
         let props_json = document_properties_json(&session.document, page_count);
@@ -140,27 +285,47 @@ fn worker_loop(
             pages,
             page_index,
             *version,
+            atlas_generation,
+            atlas_width,
+            atlas_height,
+            atlas_bytes,
             text,
             props_json,
             read_only,
         ));
-        layout_cache
-            .write()
-            .update_from_session(layout, &session.document, &session.buffer);
+        let mut cache = layout_cache.write();
+        if is_incremental {
+            cache.update_from_session_incremental(
+                layout,
+                &session.document,
+                &session.buffer,
+                *version,
+                relayout_start as u32,
+                page_count,
+            );
+        } else {
+            cache.update_from_session(layout, &session.document, &session.buffer);
+        }
         *version
     };
 
-    version = rebuild(&session, &mut layout, &mut version, current_page);
+    version = rebuild(&session, &mut layout, &mut version, current_page, None, &mut cached_pages);
     let page_count = layout.page_count() as u32;
-    let _ = event_tx.send(BridgeEvent::DocumentOpened { page_count });
+    events.send(BridgeEvent::DocumentOpened {
+        request_id: STARTUP_REQUEST_ID,
+        page_count,
+    });
 
-    let mut pending: Option<BridgeCommand> = None;
+    let mut pending: Option<QueuedCommand> = None;
 
     loop {
-        let cmd = match pending.take() {
-            Some(cmd) => cmd,
+        let QueuedCommand {
+            request_id: req_id,
+            inner: cmd,
+        } = match pending.take() {
+            Some(queued) => queued,
             None => match cmd_rx.recv() {
-                Ok(cmd) => cmd,
+                Ok(queued) => queued,
                 Err(_) => break,
             },
         };
@@ -170,9 +335,9 @@ fn worker_loop(
                 session = EditSession::new();
                 format_ctx = FormatContext::new_document();
                 current_page = 0;
-                version = rebuild(&session, &mut layout, &mut version, current_page);
+                version = rebuild(&session, &mut layout, &mut version, current_page, None, &mut cached_pages);
                 let page_count = layout.page_count() as u32;
-                let _ = event_tx.send(BridgeEvent::DocumentOpened { page_count });
+                events.send(BridgeEvent::DocumentOpened { request_id: req_id, page_count });
             }
             BridgeCommand::OpenDocument { data, path_hint } => {
                 match import_document_bundle(&data, path_hint.as_deref()) {
@@ -180,12 +345,13 @@ fn worker_loop(
                         format_ctx = FormatContext::from_bundle(bundle.clone(), path_hint);
                         session = EditSession::from_document(bundle.document);
                         current_page = 0;
-                        version = rebuild(&session, &mut layout, &mut version, current_page);
+                        version = rebuild(&session, &mut layout, &mut version, current_page, None, &mut cached_pages);
                         let page_count = layout.page_count() as u32;
-                        let _ = event_tx.send(BridgeEvent::DocumentOpened { page_count });
+                        events.send(BridgeEvent::DocumentOpened { request_id: req_id, page_count });
                     }
                     Err(e) => {
-                        let _ = event_tx.send(BridgeEvent::Error {
+                        events.send(BridgeEvent::Error {
+                            request_id: req_id,
                             message: e.to_string(),
                         });
                     }
@@ -193,10 +359,11 @@ fn worker_loop(
             }
             BridgeCommand::SaveDocument => match export_document(&session.document, &format_ctx) {
                 Ok(data) => {
-                    let _ = event_tx.send(BridgeEvent::DocumentSaved { data });
+                    events.send(BridgeEvent::DocumentSaved { request_id: req_id, data });
                 }
                 Err(e) => {
-                    let _ = event_tx.send(BridgeEvent::Error {
+                    events.send(BridgeEvent::Error {
+                        request_id: req_id,
                         message: e.to_string(),
                     });
                 }
@@ -205,10 +372,11 @@ fn worker_loop(
                 format_ctx.save_format = format;
                 match export_document(&session.document, &format_ctx) {
                     Ok(data) => {
-                        let _ = event_tx.send(BridgeEvent::DocumentSaved { data });
+                        events.send(BridgeEvent::DocumentSaved { request_id: req_id, data });
                     }
                     Err(e) => {
-                        let _ = event_tx.send(BridgeEvent::Error {
+                        events.send(BridgeEvent::Error {
+                            request_id: req_id,
                             message: e.to_string(),
                         });
                     }
@@ -219,7 +387,8 @@ fn worker_loop(
                 let text = document_plain_text(&session.document);
                 let issues = checker.check_text(&text);
                 let words: Vec<String> = issues.into_iter().map(|i| i.word).collect();
-                let _ = event_tx.send(BridgeEvent::SpellCheckResult {
+                events.send(BridgeEvent::SpellCheckResult {
+                    request_id: req_id,
                     misspellings: words,
                 });
             },
@@ -230,14 +399,16 @@ fn worker_loop(
                 match session.apply(Command::AcceptAllRevisions) {
                     Ok(_) => {
                         format_ctx.mark_document_modified();
-                        version = rebuild(&session, &mut layout, &mut version, current_page);
-                        let _ = event_tx.send(BridgeEvent::DisplayListReady {
+                        version = rebuild(&session, &mut layout, &mut version, current_page, None, &mut cached_pages);
+                        events.send(BridgeEvent::DisplayListReady {
+                            request_id: req_id,
                             page: current_page,
                             version,
                         });
                     }
                     Err(err) => {
-                        let _ = event_tx.send(BridgeEvent::Error {
+                        events.send(BridgeEvent::Error {
+                            request_id: req_id,
                             message: err.to_string(),
                         });
                     }
@@ -247,14 +418,16 @@ fn worker_loop(
                 match session.apply(Command::RejectAllRevisions) {
                     Ok(_) => {
                         format_ctx.mark_document_modified();
-                        version = rebuild(&session, &mut layout, &mut version, current_page);
-                        let _ = event_tx.send(BridgeEvent::DisplayListReady {
+                        version = rebuild(&session, &mut layout, &mut version, current_page, None, &mut cached_pages);
+                        events.send(BridgeEvent::DisplayListReady {
+                            request_id: req_id,
                             page: current_page,
                             version,
                         });
                     }
                     Err(err) => {
-                        let _ = event_tx.send(BridgeEvent::Error {
+                        events.send(BridgeEvent::Error {
+                            request_id: req_id,
                             message: err.to_string(),
                         });
                     }
@@ -268,19 +441,22 @@ fn worker_loop(
                 Ok(doc) => {
                     if paste::paste_fragment_at(&mut session, run_id, offset, &doc).is_ok() {
                         format_ctx.mark_document_modified();
-                        version = rebuild(&session, &mut layout, &mut version, current_page);
-                        let _ = event_tx.send(BridgeEvent::DisplayListReady {
+                        version = rebuild(&session, &mut layout, &mut version, current_page, None, &mut cached_pages);
+                        events.send(BridgeEvent::DisplayListReady {
+                            request_id: req_id,
                             page: current_page,
                             version,
                         });
                     } else {
-                        let _ = event_tx.send(BridgeEvent::Error {
+                        events.send(BridgeEvent::Error {
+                            request_id: req_id,
                             message: "paste HTML failed".into(),
                         });
                     }
                 }
                 Err(err) => {
-                    let _ = event_tx.send(BridgeEvent::Error {
+                    events.send(BridgeEvent::Error {
+                        request_id: req_id,
                         message: err.to_string(),
                     });
                 }
@@ -294,28 +470,38 @@ fn worker_loop(
                     if paste::paste_fragment_at(&mut session, run_id, offset, &result.document).is_ok()
                     {
                         format_ctx.mark_document_modified();
-                        version = rebuild(&session, &mut layout, &mut version, current_page);
-                        let _ = event_tx.send(BridgeEvent::DisplayListReady {
+                        version = rebuild(&session, &mut layout, &mut version, current_page, None, &mut cached_pages);
+                        events.send(BridgeEvent::DisplayListReady {
+                            request_id: req_id,
                             page: current_page,
                             version,
                         });
                     } else {
-                        let _ = event_tx.send(BridgeEvent::Error {
+                        events.send(BridgeEvent::Error {
+                            request_id: req_id,
                             message: "paste DOCX fragment failed".into(),
                         });
                     }
                 }
                 Err(err) => {
-                    let _ = event_tx.send(BridgeEvent::Error {
+                    events.send(BridgeEvent::Error {
+                        request_id: req_id,
                         message: err.to_string(),
                     });
                 }
             },
             BridgeCommand::ApplyEdit { command } => {
                 let mut commands = vec![command];
+                let mut request_ids = vec![req_id];
                 while let Ok(next) = cmd_rx.try_recv() {
                     match next {
-                        BridgeCommand::ApplyEdit { command: c } => commands.push(c),
+                        QueuedCommand {
+                            request_id: batch_id,
+                            inner: BridgeCommand::ApplyEdit { command: c },
+                        } => {
+                            commands.push(c);
+                            request_ids.push(batch_id);
+                        }
                         other => {
                             pending = Some(other);
                             break;
@@ -325,34 +511,69 @@ fn worker_loop(
 
                 let mut apply_error = None;
                 let mut applied = 0usize;
+                let mut affected_nodes: Vec<NodeId> = Vec::new();
                 for command in commands {
-                    if let Err(e) = session.apply(command) {
-                        for _ in 0..applied {
-                            let _ = session.undo();
+                    match session.apply(command) {
+                        Ok(result) => {
+                            affected_nodes.extend(result.affected_nodes);
+                            applied += 1;
                         }
-                        apply_error = Some(e);
-                        break;
+                        Err(e) => {
+                            for _ in 0..applied {
+                                let _ = session.undo();
+                            }
+                            apply_error = Some(e);
+                            break;
+                        }
                     }
-                    applied += 1;
                 }
 
                 if let Some(e) = apply_error {
                     format_ctx.mark_document_modified();
-                    version = rebuild(&session, &mut layout, &mut version, current_page);
-                    let _ = event_tx.send(BridgeEvent::Error {
-                        message: e.to_string(),
-                    });
-                    let _ = event_tx.send(BridgeEvent::DisplayListReady {
-                        page: current_page,
-                        version,
-                    });
+                    version = rebuild(
+                        &session,
+                        &mut layout,
+                        &mut version,
+                        current_page,
+                        if affected_nodes.is_empty() {
+                            None
+                        } else {
+                            Some(affected_nodes.as_slice())
+                        },
+                        &mut cached_pages,
+                    );
+                    for batch_id in &request_ids {
+                        events.send(BridgeEvent::Error {
+                            request_id: *batch_id,
+                            message: e.to_string(),
+                        });
+                        events.send(BridgeEvent::DisplayListReady {
+                            request_id: *batch_id,
+                            page: current_page,
+                            version,
+                        });
+                    }
                 } else {
                     format_ctx.mark_document_modified();
-                    version = rebuild(&session, &mut layout, &mut version, current_page);
-                    let _ = event_tx.send(BridgeEvent::DisplayListReady {
-                        page: current_page,
-                        version,
-                    });
+                    version = rebuild(
+                        &session,
+                        &mut layout,
+                        &mut version,
+                        current_page,
+                        if affected_nodes.is_empty() {
+                            None
+                        } else {
+                            Some(affected_nodes.as_slice())
+                        },
+                        &mut cached_pages,
+                    );
+                    for batch_id in request_ids {
+                        events.send(BridgeEvent::DisplayListReady {
+                            request_id: batch_id,
+                            page: current_page,
+                            version,
+                        });
+                    }
                 }
             }
             BridgeCommand::ApplyHeading1 { caret_run_id } => {
@@ -360,8 +581,9 @@ fn worker_loop(
                 if let Some(para_id) = para_id {
                     if let Some(cmd) = heading1_command_for(para_id) {
                         let _ = session.apply(cmd);
-                        version = rebuild(&session, &mut layout, &mut version, current_page);
-                        let _ = event_tx.send(BridgeEvent::DisplayListReady {
+                        version = rebuild(&session, &mut layout, &mut version, current_page, None, &mut cached_pages);
+                        events.send(BridgeEvent::DisplayListReady {
+                            request_id: req_id,
                             page: current_page,
                             version,
                         });
@@ -373,8 +595,9 @@ fn worker_loop(
                 if let Some(para_id) = para_id {
                     if let Some(cmd) = normal_style_command_for(para_id) {
                         let _ = session.apply(cmd);
-                        version = rebuild(&session, &mut layout, &mut version, current_page);
-                        let _ = event_tx.send(BridgeEvent::DisplayListReady {
+                        version = rebuild(&session, &mut layout, &mut version, current_page, None, &mut cached_pages);
+                        events.send(BridgeEvent::DisplayListReady {
+                            request_id: req_id,
                             page: current_page,
                             version,
                         });
@@ -386,8 +609,9 @@ fn worker_loop(
                 if let Some(para_id) = para_id {
                     if let Some(cmd) = bullet_list_command_for(para_id) {
                         let _ = session.apply(cmd);
-                        version = rebuild(&session, &mut layout, &mut version, current_page);
-                        let _ = event_tx.send(BridgeEvent::DisplayListReady {
+                        version = rebuild(&session, &mut layout, &mut version, current_page, None, &mut cached_pages);
+                        events.send(BridgeEvent::DisplayListReady {
+                            request_id: req_id,
                             page: current_page,
                             version,
                         });
@@ -399,8 +623,9 @@ fn worker_loop(
                 if let Some(para_id) = para_id {
                     if let Some(cmd) = numbered_list_command_for(para_id) {
                         let _ = session.apply(cmd);
-                        version = rebuild(&session, &mut layout, &mut version, current_page);
-                        let _ = event_tx.send(BridgeEvent::DisplayListReady {
+                        version = rebuild(&session, &mut layout, &mut version, current_page, None, &mut cached_pages);
+                        events.send(BridgeEvent::DisplayListReady {
+                            request_id: req_id,
                             page: current_page,
                             version,
                         });
@@ -410,8 +635,9 @@ fn worker_loop(
             BridgeCommand::InsertTable { rows, cols } => {
                 if let Some(cmd) = insert_table_command(&session.document, rows, cols) {
                     let _ = session.apply(cmd);
-                    version = rebuild(&session, &mut layout, &mut version, current_page);
-                    let _ = event_tx.send(BridgeEvent::DisplayListReady {
+                    version = rebuild(&session, &mut layout, &mut version, current_page, None, &mut cached_pages);
+                    events.send(BridgeEvent::DisplayListReady {
+                        request_id: req_id,
                         page: current_page,
                         version,
                     });
@@ -420,8 +646,9 @@ fn worker_loop(
             BridgeCommand::InsertImage { width, height } => {
                 if let Some(cmd) = insert_image_command(&session.document, width, height) {
                     let _ = session.apply(cmd);
-                    version = rebuild(&session, &mut layout, &mut version, current_page);
-                    let _ = event_tx.send(BridgeEvent::DisplayListReady {
+                    version = rebuild(&session, &mut layout, &mut version, current_page, None, &mut cached_pages);
+                    events.send(BridgeEvent::DisplayListReady {
+                        request_id: req_id,
                         page: current_page,
                         version,
                     });
@@ -431,8 +658,9 @@ fn worker_loop(
                 if let Some(cmd) = insert_page_break_command_for(&session.document, caret_run_id)
                 {
                     let _ = session.apply(cmd);
-                    version = rebuild(&session, &mut layout, &mut version, current_page);
-                    let _ = event_tx.send(BridgeEvent::DisplayListReady {
+                    version = rebuild(&session, &mut layout, &mut version, current_page, None, &mut cached_pages);
+                    events.send(BridgeEvent::DisplayListReady {
+                        request_id: req_id,
                         page: current_page,
                         version,
                     });
@@ -442,10 +670,11 @@ fn worker_loop(
                 let exporter = tw_pdf::DisplayListPdfExporter;
                 match exporter.export(&session.document, &tw_pdf::PdfExportOptions::default()) {
                     Ok(data) => {
-                        let _ = event_tx.send(BridgeEvent::DocumentSaved { data });
+                        events.send(BridgeEvent::DocumentSaved { request_id: req_id, data });
                     }
                     Err(e) => {
-                        let _ = event_tx.send(BridgeEvent::Error {
+                        events.send(BridgeEvent::Error {
+                            request_id: req_id,
                             message: e.to_string(),
                         });
                     }
@@ -455,45 +684,52 @@ fn worker_loop(
                 current_page = page;
                 snapshot.set_current_page(page);
                 let snap = snapshot.read();
-                let _ = event_tx.send(BridgeEvent::DisplayListReady {
+                events.send(BridgeEvent::DisplayListReady {
+                    request_id: req_id,
                     page: snap.page_index,
                     version: snap.version,
                 });
             }
             BridgeCommand::Undo => match session.undo() {
                 Ok(Some(_)) => {
-                    version = rebuild(&session, &mut layout, &mut version, current_page);
-                    let _ = event_tx.send(BridgeEvent::DisplayListReady {
+                    version = rebuild(&session, &mut layout, &mut version, current_page, None, &mut cached_pages);
+                    events.send(BridgeEvent::DisplayListReady {
+                        request_id: req_id,
                         page: current_page,
                         version,
                     });
                 }
                 Ok(None) => {
-                    let _ = event_tx.send(BridgeEvent::Error {
+                    events.send(BridgeEvent::Error {
+                        request_id: req_id,
                         message: "nothing to undo".into(),
                     });
                 }
                 Err(e) => {
-                    let _ = event_tx.send(BridgeEvent::Error {
+                    events.send(BridgeEvent::Error {
+                        request_id: req_id,
                         message: e.to_string(),
                     });
                 }
             },
             BridgeCommand::Redo => match session.redo() {
                 Ok(Some(_)) => {
-                    version = rebuild(&session, &mut layout, &mut version, current_page);
-                    let _ = event_tx.send(BridgeEvent::DisplayListReady {
+                    version = rebuild(&session, &mut layout, &mut version, current_page, None, &mut cached_pages);
+                    events.send(BridgeEvent::DisplayListReady {
+                        request_id: req_id,
                         page: current_page,
                         version,
                     });
                 }
                 Ok(None) => {
-                    let _ = event_tx.send(BridgeEvent::Error {
+                    events.send(BridgeEvent::Error {
+                        request_id: req_id,
                         message: "nothing to redo".into(),
                     });
                 }
                 Err(e) => {
-                    let _ = event_tx.send(BridgeEvent::Error {
+                    events.send(BridgeEvent::Error {
+                        request_id: req_id,
                         message: e.to_string(),
                     });
                 }

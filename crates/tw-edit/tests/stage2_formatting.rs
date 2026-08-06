@@ -325,6 +325,39 @@ fn delete_range_undo_restores_text() {
 }
 
 #[test]
+fn reversed_same_run_char_format_applies_underline() {
+    let mut session = EditSession::new();
+    let run_id = first_run(&session);
+    session
+        .apply(Command::InsertText {
+            run_id,
+            offset: 0,
+            text: "hello".into(),
+        })
+        .unwrap();
+
+    session
+        .apply(Command::SetCharFormat {
+            run_id,
+            start: 5,
+            end: 0,
+            format: CharFormat {
+                underline: Some(UnderlineStyle::Single),
+                ..Default::default()
+            },
+            merge: true,
+        })
+        .unwrap();
+
+    assert_eq!(
+        session.document.paragraph_at(0, 0).unwrap().runs[0]
+            .format
+            .underline,
+        Some(UnderlineStyle::Single)
+    );
+}
+
+#[test]
 fn underline_none_clears_underline_via_merge() {
     let mut session = EditSession::new();
     let run_id = first_run(&session);

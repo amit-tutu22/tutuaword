@@ -38,7 +38,7 @@ fn i_f01_s1_open_docx_produces_display_list() {
 
     let mut session = SyncSession::new();
     session.edit = EditSession::from_document(bundle.document);
-    session.relayout();
+    session.relayout(None);
 
     let bytes = session.display_list_bytes();
     assert!(!bytes.is_empty());
@@ -88,15 +88,17 @@ fn i_f01_s1_new_document_resets_async_session() {
         })
         .expect("empty document is editable");
 
-    assert!(session.apply(Command::InsertText {
-        run_id,
-        offset: 0,
-        text: "Draft".into(),
-    }));
+    assert!(session
+        .apply(Command::InsertText {
+            run_id,
+            offset: 0,
+            text: "Draft".into(),
+        })
+        .is_some());
     assert!(session.wait_for_event(5_000).is_some());
     assert!(session.get_display_list_bytes().document_text.contains("Draft"));
 
-    assert!(session.new_document());
+    assert!(session.new_document().is_some());
     assert!(session.wait_for_event(5_000).is_some());
     assert_eq!(session.get_display_list_bytes().document_text.trim(), "");
 }

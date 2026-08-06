@@ -1,9 +1,10 @@
 use parking_lot::RwLock;
+use std::sync::Arc;
 use tw_render::DisplayList;
 
 #[derive(Debug, Clone, Default)]
 pub struct SinglePageSnapshot {
-    pub bytes: Vec<u8>,
+    pub bytes: Arc<Vec<u8>>,
     pub page_width: f32,
     pub page_height: f32,
 }
@@ -17,6 +18,10 @@ pub struct PageSnapshot {
     pub bytes: Vec<u8>,
     pub page_width: f32,
     pub page_height: f32,
+    pub atlas_generation: u64,
+    pub atlas_width: u32,
+    pub atlas_height: u32,
+    pub atlas_bytes: Arc<Vec<u8>>,
     pub document_text: String,
     pub document_properties_json: String,
     pub read_only: bool,
@@ -26,7 +31,7 @@ impl PageSnapshot {
     pub fn with_page_index(mut self, page_index: u32) -> Self {
         self.page_index = page_index.min(self.page_count.saturating_sub(1));
         if let Some(current) = self.pages.get(self.page_index as usize) {
-            self.bytes = current.bytes.clone();
+            self.bytes = current.bytes.as_ref().clone();
             self.page_width = current.page_width;
             self.page_height = current.page_height;
         }
@@ -46,13 +51,17 @@ impl SnapshotBuffer {
             page_index: 0,
             page_count: 1,
             pages: vec![SinglePageSnapshot {
-                bytes: Vec::new(),
+                bytes: Arc::new(Vec::new()),
                 page_width: 612.0,
                 page_height: 792.0,
             }],
             bytes: Vec::new(),
             page_width: 612.0,
             page_height: 792.0,
+            atlas_generation: 0,
+            atlas_width: 0,
+            atlas_height: 0,
+            atlas_bytes: Arc::new(Vec::new()),
             document_text: String::new(),
             document_properties_json: String::from("{}"),
             read_only: false,
@@ -84,6 +93,10 @@ pub fn snapshot_from_pages(
     pages: Vec<SinglePageSnapshot>,
     page_index: u32,
     version: u64,
+    atlas_generation: u64,
+    atlas_width: u32,
+    atlas_height: u32,
+    atlas_bytes: Arc<Vec<u8>>,
     document_text: String,
     document_properties_json: String,
     read_only: bool,
@@ -97,6 +110,10 @@ pub fn snapshot_from_pages(
         bytes: Vec::new(),
         page_width: 612.0,
         page_height: 792.0,
+        atlas_generation,
+        atlas_width,
+        atlas_height,
+        atlas_bytes,
         document_text,
         document_properties_json,
         read_only,
@@ -116,12 +133,16 @@ pub fn snapshot_from_display_list(
     let _ = page_count;
     snapshot_from_pages(
         vec![SinglePageSnapshot {
-            bytes: tw_render::DisplayListBuilder::to_bytes(list),
+            bytes: Arc::new(tw_render::DisplayListBuilder::to_page_bytes(list)),
             page_width: list.page_width,
             page_height: list.page_height,
         }],
         page_index,
         list.version,
+        0,
+        0,
+        0,
+        Arc::new(Vec::new()),
         document_text,
         document_properties_json,
         read_only,

@@ -167,6 +167,23 @@ void main() {
       expect(find.text('11'), findsNothing);
     });
 
+    testWidgets('Home tab exposes F03.S4 font effect toggles', (tester) async {
+      await pumpWide(tester, HomeTab(controller: controller));
+
+      expect(find.byTooltip('All Caps'), findsOneWidget);
+      expect(find.byTooltip('Small Caps'), findsOneWidget);
+      expect(find.byTooltip('Hidden'), findsOneWidget);
+      expect(find.byTooltip('Ligatures'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('All Caps'));
+      await tester.pump();
+      expect(controller.allCaps, isTrue);
+
+      await tester.tap(find.byTooltip('Hidden'));
+      await tester.pump();
+      expect(controller.hidden, isTrue);
+    });
+
     testWidgets('Home tab italic and underline toggles update controller', (tester) async {
       await pumpWide(tester, HomeTab(controller: controller));
 

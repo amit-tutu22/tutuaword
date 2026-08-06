@@ -15,8 +15,18 @@ jobs:
         uses: Swatinem/rust-cache@v2
       - name: Run Rust tests
         run: cargo test --workspace
+      - name: R0 FFI buffer lifetime gate
+        run: cargo test -p tw-ffi --test buffer_lifetime -- --test-threads=1
+      - name: R0 command correlation gate
+        run: cargo test -p tw-core --test command_correlation
+      - name: R0 command backpressure gate
+        run: cargo test -p tw-core --test command_backpressure
+      - name: R1.1 incremental layout gate
+        run: cargo test -p tw-core --test r1_incremental_layout
+      - name: R1.2 atlas separation gate
+        run: cargo test -p tw-core --test r1_atlas_separation
       - name: F02.S1 typing latency gate (release)
-        run: cargo test -p tw-core --release i_f02_s1_typing_latency -- --nocapture
+        run: cargo test -p tw-core --release i_f02_s1_typing_latency i_r1_typing -- --nocapture
       - name: DOCX corpus + Tier A numbering/styles gates
         run: cargo test -p tw-docx --test corpus_render --test tier_a_numbering_styles --test numbering_and_revisions
 

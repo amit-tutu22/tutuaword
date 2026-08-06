@@ -5,9 +5,24 @@ use crate::types::{
 };
 use std::collections::HashMap;
 use tw_model::{
-    Block, BreakType, Document, Paragraph, Run, RunContent, SectionFormat, format_list_marker,
+    Block, BreakType, Document, NodeId, Paragraph, Run, RunContent, SectionFormat,
+    format_list_marker,
 };
 use tw_shape::{GlyphAtlas, TextShaper};
+
+/// Maximum pages to synchronously reflow during incremental layout (R1.1).
+const MAX_INCREMENTAL_REFLOW_PAGES: usize = 3;
+
+#[derive(Debug, Clone)]
+struct LayoutCheckpoint {
+    pages: Vec<PageLayout>,
+    page_index: PageIndex,
+    y: f32,
+    format: SectionFormat,
+    list_counters: HashMap<(u32, u32), u32>,
+    current_boxes: Vec<LayoutBox>,
+    current_lines: Vec<TextLine>,
+}
 
 /// Shift remaining paragraph lines (and their glyphs/decorations) to a new page origin.
 fn rebase_lines_from(lines: &mut [TextLine], start: usize, new_origin_y: f32) {
@@ -36,6 +51,11 @@ pub struct LayoutEngine {
     line_maps: HashMap<PageIndex, LineMap>,
     dirty_pages: Vec<PageIndex>,
     last_layout: DocumentLayout,
+    checkpoints: HashMap<(usize, usize), LayoutCheckpoint>,
+    block_first_page: HashMap<(usize, usize), PageIndex>,
+    incremental_from: Option<(usize, usize)>,
+    last_relayout_pages: usize,
+    last_relayout_start_page: usize,
 }
 
 impl Default for LayoutEngine {
@@ -53,6 +73,11 @@ impl LayoutEngine {
             line_maps: HashMap::new(),
             dirty_pages: vec![0],
             last_layout: DocumentLayout::default(),
+            checkpoints: HashMap::new(),
+            block_first_page: HashMap::new(),
+            incremental_from: None,
+            last_relayout_pages: 0,
+            last_relayout_start_page: 0,
         }
     }
 
@@ -61,6 +86,49 @@ impl LayoutEngine {
         self.page_cache.clear();
         self.line_maps.clear();
         self.last_layout = DocumentLayout::default();
+        self.checkpoints.clear();
+        self.block_first_page.clear();
+        self.incremental_from = None;
+        self.last_relayout_pages = 0;
+        self.last_relayout_start_page = 0;
+    }
+
+    /// Mark blocks containing `node_ids` for incremental reflow on the next layout pass.
+    pub fn invalidate_nodes(&mut self, doc: &Document, node_ids: &[NodeId]) {
+        if node_ids.is_empty() {
+            return;
+        }
+        let mut earliest: Option<(usize, usize)> = None;
+        for &node_id in node_ids {
+            let loc = doc
+                .find_run_location(node_id)
+                .map(|(si, bi, _)| (si, bi))
+                .or_else(|| doc.find_paragraph_location(node_id))
+                .or_else(|| doc.find_block_location(node_id));
+            if let Some(pos) = loc {
+                earliest = Some(match earliest {
+                    None => pos,
+                    Some(cur) if pos < cur => pos,
+                    Some(cur) => cur,
+                });
+            }
+        }
+        self.incremental_from = earliest;
+    }
+
+    /// Pages synchronously reflowed by the most recent layout pass.
+    pub fn last_relayout_pages(&self) -> usize {
+        self.last_relayout_pages
+    }
+
+    /// First page index rebuilt during the most recent incremental pass.
+    pub fn last_relayout_start_page(&self) -> usize {
+        self.last_relayout_start_page
+    }
+
+    /// First page index touched by the most recent layout pass.
+    pub fn relayout_start_page(&self) -> PageIndex {
+        self.dirty_pages.first().copied().unwrap_or(0)
     }
 
     pub fn layout_document(&mut self, doc: &Document) -> DocumentLayout {
@@ -73,22 +141,58 @@ impl LayoutEngine {
             .unwrap_or(&doc.settings.theme.minor_font);
         self.shaper.configure_from_theme(minor_font, &doc.settings.theme.major_font);
         let tab_interval = doc.settings.default_tab_stop.max(1.0);
-        let mut format = doc
+        let default_format = doc
             .sections
             .first()
             .map(|s| s.format.clone())
             .unwrap_or_default();
 
-        let mut pages: Vec<PageLayout> = Vec::new();
-        let mut current_boxes: Vec<LayoutBox> = Vec::new();
-        let mut current_lines: Vec<TextLine> = Vec::new();
-        let mut page_index: PageIndex = 0;
-        let mut y = format.margin_top;
+        let old_pages = self.last_layout.pages.clone();
+        let resume = self.incremental_from.take();
+        let incremental_start = resume.and_then(|from| {
+            self.checkpoints.get(&from).cloned().map(|cp| (cp, from))
+        });
+        let incremental = incremental_start.is_some();
 
-        let mut list_counters: HashMap<(u32, u32), u32> = HashMap::new();
+        let (mut format, mut pages, mut current_boxes, mut current_lines, mut page_index, mut y, mut list_counters, start_section, start_block) =
+            if let Some((cp, start)) = incremental_start {
+                (
+                    cp.format,
+                    cp.pages,
+                    cp.current_boxes,
+                    cp.current_lines,
+                    cp.page_index,
+                    cp.y,
+                    cp.list_counters,
+                    start.0,
+                    start.1,
+                )
+            } else {
+                if resume.is_none() {
+                    self.checkpoints.clear();
+                    self.block_first_page.clear();
+                }
+                (
+                    default_format.clone(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    0,
+                    default_format.margin_top,
+                    HashMap::new(),
+                    0,
+                    0,
+                )
+            };
+
+        let relayout_base = pages.len();
+        let mut stop_incremental = false;
 
         for (section_idx, section) in doc.sections.iter().enumerate() {
-            if section_idx > 0 {
+            if section_idx < start_section {
+                continue;
+            }
+            if section_idx > 0 && (section_idx > start_section || !incremental) {
                 if !current_boxes.is_empty() {
                     flush_page(
                         &mut pages,
@@ -111,6 +215,32 @@ impl LayoutEngine {
             let content_bottom = format.page_height - format.margin_bottom;
 
             for (block_idx, block) in section.blocks.iter().enumerate() {
+                if section_idx == start_section && block_idx < start_block {
+                    continue;
+                }
+                if stop_incremental {
+                    break;
+                }
+
+                if !incremental {
+                    self.checkpoints.insert(
+                        (section_idx, block_idx),
+                        LayoutCheckpoint {
+                            pages: pages.clone(),
+                            page_index,
+                            y,
+                            format: format.clone(),
+                            list_counters: list_counters.clone(),
+                            current_boxes: current_boxes.clone(),
+                            current_lines: current_lines.clone(),
+                        },
+                    );
+                    self.block_first_page
+                        .entry((section_idx, block_idx))
+                        .or_insert(page_index);
+                }
+
+                let pages_before_block = pages.len();
                 match block {
                     Block::Paragraph(para) => {
                         for segment in split_paragraph_at_page_breaks(para) {
@@ -534,6 +664,19 @@ impl LayoutEngine {
                         current_boxes.push(LayoutBox::Image(img));
                     }
                 }
+
+                if incremental {
+                    if pages.len().saturating_sub(relayout_base) >= MAX_INCREMENTAL_REFLOW_PAGES {
+                        stop_incremental = true;
+                    } else if section_idx == start_section && block_idx == start_block {
+                        // Single-block edit: reflow this block only unless capped above.
+                        stop_incremental = true;
+                    }
+                }
+                let _ = pages_before_block;
+            }
+            if stop_incremental {
+                break;
             }
         }
 
@@ -550,6 +693,31 @@ impl LayoutEngine {
                 &mut self.atlas,
             );
         }
+
+        if incremental && pages.len() < old_pages.len() {
+            pages.extend(old_pages[pages.len()..].iter().cloned());
+            for (idx, page) in pages.iter_mut().enumerate() {
+                page.page_index = idx as PageIndex;
+            }
+        }
+
+        self.last_relayout_pages = if incremental {
+            pages.len()
+                .saturating_sub(relayout_base)
+                .min(MAX_INCREMENTAL_REFLOW_PAGES)
+                .max(1)
+        } else {
+            pages.len().max(1)
+        };
+        self.last_relayout_start_page = if incremental { relayout_base } else { 0 };
+
+        self.dirty_pages = if incremental {
+            (relayout_base..relayout_base + self.last_relayout_pages)
+                .map(|i| i as PageIndex)
+                .collect()
+        } else {
+            (0..pages.len()).map(|i| i as PageIndex).collect()
+        };
 
         self.page_cache.clear();
         self.line_maps.clear();
@@ -570,7 +738,6 @@ impl LayoutEngine {
             self.line_maps.insert(page.page_index, LineMap { lines });
         }
 
-        self.dirty_pages.clear();
         self.last_layout = DocumentLayout {
             pages: pages.clone(),
         };

@@ -137,6 +137,10 @@ void main() {
       expect(controller.strikethrough, isFalse);
       expect(controller.subscript, isFalse);
       expect(controller.superscript, isFalse);
+      expect(controller.allCaps, isFalse);
+      expect(controller.smallCaps, isFalse);
+      expect(controller.hidden, isFalse);
+      expect(controller.ligatures, isTrue);
       expect(controller.documentTitle, 'Document1');
       expect(controller.wordCount, 0);
     });
@@ -184,6 +188,23 @@ void main() {
       controller.toggleSuperscript();
       expect(controller.superscript, isTrue);
       expect(controller.subscript, isFalse);
+    });
+
+    test('all caps and small caps are mutually exclusive', () {
+      controller.toggleAllCaps();
+      expect(controller.allCaps, isTrue);
+      expect(controller.smallCaps, isFalse);
+
+      controller.toggleSmallCaps();
+      expect(controller.smallCaps, isTrue);
+      expect(controller.allCaps, isFalse);
+    });
+
+    test('toggleHidden and toggleLigatures flip flags', () {
+      controller.toggleHidden();
+      expect(controller.hidden, isTrue);
+      controller.toggleLigatures();
+      expect(controller.ligatures, isFalse);
     });
 
     test('setZoom clamps and zoomIn zoomOut work', () {

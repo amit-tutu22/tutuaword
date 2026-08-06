@@ -201,6 +201,75 @@ class _RibbonToggleButtonState extends State<RibbonToggleButton> {
   }
 }
 
+/// Compact text toggle for font effects such as All Caps / Small Caps.
+class RibbonTextToggleButton extends StatefulWidget {
+  const RibbonTextToggleButton({
+    super.key,
+    required this.text,
+    this.tooltip,
+    this.selected = false,
+    this.onPressed,
+    this.textStyle,
+  });
+
+  final String text;
+  final String? tooltip;
+  final bool selected;
+  final VoidCallback? onPressed;
+  final TextStyle? textStyle;
+
+  @override
+  State<RibbonTextToggleButton> createState() => _RibbonTextToggleButtonState();
+}
+
+class _RibbonTextToggleButtonState extends State<RibbonTextToggleButton> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = widget.onPressed != null;
+    final color = enabled ? WordTheme.ribbonText : WordTheme.ribbonTextDisabled;
+    Color bg = Colors.transparent;
+    if (widget.selected) {
+      bg = WordTheme.ribbonSelected;
+    } else if (_hovered && enabled) {
+      bg = WordTheme.ribbonHover;
+    }
+
+    final effectiveTooltip =
+        effectiveRibbonTooltip(tooltip: widget.tooltip, enabled: enabled);
+
+    return wrapRibbonTooltip(
+      effectiveTooltip,
+      MouseRegion(
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() => _hovered = false),
+        child: GestureDetector(
+          onTap: widget.onPressed,
+          child: Container(
+            constraints: const BoxConstraints(minWidth: 22, minHeight: 22),
+            padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 2),
+            decoration: BoxDecoration(
+              color: bg,
+              borderRadius: BorderRadius.circular(3),
+            ),
+            alignment: Alignment.center,
+            child: Text(
+              widget.text,
+              style: (widget.textStyle ?? WordTheme.ribbonLabel).copyWith(
+                color: color,
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                height: 1.0,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class RibbonLargeButton extends StatefulWidget {
   const RibbonLargeButton({
     super.key,

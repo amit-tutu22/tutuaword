@@ -29,6 +29,7 @@ class _DocumentViewState extends State<DocumentView> {
   ui.Image? _atlasImage;
   bool _buildingAtlas = false;
   int _loadedVersion = -1;
+  int _loadedAtlasGeneration = -1;
   final ScrollController _scrollController = ScrollController();
 
   /// Decoded document images shared across pages, keyed by asset id.
@@ -40,6 +41,7 @@ class _DocumentViewState extends State<DocumentView> {
     widget.controller.addListener(_onControllerUpdate);
     _scrollController.addListener(_onScroll);
     _loadedVersion = widget.controller.displayVersion;
+    _loadedAtlasGeneration = widget.controller.atlasGeneration;
   }
 
   @override
@@ -63,10 +65,16 @@ class _DocumentViewState extends State<DocumentView> {
       _loadedVersion = widget.controller.displayVersion;
       _snapshots.clear();
       _pending.clear();
+      _disposeImages();
+    }
+    if (widget.controller.atlasGeneration != _loadedAtlasGeneration) {
+      _loadedAtlasGeneration = widget.controller.atlasGeneration;
       _atlasImage?.dispose();
       _atlasImage = null;
       _buildingAtlas = false;
-      _disposeImages();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _ensureAtlasTexture(widget.controller.displayVersion);
+      });
     }
     if (mounted) setState(() {});
   }
@@ -99,15 +107,11 @@ class _DocumentViewState extends State<DocumentView> {
     }
 
     final snapshot = DisplayListSnapshot.fromBytes(bytes);
-    ui.Image? atlas;
-    if (_atlasImage == null && !_buildingAtlas && snapshot.hasPaintableGlyphs) {
-      _buildingAtlas = true;
-      atlas = await snapshot.buildAtlasImage();
-    }
+    await _ensureAtlasTexture(version);
+
     final decodedImages = await snapshot.decodeImages(skip: _images.keys.toSet());
 
     if (!mounted || version != widget.controller.displayVersion) {
-      atlas?.dispose();
       for (final image in decodedImages.values) {
         image.dispose();
       }
@@ -117,14 +121,6 @@ class _DocumentViewState extends State<DocumentView> {
 
     setState(() {
       _snapshots[index] = snapshot;
-      if (atlas != null) {
-        if (_atlasImage == null) {
-          _atlasImage = atlas;
-        } else {
-          atlas.dispose();
-        }
-        _buildingAtlas = false;
-      }
       decodedImages.forEach((id, image) {
         // A concurrent page load may have decoded the same asset first.
         if (_images.containsKey(id)) {
@@ -134,6 +130,40 @@ class _DocumentViewState extends State<DocumentView> {
         }
       });
       _pending.remove(index);
+    });
+  }
+
+  Future<void> _ensureAtlasTexture(int layoutVersion) async {
+    final controller = widget.controller;
+    final generation = controller.atlasGeneration;
+    if (_atlasImage != null && generation == _loadedAtlasGeneration) {
+      return;
+    }
+    if (_buildingAtlas || controller.atlasPixels.isEmpty) {
+      return;
+    }
+    if (generation == 0 || controller.atlasWidth == 0 || controller.atlasHeight == 0) {
+      return;
+    }
+
+    _buildingAtlas = true;
+    final atlas = await DisplayListSnapshot.buildAtlasImageFromPixels(
+      controller.atlasPixels,
+      controller.atlasWidth,
+      controller.atlasHeight,
+    );
+
+    if (!mounted || layoutVersion != controller.displayVersion) {
+      atlas?.dispose();
+      _buildingAtlas = false;
+      return;
+    }
+
+    setState(() {
+      _atlasImage?.dispose();
+      _atlasImage = atlas;
+      _loadedAtlasGeneration = generation;
+      _buildingAtlas = false;
     });
   }
 

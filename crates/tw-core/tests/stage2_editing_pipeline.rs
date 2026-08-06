@@ -106,7 +106,7 @@ fn para_alignment_survives_relayout() {
         merge: true,
     });
 
-    session.relayout();
+    session.relayout(None);
     assert_eq!(
         session.edit.document.paragraph_at(0, 0).unwrap().format.alignment,
         Some(Alignment::Center)

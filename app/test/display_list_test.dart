@@ -13,7 +13,25 @@ void main() {
       expect(snap.hasPaintableGlyphs, isFalse);
     });
 
-    test('parses v2 display list with glyphs, rects, paths, and images', () {
+    test('parses v4 display list without embedded atlas pixels', () {
+      final bytes = _buildV4DisplayList(
+        version: 9,
+        pageWidth: 612,
+        pageHeight: 792,
+        glyphCount: 2,
+        rectCount: 1,
+      );
+
+      final snap = DisplayListSnapshot.fromBytes(bytes);
+      expect(snap.version, 9);
+      expect(snap.atlasPixels, isEmpty);
+      expect(snap.atlasWidth, 0);
+      expect(snap.glyphOffsets.length, 4);
+      expect(snap.hasPaintableGlyphs, isTrue);
+      expect(snap.needsAtlasTexture, isTrue);
+    });
+
+    test('v2 display list with glyphs, rects, paths, and images', () {
       final bytes = _buildV2DisplayList(
         version: 7,
         pageWidth: 612,
@@ -94,6 +112,25 @@ void main() {
       expect(snap.imagePayloads.single, isEmpty);
     });
   });
+}
+
+Uint8List _buildV4DisplayList({
+  required int version,
+  required double pageWidth,
+  required double pageHeight,
+  required int glyphCount,
+  required int rectCount,
+}) {
+  final writer = _ByteWriter();
+  writer.writeU32(4);
+  writer.writeU64(version);
+  writer.writeF32(pageWidth);
+  writer.writeF32(pageHeight);
+  _writeGlyphBatch(writer, glyphCount);
+  _writeRectBatch(writer, rectCount);
+  _writePathBatch(writer, 0);
+  _writeImageBatch(writer, 0, '');
+  return writer.toBytes();
 }
 
 Uint8List _buildV3DisplayList({

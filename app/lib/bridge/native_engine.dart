@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
 import 'package:path/path.dart' as p;
 import 'package:tutuaword/bridge/document_properties.dart';
+import 'package:tutuaword/bridge/native_event_router.dart';
 
 typedef TwInitNative = Int32 Function(Pointer<NativeFunction<Int32 Function(Uint32, Pointer<Uint8>, IntPtr)>>);
 typedef TwInitDart = int Function(Pointer<NativeFunction<Int32 Function(Uint32, Pointer<Uint8>, IntPtr)>>);
@@ -49,6 +50,21 @@ typedef TwGetPageDisplayListDart = int Function(
   Pointer<IntPtr>,
   Pointer<Float>,
   Pointer<Float>,
+);
+
+typedef TwGetAtlasNative = Int32 Function(
+  Pointer<Uint64>,
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+  Pointer<Uint32>,
+  Pointer<Uint32>,
+);
+typedef TwGetAtlasDart = int Function(
+  Pointer<Uint64>,
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+  Pointer<Uint32>,
+  Pointer<Uint32>,
 );
 
 typedef TwGetDocumentTextNative = Int32 Function(Pointer<Pointer<Uint8>>, Pointer<IntPtr>);
@@ -284,6 +300,7 @@ class NativeEngine {
   late final TwApplySplitParagraphDart applySplitParagraph;
   late final TwGetDisplayListDart getDisplayList;
   late final TwGetPageDisplayListDart getPageDisplayList;
+  late final TwGetAtlasDart getAtlas;
   late final TwGetDocumentTextDart getDocumentText;
   late final TwGetLastErrorDart getLastErrorNative;
   late final TwGetDocumentPropertiesJsonDart getDocumentPropertiesJson;
@@ -324,7 +341,7 @@ class NativeEngine {
       final lib = _openLibrary();
       final engine = NativeEngine._(lib);
       lib.lookupFunction<TwInitNative, TwInitDart>('tw_init')(
-        Pointer.fromFunction(_noopCallback, 0),
+        Pointer.fromFunction(_eventCallback, 0),
       );
       engine.applyInsertText =
           lib.lookupFunction<TwApplyInsertTextNative, TwApplyInsertTextDart>('tw_apply_insert_text');
@@ -346,6 +363,8 @@ class NativeEngine {
           lib.lookupFunction<TwGetDisplayListNative, TwGetDisplayListDart>('tw_get_display_list');
       engine.getPageDisplayList = lib.lookupFunction<TwGetPageDisplayListNative,
           TwGetPageDisplayListDart>('tw_get_page_display_list');
+      engine.getAtlas =
+          lib.lookupFunction<TwGetAtlasNative, TwGetAtlasDart>('tw_get_atlas');
       engine.getDocumentText =
           lib.lookupFunction<TwGetDocumentTextNative, TwGetDocumentTextDart>('tw_get_document_text');
       engine.getLastErrorNative =
@@ -421,6 +440,7 @@ class NativeEngine {
     final engine = _cached;
     if (engine == null) return;
     engine._lib.lookupFunction<TwShutdownNative, TwShutdownDart>('tw_shutdown')();
+    NativeEventRouter.instance.reset();
     _cached = null;
   }
 
@@ -450,7 +470,10 @@ class NativeEngine {
     throw UnsupportedError('Platform not supported');
   }
 
-  static int _noopCallback(int _, Pointer<Uint8> __, int ___) => 0;
+  static int _eventCallback(int eventType, Pointer<Uint8> data, int len) {
+    NativeEventRouter.instance.handleWireEvent(eventType, data, len);
+    return 0;
+  }
 }
 
 class DisplayListData {
@@ -461,6 +484,7 @@ class DisplayListData {
     required this.pageHeight,
     required this.pageCount,
     required this.documentText,
+    required this.atlasGeneration,
   });
 
   final Uint8List bytes;
@@ -469,6 +493,21 @@ class DisplayListData {
   final double pageHeight;
   final int pageCount;
   final String documentText;
+  final int atlasGeneration;
+}
+
+class AtlasData {
+  AtlasData({
+    required this.generation,
+    required this.bytes,
+    required this.width,
+    required this.height,
+  });
+
+  final int generation;
+  final Uint8List bytes;
+  final int width;
+  final int height;
 }
 
 class HitTestResult {
@@ -532,6 +571,7 @@ extension NativeEngineOps on NativeEngine {
         pageHeight: outHeight.value,
         pageCount: outPageCount.value,
         documentText: fetchDocumentText() ?? '',
+        atlasGeneration: fetchAtlas()?.generation ?? 0,
       );
     } finally {
       calloc.free(outPtr);
@@ -561,6 +601,43 @@ extension NativeEngineOps on NativeEngine {
       freeBuffer(ptr, len);
       return bytes;
     } finally {
+      calloc.free(outPtr);
+      calloc.free(outLen);
+      calloc.free(outWidth);
+      calloc.free(outHeight);
+    }
+  }
+
+  /// Session glyph atlas, versioned independently from page display lists.
+  AtlasData? fetchAtlas() {
+    final outGeneration = calloc<Uint64>();
+    final outPtr = calloc<Pointer<Uint8>>();
+    final outLen = calloc<IntPtr>();
+    final outWidth = calloc<Uint32>();
+    final outHeight = calloc<Uint32>();
+
+    try {
+      final result = getAtlas(outGeneration, outPtr, outLen, outWidth, outHeight);
+      if (result != 0) return null;
+
+      final len = outLen.value;
+      final ptr = outPtr.value;
+      Uint8List bytes;
+      if (ptr == nullptr || len == 0) {
+        bytes = Uint8List(0);
+      } else {
+        bytes = ptr.asTypedList(len).sublist(0);
+        freeBuffer(ptr, len);
+      }
+
+      return AtlasData(
+        generation: outGeneration.value,
+        bytes: bytes,
+        width: outWidth.value,
+        height: outHeight.value,
+      );
+    } finally {
+      calloc.free(outGeneration);
       calloc.free(outPtr);
       calloc.free(outLen);
       calloc.free(outWidth);

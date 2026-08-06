@@ -18,5 +18,5 @@ pub use snapshot::*;
 pub use worker::{
     bullet_list_command, first_paragraph_id, heading1_command, insert_image_command,
     insert_table_command, last_block_id, numbered_list_command, BridgeCommand, BridgeEvent,
-    WorkerHandle,
+    QueuedCommand, WorkerHandle, STARTUP_REQUEST_ID,
 };
