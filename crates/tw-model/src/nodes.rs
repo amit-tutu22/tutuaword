@@ -79,6 +79,16 @@ impl Paragraph {
             .collect::<Vec<_>>()
             .join("")
     }
+
+    /// Plaintext for export/search — excludes hidden runs.
+    pub fn visible_text(&self) -> String {
+        self.runs
+            .iter()
+            .filter(|r| r.format.hidden != Some(true))
+            .map(|r| r.text())
+            .collect::<Vec<_>>()
+            .join("")
+    }
 }
 
 impl Default for Paragraph {

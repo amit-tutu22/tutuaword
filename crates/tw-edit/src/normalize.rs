@@ -5,7 +5,7 @@ pub fn normalize_runs(doc: &mut Document, buffer: &mut TextBuffer) {
     for para in doc.paragraphs_mut() {
         let mut i = 0;
         while i + 1 < para.runs.len() {
-            let same_format = para.runs[i].format.equals(&para.runs[i + 1].format)
+            let same_format = para.runs[i].format.merge_equivalent(&para.runs[i + 1].format)
                 && para.runs[i].revision == para.runs[i + 1].revision;
             if same_format {
                 let suffix_id = para.runs[i + 1].id;

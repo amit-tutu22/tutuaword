@@ -1,6 +1,7 @@
 use crate::ids::NodeId;
 use crate::list::NumberingCatalog;
 use crate::nodes::{Block, Paragraph, Section};
+use crate::properties::DocumentProperties;
 use crate::styles::StyleSheet;
 use crate::theme::DocumentTheme;
 use serde::{Deserialize, Serialize};
@@ -13,6 +14,9 @@ pub struct DocumentSettings {
     pub numbering: NumberingCatalog,
     pub theme: DocumentTheme,
     pub template_name: Option<String>,
+    /// When true, the document cannot be edited (from DOCX protection or app policy).
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 impl DocumentSettings {
@@ -24,6 +28,7 @@ impl DocumentSettings {
             numbering: NumberingCatalog::with_defaults(),
             theme: DocumentTheme::default(),
             template_name: None,
+            read_only: false,
         }
     }
 }
@@ -33,6 +38,8 @@ pub struct Document {
     pub id: NodeId,
     pub styles: StyleSheet,
     pub settings: DocumentSettings,
+    #[serde(default)]
+    pub properties: DocumentProperties,
     pub sections: Vec<Section>,
 }
 
@@ -42,6 +49,7 @@ impl Document {
             id: NodeId::new(),
             styles: StyleSheet::with_defaults(),
             settings: DocumentSettings::default_settings(),
+            properties: DocumentProperties::default(),
             sections: vec![Section::new()],
         }
     }

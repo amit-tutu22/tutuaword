@@ -22,6 +22,7 @@ pub struct PositionedGlyph {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecorationKind {
     Underline,
+    DoubleUnderline,
     Strikethrough,
     Highlight,
 }

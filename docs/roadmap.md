@@ -64,7 +64,7 @@ Six phases over 24 months. Each phase has measurable exit criteria that must pas
 | Insert 5 images with text wrap — layout correct | Golden-image test |
 | Create 3×3 table, merge cells, resize columns | Automated test |
 | Multi-level numbered list renders with correct indentation | Golden-image test |
-| Export to PDF — visual match within 2 px tolerance | PDF golden-image comparison |
+| Export to PDF — **structural** layout positions (Helvetica) | Automated PDF export test; **VisualMatch / font embedding deferred** ([risk-mitigation.md](risk-mitigation.md), [long-tail-gaps.md](long-tail-gaps.md)) |
 | 50-page document scrolls at 60 FPS | Frame time benchmark |
 
 ### Team: 8–10 engineers (+2 layout, +1 UI)
@@ -215,11 +215,13 @@ Phase 4 (AI) and Phase 5 (Collaboration) can run in parallel after Phase 3 compl
 
 ## Risk Register
 
+Full matrix (severity, delivery stage S0–S5, residual risk, TC ladder, fidelity SLA): **[risk-mitigation.md](risk-mitigation.md)**. That document wins when this register conflicts with phase plan or long-tail gaps.
+
 | Risk | Phase | Mitigation |
 |------|-------|------------|
-| Layout engine complexity underestimated | 1–2 | Golden-image regression tests from Phase 1; hire layout specialist early |
-| DOCX fidelity below 95% on corpus | 3 | Package passthrough strategy; Tier B/C preservation for unknown elements |
+| Layout engine complexity underestimated | 1–2 | Self-goldens for regression + Word screenshot baselines (see risk-mitigation) |
+| DOCX fidelity below corpus SLA | 2–3 | Passthrough + Tier A/B/C; DOCX on critical path from S1, not polish-only |
 | Flutter `drawRawAtlas` performance insufficient | 1 | Benchmark early in Phase 1; fallback to texture-based rendering if needed |
-| CRDT + track changes interaction complex | 5 | Design mutation path in Phase 1 to be CRDT-compatible (ADR-0007) |
+| CRDT + track changes interaction complex | 5 | ADR-0007; finish TC accept/reject before collab (risk-mitigation ladder) |
 | Local AI model quality insufficient | 4 | Cloud fallback always available; local AI is opt-in |
 | Plugin sandbox security | 6 | WASM isolation default; native plugins require enterprise approval |

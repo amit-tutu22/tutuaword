@@ -87,24 +87,27 @@ impl LayoutCache {
                 return Some(result);
             }
             if map.lines.is_empty() {
-                return self.document_tail_hit(page);
+                return self.empty_page_tail_hit(page);
             }
         }
         None
     }
 
+    /// Last editable position in the document (for select-all / paste-at-end).
+    pub fn document_tail_hit(&self, page: u32) -> Option<HitTestResult> {
+        let run_id = last_text_run(&self.document)?;
+        let char_offset = self.buffer.len(run_id);
+        Some(HitTestResult {
+            page,
+            run_id,
+            char_offset,
+        })
+    }
+
     /// When a page has no laid-out lines, anchor at the end of the document so
     /// the user can keep typing; the requested page is recorded for caret display.
-    fn document_tail_hit(&self, page: u32) -> Option<HitTestResult> {
-        for p in (0..self.page_count).rev() {
-            let Some(map) = self.line_maps.get(&p) else {
-                continue;
-            };
-            if let Some(hit) = map.tail_hit(page) {
-                return Some(hit);
-            }
-        }
-        None
+    fn empty_page_tail_hit(&self, page: u32) -> Option<HitTestResult> {
+        self.document_tail_hit(page)
     }
 
     pub fn caret_geometry(&self, page: u32, x: f32, y: f32) -> Option<(f32, f32, f32)> {
@@ -162,6 +165,17 @@ impl LayoutCache {
     pub fn page_count(&self) -> u32 {
         self.page_count.max(1)
     }
+}
+
+fn last_text_run(doc: &Document) -> Option<NodeId> {
+    for section in doc.sections.iter().rev() {
+        for block in section.blocks.iter().rev() {
+            let para = block.paragraph()?;
+            let run = para.runs.last()?;
+            return Some(run.id);
+        }
+    }
+    None
 }
 
 pub type SharedLayoutCache = Arc<RwLock<LayoutCache>>;

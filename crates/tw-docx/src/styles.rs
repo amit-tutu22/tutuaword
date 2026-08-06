@@ -2,6 +2,7 @@ use tw_model::{
     Alignment, CharFormat, Color, LineSpacing, NumberingRef, ParaFormat, SectionFormat, StyleId,
     CharacterStyle, DocumentTheme, ListLevel, ListMarkerFormat, ListSuffix, TabAlignment, TabStop,
     NumberingCatalog, NumberingDefinition, ParagraphStyle, StyleSheet, TableStyle, BorderSpec,
+    UnderlineStyle,
 };
 
 use crate::xml_util::{
@@ -373,11 +374,9 @@ pub fn parse_char_properties(xml: &str) -> CharFormat {
         format.strikethrough = Some(true);
     }
     if let Some(underline) = read_attr_value(xml, "w:u", "w:val") {
-        if underline != "none" {
-            format.underline = Some(tw_model::UnderlineStyle::Single);
-        }
+        format.underline = parse_underline_style(&underline);
     } else if split_elements(xml, "w:u").first().is_some() {
-        format.underline = Some(tw_model::UnderlineStyle::Single);
+        format.underline = Some(UnderlineStyle::Single);
     }
     if let Some(sz) = read_numeric_attr(xml, "w:sz", "w:val") {
         format.font_size = Some(half_points_to_points(sz));
@@ -399,6 +398,14 @@ pub fn parse_char_properties(xml: &str) -> CharFormat {
     if let Some(highlight) = read_tag_text_in(xml, "w:highlight", "w:val") {
         format.highlight = parse_highlight(&highlight);
     }
+    if let Some(spacing) = read_numeric_attr(xml, "w:spacing", "w:val") {
+        if spacing != 0.0 {
+            format.character_spacing = Some(twips_to_points(spacing));
+        }
+    }
+    format.all_caps = read_toggle(xml, "w:caps");
+    format.small_caps = read_toggle(xml, "w:smallCaps");
+    format.hidden = read_toggle(xml, "w:vanish");
     if let Some(align) = read_tag_text_in(xml, "w:vertAlign", "w:val") {
         match align.as_str() {
             "superscript" => {
@@ -417,6 +424,20 @@ pub fn parse_char_properties(xml: &str) -> CharFormat {
         }
     }
     format
+}
+
+fn parse_underline_style(value: &str) -> Option<UnderlineStyle> {
+    match value {
+        "none" => None,
+        "single" | "words" => Some(UnderlineStyle::Single),
+        "double" => Some(UnderlineStyle::Double),
+        "dotted" => Some(UnderlineStyle::Dotted),
+        "dash" | "dashed" | "dashLong" | "dashDotDotHeavy" | "dashDotHeavy" | "dashDot" => {
+            Some(UnderlineStyle::Dashed)
+        }
+        "wave" | "wavyHeavy" | "wavyDouble" => Some(UnderlineStyle::Wave),
+        _ => Some(UnderlineStyle::Single),
+    }
 }
 
 pub fn parse_section_properties(xml: &str) -> SectionFormat {
@@ -481,6 +502,9 @@ fn parse_highlight(value: &str) -> Option<Color> {
         "yellow" => Some(Color { r: 255, g: 255, b: 0, a: 255 }),
         "green" => Some(Color { r: 0, g: 255, b: 0, a: 255 }),
         "cyan" => Some(Color { r: 0, g: 255, b: 255, a: 255 }),
+        "magenta" => Some(Color { r: 255, g: 0, b: 255, a: 255 }),
+        "red" => Some(Color { r: 255, g: 0, b: 0, a: 255 }),
+        "blue" => Some(Color { r: 0, g: 0, b: 255, a: 255 }),
         _ => None,
     }
 }
@@ -579,10 +603,41 @@ mod tests {
             parse_char_properties(r#"<w:rPr><w:u w:val="none"/></w:rPr>"#).underline,
             None
         );
-        assert!(
-            parse_char_properties(r#"<w:rPr><w:u w:val="single"/></w:rPr>"#)
-                .underline
-                .is_some()
+        assert_eq!(
+            parse_char_properties(r#"<w:rPr><w:u w:val="single"/></w:rPr>"#).underline,
+            Some(UnderlineStyle::Single)
+        );
+        assert_eq!(
+            parse_char_properties(r#"<w:rPr><w:u w:val="double"/></w:rPr>"#).underline,
+            Some(UnderlineStyle::Double)
+        );
+    }
+
+    #[test]
+    fn character_spacing_is_read_from_run_properties() {
+        assert_eq!(
+            parse_char_properties(r#"<w:rPr><w:spacing w:val="40"/></w:rPr>"#).character_spacing,
+            Some(2.0)
+        );
+        assert_eq!(
+            parse_char_properties(r#"<w:rPr><w:spacing w:val="0"/></w:rPr>"#).character_spacing,
+            None
+        );
+    }
+
+    #[test]
+    fn caps_and_hidden_are_read_from_run_properties() {
+        assert_eq!(
+            parse_char_properties(r#"<w:rPr><w:caps/></w:rPr>"#).all_caps,
+            Some(true)
+        );
+        assert_eq!(
+            parse_char_properties(r#"<w:rPr><w:smallCaps/></w:rPr>"#).small_caps,
+            Some(true)
+        );
+        assert_eq!(
+            parse_char_properties(r#"<w:rPr><w:vanish/></w:rPr>"#).hidden,
+            Some(true)
         );
     }
 

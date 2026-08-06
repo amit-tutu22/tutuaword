@@ -87,8 +87,12 @@ fn hash_paragraph(para: &Paragraph, hasher: &mut DefaultHasher) {
         format.italic.hash(hasher);
         format.underline.hash(hasher);
         format.strikethrough.hash(hasher);
+        format.all_caps.hash(hasher);
+        format.small_caps.hash(hasher);
+        format.hidden.hash(hasher);
         format.font_family.hash(hasher);
         format.font_size.map(f32::to_bits).hash(hasher);
+        format.character_spacing.map(f32::to_bits).hash(hasher);
         format.color.hash(hasher);
         run.revision.is_some().hash(hasher);
     }

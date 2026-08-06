@@ -67,6 +67,14 @@ impl Session {
         self.send_command(BridgeCommand::ToggleTrackChanges { enabled })
     }
 
+    pub fn accept_all_revisions(&self) -> bool {
+        self.send_command(BridgeCommand::AcceptAllRevisions)
+    }
+
+    pub fn reject_all_revisions(&self) -> bool {
+        self.send_command(BridgeCommand::RejectAllRevisions)
+    }
+
     pub fn poll_event(&self) -> Option<BridgeEvent> {
         self.worker.event_rx.try_recv().ok()
     }
@@ -143,6 +151,22 @@ impl Session {
         self.send_command(BridgeCommand::InsertPageBreak { caret_run_id })
     }
 
+    pub fn paste_html_at(&self, run_id: tw_model::NodeId, offset: usize, html: Vec<u8>) -> bool {
+        self.send_command(BridgeCommand::PasteHtml {
+            run_id,
+            offset,
+            html,
+        })
+    }
+
+    pub fn paste_docx_at(&self, run_id: tw_model::NodeId, offset: usize, bytes: Vec<u8>) -> bool {
+        self.send_command(BridgeCommand::PasteDocx {
+            run_id,
+            offset,
+            bytes,
+        })
+    }
+
     pub fn export_pdf(&self) -> bool {
         self.send_command(BridgeCommand::ExportPdf)
     }
@@ -153,6 +177,10 @@ impl Session {
 
     pub fn hit_test(&self, page: u32, x: f32, y: f32) -> Option<tw_layout::HitTestResult> {
         self.layout_cache.read().hit_test(page, x, y)
+    }
+
+    pub fn document_tail_hit(&self, page: u32) -> Option<tw_layout::HitTestResult> {
+        self.layout_cache.read().document_tail_hit(page)
     }
 
     pub fn caret_geometry(&self, page: u32, x: f32, y: f32) -> Option<(f32, f32, f32)> {

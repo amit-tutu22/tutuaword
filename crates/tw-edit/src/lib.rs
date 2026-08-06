@@ -2,6 +2,7 @@ mod access;
 mod block_ops;
 mod command;
 mod normalize;
+pub mod paste;
 pub mod range;
 mod session;
 
@@ -10,7 +11,7 @@ pub use session::*;
 pub use range::paragraph_id_for_run;
 
 use access::{with_paragraph_mut, with_run_mut};
-use tw_model::{Document, NodeId, NumberingRef, Revision, Run, StyleId};
+use tw_model::{Document, NodeId, NumberingRef, Revision, RevisionType, Run, StyleId};
 use tw_text::TextBuffer;
 
 pub fn apply(
@@ -40,6 +41,11 @@ pub fn apply(
             format,
             merge,
         } => set_char_format_range(doc, buffer, range, format.clone(), *merge)?,
+        Command::ClearCharFormatFields {
+            range,
+            clear_color,
+            clear_highlight,
+        } => clear_char_format_fields(doc, buffer, range, *clear_color, *clear_highlight)?,
         Command::SetParaFormat {
             paragraph_id,
             format,
@@ -121,10 +127,157 @@ pub fn apply(
             after_block_id,
             block,
         } => block_ops::insert_block(doc, buffer, *after_block_id, block.clone())?,
+        Command::AcceptRevision { run_id } => {
+            resolve_revision(doc, buffer, *run_id, RevisionResolution::Accept)?
+        }
+        Command::RejectRevision { run_id } => {
+            resolve_revision(doc, buffer, *run_id, RevisionResolution::Reject)?
+        }
+        Command::AcceptAllRevisions => resolve_all_revisions(doc, buffer, RevisionResolution::Accept)?,
+        Command::RejectAllRevisions => resolve_all_revisions(doc, buffer, RevisionResolution::Reject)?,
+        Command::RestoreRevisionRuns { snapshots } => {
+            restore_revision_runs(doc, buffer, snapshots)?
+        }
     };
 
     normalize::normalize_runs(doc, buffer);
     Ok(result)
+}
+
+#[derive(Clone, Copy)]
+enum RevisionResolution {
+    Accept,
+    Reject,
+}
+
+fn resolve_revision(
+    doc: &mut Document,
+    buffer: &mut TextBuffer,
+    run_id: NodeId,
+    resolution: RevisionResolution,
+) -> Result<EditResult, EditError> {
+    let snapshot = with_run_mut(doc, run_id, |run| {
+        let Some(rev) = run.revision.clone() else {
+            return None;
+        };
+        let text = run.text().to_string();
+        let snap = RevisionRunSnapshot {
+            run_id,
+            text: text.clone(),
+            revision: Some(rev.clone()),
+        };
+        apply_resolution(run, buffer, run_id, &rev, resolution);
+        Some(snap)
+    })
+    .ok_or(EditError::RunNotFound(run_id))?
+    .ok_or(EditError::InvalidRange)?;
+
+    Ok(EditResult {
+        affected_nodes: vec![run_id],
+        revision_snapshots: Some(vec![snapshot]),
+        ..Default::default()
+    })
+}
+
+fn resolve_all_revisions(
+    doc: &mut Document,
+    buffer: &mut TextBuffer,
+    resolution: RevisionResolution,
+) -> Result<EditResult, EditError> {
+    let mut targets = Vec::new();
+    for para in doc.paragraphs_mut() {
+        for run in &para.runs {
+            if run.revision.is_some() {
+                targets.push(run.id);
+            }
+        }
+    }
+    if targets.is_empty() {
+        return Ok(EditResult::default());
+    }
+
+    let mut snapshots = Vec::new();
+    let mut affected = Vec::new();
+    for run_id in targets {
+        let snap = with_run_mut(doc, run_id, |run| {
+            let Some(rev) = run.revision.clone() else {
+                return None;
+            };
+            let text = run.text().to_string();
+            let snap = RevisionRunSnapshot {
+                run_id,
+                text: text.clone(),
+                revision: Some(rev.clone()),
+            };
+            apply_resolution(run, buffer, run_id, &rev, resolution);
+            Some(snap)
+        })
+        .flatten();
+        if let Some(snap) = snap {
+            affected.push(run_id);
+            snapshots.push(snap);
+        }
+    }
+
+    Ok(EditResult {
+        affected_nodes: affected,
+        revision_snapshots: Some(snapshots),
+        ..Default::default()
+    })
+}
+
+fn apply_resolution(
+    run: &mut Run,
+    buffer: &mut TextBuffer,
+    run_id: NodeId,
+    rev: &Revision,
+    resolution: RevisionResolution,
+) {
+    let drop_text = match (resolution, rev.revision_type) {
+        (RevisionResolution::Accept, RevisionType::Delete)
+        | (RevisionResolution::Reject, RevisionType::Insert) => true,
+        (RevisionResolution::Accept, RevisionType::Insert)
+        | (RevisionResolution::Reject, RevisionType::Delete) => false,
+    };
+    if drop_text {
+        if let Some(t) = run.text_mut() {
+            let len = t.chars().count();
+            t.clear();
+            if len > 0 {
+                buffer.delete(run_id, 0..len);
+            }
+        }
+    }
+    run.revision = None;
+}
+
+fn restore_revision_runs(
+    doc: &mut Document,
+    buffer: &mut TextBuffer,
+    snapshots: &[RevisionRunSnapshot],
+) -> Result<EditResult, EditError> {
+    let mut affected = Vec::new();
+    for snap in snapshots {
+        with_run_mut(doc, snap.run_id, |run| {
+            if let Some(t) = run.text_mut() {
+                let old_len = t.chars().count();
+                if old_len > 0 {
+                    buffer.delete(snap.run_id, 0..old_len);
+                }
+                *t = snap.text.clone();
+                if !snap.text.is_empty() {
+                    buffer.insert(snap.run_id, 0, &snap.text);
+                }
+            }
+            run.revision = snap.revision.clone();
+        })
+        .ok_or(EditError::RunNotFound(snap.run_id))?;
+        affected.push(snap.run_id);
+    }
+    Ok(EditResult {
+        affected_nodes: affected,
+        ..Default::default()
+    })
 }
 
 fn insert_text(
@@ -387,6 +540,69 @@ fn set_char_format(
         })
     })
     .ok_or(EditError::RunNotFound(target))?
+}
+
+fn clear_char_format_fields(
+    doc: &mut Document,
+    _buffer: &mut TextBuffer,
+    range: &DocRange,
+    clear_color: bool,
+    clear_highlight: bool,
+) -> Result<EditResult, EditError> {
+    if !clear_color && !clear_highlight {
+        return Ok(EditResult::default());
+    }
+    let range = range::normalize_range(doc, range)?;
+    let start_loc = doc
+        .find_run_location(range.start.run_id)
+        .ok_or(EditError::RunNotFound(range.start.run_id))?;
+    let end_loc = doc
+        .find_run_location(range.end.run_id)
+        .ok_or(EditError::RunNotFound(range.end.run_id))?;
+
+    let mut old_run_formats = Vec::new();
+    let mut affected = Vec::new();
+    let mut run_ids = Vec::new();
+
+    for (si, section) in doc.sections.iter().enumerate() {
+        for (bi, block) in section.blocks.iter().enumerate() {
+            if (si, bi) < (start_loc.0, start_loc.1) || (si, bi) > (end_loc.0, end_loc.1) {
+                continue;
+            }
+            let Some(para) = block.paragraph() else {
+                continue;
+            };
+            for run in &para.runs {
+                if run_in_doc_range(run.id, start_loc, end_loc, doc) {
+                    run_ids.push(run.id);
+                }
+            }
+        }
+    }
+
+    for run_id in run_ids {
+        if let Some(old) = with_run_mut(doc, run_id, |run| {
+            let old = run.format.clone();
+            if clear_color {
+                run.format.color = None;
+            }
+            if clear_highlight {
+                run.format.highlight = None;
+            }
+            Some(old)
+        }) {
+            if let Some(old) = old {
+                old_run_formats.push((run_id, old));
+                affected.push(run_id);
+            }
+        }
+    }
+
+    Ok(EditResult {
+        affected_nodes: affected,
+        old_run_formats,
+        ..Default::default()
+    })
 }
 
 fn set_char_format_range(
@@ -1146,12 +1362,10 @@ pub fn text_in_range(
         return Ok(String::new());
     }
     if range.start.run_id == range.end.run_id {
-        return Ok(buffer
-            .slice(
-                range.start.run_id,
-                range.start.char_offset..range.end.char_offset,
-            )
-            .into_owned());
+        let len = buffer.len(range.start.run_id);
+        let start = range.start.char_offset.min(len);
+        let end = range.end.char_offset.min(len);
+        return Ok(buffer.slice(range.start.run_id, start..end).into_owned());
     }
 
     let start_loc = doc
@@ -1184,6 +1398,9 @@ pub fn text_in_range(
                 } else {
                     buffer.len(run.id)
                 };
+                let run_len = buffer.len(run.id);
+                let run_start = run_start.min(run_len);
+                let run_end = run_end.min(run_len);
                 if run_start < run_end {
                     out.push_str(&buffer.slice(run.id, run_start..run_end));
                 }

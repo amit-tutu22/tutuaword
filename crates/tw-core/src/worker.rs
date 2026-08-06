@@ -1,12 +1,13 @@
 use crate::bundle::{export_document, import_document_bundle, FormatContext};
 use crate::import::DetectedFormat;
 use crate::snapshot::{
-    document_plain_text, snapshot_from_pages, SinglePageSnapshot, SnapshotBuffer,
+    document_plain_text, document_properties_json, snapshot_from_pages, SinglePageSnapshot,
+    SnapshotBuffer,
 };
 use crossbeam_channel::{Receiver, Sender};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use tw_edit::{Command, EditSession};
+use tw_edit::{paste, Command, EditSession};
 use tw_layout::LayoutEngine;
 use tw_model::{Block, NodeId, NumberingRef};
 use tw_pdf::PdfExporter;
@@ -44,6 +45,18 @@ pub enum BridgeCommand {
     Undo,
     Redo,
     ExportPdf,
+    AcceptAllRevisions,
+    RejectAllRevisions,
+    PasteHtml {
+        run_id: NodeId,
+        offset: usize,
+        html: Vec<u8>,
+    },
+    PasteDocx {
+        run_id: NodeId,
+        offset: usize,
+        bytes: Vec<u8>,
+    },
     Shutdown,
 }
 
@@ -106,6 +119,7 @@ fn worker_loop(
         let doc_layout = layout.layout_document(&session.document);
         *version += 1;
         let text = document_plain_text(&session.document);
+        let read_only = session.document.settings.read_only;
         let pages: Vec<SinglePageSnapshot> = doc_layout
             .pages
             .iter()
@@ -120,8 +134,16 @@ fn worker_loop(
             .collect();
 
         let page_count = pages.len().max(1) as u32;
+        let props_json = document_properties_json(&session.document, page_count);
         let page_index = current_page.min(page_count.saturating_sub(1));
-        snapshot.publish(snapshot_from_pages(pages, page_index, *version, text));
+        snapshot.publish(snapshot_from_pages(
+            pages,
+            page_index,
+            *version,
+            text,
+            props_json,
+            read_only,
+        ));
         layout_cache
             .write()
             .update_from_session(layout, &session.document, &session.buffer);
@@ -203,6 +225,91 @@ fn worker_loop(
             },
             BridgeCommand::ToggleTrackChanges { enabled } => {
                 session.document.settings.track_changes_enabled = enabled;
+            }
+            BridgeCommand::AcceptAllRevisions => {
+                match session.apply(Command::AcceptAllRevisions) {
+                    Ok(_) => {
+                        format_ctx.mark_document_modified();
+                        version = rebuild(&session, &mut layout, &mut version, current_page);
+                        let _ = event_tx.send(BridgeEvent::DisplayListReady {
+                            page: current_page,
+                            version,
+                        });
+                    }
+                    Err(err) => {
+                        let _ = event_tx.send(BridgeEvent::Error {
+                            message: err.to_string(),
+                        });
+                    }
+                }
+            }
+            BridgeCommand::RejectAllRevisions => {
+                match session.apply(Command::RejectAllRevisions) {
+                    Ok(_) => {
+                        format_ctx.mark_document_modified();
+                        version = rebuild(&session, &mut layout, &mut version, current_page);
+                        let _ = event_tx.send(BridgeEvent::DisplayListReady {
+                            page: current_page,
+                            version,
+                        });
+                    }
+                    Err(err) => {
+                        let _ = event_tx.send(BridgeEvent::Error {
+                            message: err.to_string(),
+                        });
+                    }
+                }
+            }
+            BridgeCommand::PasteHtml {
+                run_id,
+                offset,
+                html,
+            } => match tw_html::import(&html) {
+                Ok(doc) => {
+                    if paste::paste_fragment_at(&mut session, run_id, offset, &doc).is_ok() {
+                        format_ctx.mark_document_modified();
+                        version = rebuild(&session, &mut layout, &mut version, current_page);
+                        let _ = event_tx.send(BridgeEvent::DisplayListReady {
+                            page: current_page,
+                            version,
+                        });
+                    } else {
+                        let _ = event_tx.send(BridgeEvent::Error {
+                            message: "paste HTML failed".into(),
+                        });
+                    }
+                }
+                Err(err) => {
+                    let _ = event_tx.send(BridgeEvent::Error {
+                        message: err.to_string(),
+                    });
+                }
+            },
+            BridgeCommand::PasteDocx {
+                run_id,
+                offset,
+                bytes,
+            } => match tw_docx::import(&bytes) {
+                Ok(result) => {
+                    if paste::paste_fragment_at(&mut session, run_id, offset, &result.document).is_ok()
+                    {
+                        format_ctx.mark_document_modified();
+                        version = rebuild(&session, &mut layout, &mut version, current_page);
+                        let _ = event_tx.send(BridgeEvent::DisplayListReady {
+                            page: current_page,
+                            version,
+                        });
+                    } else {
+                        let _ = event_tx.send(BridgeEvent::Error {
+                            message: "paste DOCX fragment failed".into(),
+                        });
+                    }
+                }
+                Err(err) => {
+                    let _ = event_tx.send(BridgeEvent::Error {
+                        message: err.to_string(),
+                    });
+                }
             },
             BridgeCommand::ApplyEdit { command } => {
                 let mut commands = vec![command];

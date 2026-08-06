@@ -222,6 +222,39 @@ void main() {
       await tester.pumpAndSettle();
     });
 
+    testWidgets('tab key inserts a tab and advances caret', (tester) async {
+      final controller = EditorController();
+      addTearDown(controller.dispose);
+      if (!controller.isEngineConnected) return;
+
+      await tester.pumpWidget(
+        MaterialApp(home: Scaffold(body: DocumentView(controller: controller))),
+      );
+      await tester.pumpAndSettle();
+
+      controller.ensureGlyphCaret();
+      await tester.tap(find.byType(GlyphEditorSurface).first);
+      await tester.pump();
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyA);
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pumpAndSettle();
+
+      final afterAOffset = controller.caretOffset;
+      final afterACaretX = controller.caretGeometry?.x;
+      expect(afterAOffset, greaterThan(0));
+      expect(afterACaretX, isNotNull);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pumpAndSettle();
+
+      expect(controller.caretOffset, greaterThan(afterAOffset));
+      final afterTabCaretX = controller.caretGeometry?.x;
+      expect(afterTabCaretX, isNotNull);
+      expect((afterTabCaretX! - afterACaretX!).abs(), greaterThan(0.05));
+    });
+
     testWidgets('space key inserts and advances caret', (tester) async {
       final controller = EditorController();
       addTearDown(controller.dispose);
@@ -290,6 +323,95 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(controller.caretOffset, afterInsert);
+    });
+
+    testWidgets('delete key removes character forward (I-F02-S2-delete-key)', (tester) async {
+      final controller = EditorController(enableAutosave: false);
+      addTearDown(controller.dispose);
+      if (!controller.isEngineConnected) return;
+
+      await tester.pumpWidget(
+        MaterialApp(home: Scaffold(body: DocumentView(controller: controller))),
+      );
+      await tester.pumpAndSettle();
+
+      controller.ensureGlyphCaret();
+      await tester.tap(find.byType(GlyphEditorSurface).first);
+      await tester.pump();
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyH);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyI);
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pumpAndSettle();
+
+      expect(controller.documentText.toLowerCase(), contains('hi'));
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pumpAndSettle();
+
+      expect(controller.caretOffset, 0);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.delete);
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pumpAndSettle();
+
+      expect(controller.documentText, 'i');
+    });
+
+    testWidgets('shift+arrow extends selection', (tester) async {
+      final controller = EditorController();
+      addTearDown(controller.dispose);
+      if (!controller.isEngineConnected) return;
+
+      await tester.pumpWidget(
+        MaterialApp(home: Scaffold(body: DocumentView(controller: controller))),
+      );
+      await tester.pumpAndSettle();
+
+      controller.ensureGlyphCaret();
+      await tester.tap(find.byType(GlyphEditorSurface).first);
+      await tester.pump();
+
+      for (final key in [
+        LogicalKeyboardKey.keyA,
+        LogicalKeyboardKey.keyB,
+        LogicalKeyboardKey.keyC,
+      ]) {
+        await tester.sendKeyEvent(key);
+        await tester.pump(const Duration(milliseconds: 20));
+      }
+      await tester.pumpAndSettle();
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.pump(const Duration(milliseconds: 50));
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pumpAndSettle();
+
+      expect(controller.hasGlyphSelection, isTrue);
+      expect(controller.selectedText, 'b');
+    });
+
+    test('selectGlyphWordAt selects typed word on double-click path', () {
+      final controller = EditorController();
+      addTearDown(controller.dispose);
+      if (!controller.isEngineConnected) return;
+
+      controller.ensureGlyphCaret();
+      for (final ch in 'hello'.split('')) {
+        controller.insertGlyphCharacter(ch);
+      }
+
+      controller.selectGlyphWordAt(0, 72 + 20, 72 + 20);
+
+      expect(controller.hasGlyphSelection, isTrue);
+      expect(controller.selectedText.toLowerCase(), 'hello');
     });
 
     testWidgets('enter key creates a new paragraph without tofu', (tester) async {
@@ -384,7 +506,7 @@ void main() {
     });
 
     testWidgets('glyph copy and paste use engine text range', (tester) async {
-      final controller = EditorController();
+      final controller = EditorController(enableAutosave: false);
       addTearDown(controller.dispose);
       if (!controller.isEngineConnected) return;
 

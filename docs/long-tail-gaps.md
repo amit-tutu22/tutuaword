@@ -2,6 +2,8 @@
 
 This document is the single source of truth for **partial or unimplemented** work that sits after the core editing pipeline. It describes what the code actually does today, what the architecture docs still promise, and what a future implementation pass would require.
 
+For **risk → mitigation → residual risk** and delivery stages (S0–S5), see [risk-mitigation.md](risk-mitigation.md). This file remains the honesty layer for *code* status when exit criteria are unmet.
+
 For **Flutter ribbon/menu wiring** (what looks enabled vs what works), see [UI Functionality Audit](ui-functionality-audit.md).
 
 Core editing (DOCX import/export fidelity, glyph-mode formatting, layout correctness, CI) is largely complete per Stages 1–4 of the stub-and-gap remediation work. The six areas below are **explicitly deferred** long-tail work. They do not block basic document editing.
@@ -18,7 +20,7 @@ Core editing (DOCX import/export fidelity, glyph-mode formatting, layout correct
 | [Hyperlinks and comments](#4-hyperlinks-and-comments-tw-model) | Not started in code | No | Phase 5 |
 | [Plugin WASM sandbox](#5-plugin-wasm-sandbox-tw-plugin) | Spec + traits only | No | Phase 6 |
 | [Production AI providers](#6-production-ai-providers-tw-ai) | Router + mocks only | No | Phase 4 |
-| [Track-change accept/reject UI](#7-track-change-acceptreject-ui) | Toggle only; Review Accept/Reject disabled | No | Phase 2 |
+| [Track-change accept/reject UI](#7-track-change-acceptreject-ui) | Accept/Reject all wired; per-change nav still open | No | Phase 2 |
 
 ---
 
@@ -321,34 +323,33 @@ Tests: [`crates/tw-html/tests/export_import.rs`](../crates/tw-html/tests/export_
 
 ### Current state (as built)
 
-- **Track-changes flag** toggles via Review ribbon and Tools menu (`EditorController.toggleTrackChanges` → worker).
-- DOCX export can emit revision markup when the flag is on (Stage 1 work).
-- Review ribbon **Accept** and **Reject** buttons are **disabled** with an explicit tooltip: accept/reject **edit commands** do not exist in `tw-edit` yet.
-- No FFI for `AcceptRevision` / `RejectRevision`; no balloon UI or change list.
+- **Track-changes flag** toggles via Review ribbon and Tools menu.
+- `Command::AcceptRevision` / `RejectRevision` / `AcceptAllRevisions` / `RejectAllRevisions` in `tw-edit` with undo via `RestoreRevisionRuns`.
+- FFI: `tw_accept_all_revisions` / `tw_reject_all_revisions`; Review ribbon Accept/Reject call **accept/reject all**.
+- DOCX export emits revision markup when tracking is on.
+- Still missing: accept/reject **at caret**, next/prev change navigation, changes pane.
 
 ### Gap vs spec
 
-- Word-like review workflow requires per-change accept/reject, accept all, reject all, and navigation between revisions.
-- [`docs/ui-functionality-audit.md`](ui-functionality-audit.md) lists Accept/Reject as P1 partial.
+- Word-like review workflow needs per-change accept/reject and navigation ([risk-mitigation.md](risk-mitigation.md) TC ladder).
 
 ### Key files
 
 | File | Role |
 |------|------|
-| `crates/tw-edit/src/lib.rs` | Needs accept/reject revision commands |
-| `crates/tw-model/src/revision.rs` | Revision metadata on runs |
-| `app/lib/ui/ribbon_tabs/review_tab.dart` | Accept/Reject placeholders (`kTrackChangeReviewTooltip`) |
+| `crates/tw-edit/src/lib.rs` | Accept/reject commands |
+| `crates/tw-edit/tests/track_change_resolve.rs` | Ladder (c) tests |
+| `app/lib/ui/ribbon_tabs/review_tab.dart` | Accept/Reject all wired |
 
 ### Future work
 
-1. Add `Command::AcceptRevision` / `Command::RejectRevision` (and range variants) in `tw-edit`.
-2. Worker + FFI bridge; wire Review ribbon Accept/Reject.
-3. Optional: changes pane listing pending insertions/deletions.
+1. Accept/reject revision at caret (single change).
+2. Next/previous change navigation + optional changes pane.
 
 ### Exit criteria (documentation target)
 
 - User can accept or reject the revision at the caret from the Review ribbon.
-- Undo restores the prior revision state.
+- Undo restores the prior revision state. (Accept-all undo already covered in unit tests.)
 
 ---
 

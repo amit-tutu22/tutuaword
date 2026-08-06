@@ -1,8 +1,10 @@
 //! Serializes `word/numbering.xml` from the document's numbering catalog.
 
-use tw_model::{ListMarkerFormat, ListSuffix, NumberingCatalog, NumberingDefinition};
+use tw_model::{
+    CharFormat, ListMarkerFormat, ListSuffix, NumberingCatalog, NumberingDefinition,
+};
 
-use crate::export::to_twips;
+use crate::export::{escape_xml, to_twips};
 
 pub fn serialize_numbering_xml(catalog: &NumberingCatalog) -> String {
     if catalog.definitions.is_empty() {
@@ -29,12 +31,18 @@ fn serialize_abstract_num(def: &NumberingDefinition) -> String {
             ListSuffix::Space => "space",
             ListSuffix::Nothing => "nothing",
         };
+        let marker = lvl
+            .marker_text
+            .clone()
+            .unwrap_or_else(|| default_lvl_text(lvl.format).into());
+        let rpr = serialize_level_rpr(&lvl.char_format);
         levels.push_str(&format!(
-            r#"<w:lvl w:ilvl="{}"><w:start w:val="1"/><w:numFmt w:val="{}"/><w:suff w:val="{}"/><w:lvlText w:val="{}"/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="{}" w:hanging="{}"/></w:pPr></w:lvl>"#,
+            r#"<w:lvl w:ilvl="{}"><w:start w:val="{}"/><w:numFmt w:val="{}"/><w:suff w:val="{}"/><w:lvlText w:val="{}"/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="{}" w:hanging="{}"/></w:pPr>{rpr}</w:lvl>"#,
             lvl.level,
+            lvl.start.max(1),
             num_fmt(lvl.format),
             suffix,
-            lvl_text(lvl.format),
+            escape_xml(&marker),
             to_twips(lvl.indent),
             to_twips(lvl.hanging),
         ));
@@ -43,6 +51,37 @@ fn serialize_abstract_num(def: &NumberingDefinition) -> String {
         r#"<w:abstractNum w:abstractNumId="{}">{levels}</w:abstractNum>"#,
         def.id
     )
+}
+
+fn serialize_level_rpr(format: &CharFormat) -> String {
+    let mut inner = String::new();
+    if let Some(ref family) = format.font_family {
+        inner.push_str(&format!(
+            r#"<w:rFonts w:ascii="{0}" w:hAnsi="{0}"/>"#,
+            escape_xml(family)
+        ));
+    }
+    if format.bold == Some(true) {
+        inner.push_str("<w:b/>");
+    }
+    if format.italic == Some(true) {
+        inner.push_str("<w:i/>");
+    }
+    if let Some(size) = format.font_size {
+        let half_points = (size * 2.0).round() as i32;
+        inner.push_str(&format!(r#"<w:sz w:val="{half_points}"/>"#));
+    }
+    if let Some(color) = format.color {
+        inner.push_str(&format!(
+            r#"<w:color w:val="{:02X}{:02X}{:02X}"/>"#,
+            color.r, color.g, color.b
+        ));
+    }
+    if inner.is_empty() {
+        String::new()
+    } else {
+        format!("<w:rPr>{inner}</w:rPr>")
+    }
 }
 
 fn serialize_num(num_id: u32, abstract_id: u32) -> String {
@@ -62,7 +101,7 @@ fn num_fmt(format: ListMarkerFormat) -> &'static str {
     }
 }
 
-fn lvl_text(format: ListMarkerFormat) -> &'static str {
+fn default_lvl_text(format: ListMarkerFormat) -> &'static str {
     match format {
         ListMarkerFormat::Bullet => "•",
         ListMarkerFormat::Decimal => "%1.",

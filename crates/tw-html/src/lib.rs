@@ -13,6 +13,7 @@ mod export;
 mod import;
 
 pub use export::export_html;
+pub use import::sanitize_html;
 
 pub fn import(source: &[u8]) -> Result<Document, HtmlError> {
     import::import_html(source)

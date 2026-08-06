@@ -37,6 +37,14 @@ void main() {
       expect(controller.documentText, 'A');
     });
 
+    test('deleteForward removes first character in mock mode', () {
+      if (controller.isEngineConnected) return;
+      controller.insertCharacter('A');
+      controller.insertCharacter('B');
+      controller.deleteForward();
+      expect(controller.documentText, 'B');
+    });
+
     test('textForPage returns full text on single page', () {
       if (controller.isEngineConnected) return;
       controller.insertCharacter('X');

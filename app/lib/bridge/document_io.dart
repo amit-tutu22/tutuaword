@@ -21,7 +21,29 @@ const kSupportedOpenExtensions = [
 
 /// Extract readable text from any supported document format (Dart fallback).
 class DocumentReader {
+  static bool isPasswordProtectedDocx(Uint8List bytes, {String? path}) {
+    final ext = _extensionFromPath(path);
+    if (ext != null && ext != 'docx') return false;
+    if (!_looksLikeZip(bytes)) return false;
+    try {
+      final archive = ZipDecoder().decodeBytes(bytes);
+      final hasEncrypted = archive.files.any(
+        (file) =>
+            file.name == 'EncryptedPackage' ||
+            file.name.toLowerCase() == 'encryptioninfo',
+      );
+      final hasDocument = archive.findFile('word/document.xml') != null;
+      final hasContentTypes = archive.findFile('[Content_Types].xml') != null;
+      return hasEncrypted || (hasContentTypes && !hasDocument);
+    } catch (_) {
+      return false;
+    }
+  }
+
   static String extractText(Uint8List bytes, {String? path}) {
+    if (isPasswordProtectedDocx(bytes, path: path)) {
+      throw const FormatException('document is password-protected');
+    }
     final ext = _extensionFromPath(path);
     if (ext != null) {
       switch (ext) {

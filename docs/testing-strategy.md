@@ -55,12 +55,12 @@ Every crate has unit tests in `src/` (inline `#[cfg(test)]`) and integration tes
 
 ## Golden-Image Layout Tests
 
-Layout output is rendered to PNG and compared against reference images. Any visual change fails the test.
+**Honesty note (risk-mitigation):** Today CI uses **layout fingerprint hashes** (`crates/tw-layout/tests/golden_layout.rs`) for regression. That is **self-consistency**, not Word fidelity. Word (fixed-version) screenshot baselines are the S2 fidelity gate; PNG golden pipelines below are the target architecture.
 
-### How It Works
+### Target flow (Word baselines / PNG)
 
 ```
-Test fixture (.twdoc)
+Test fixture (.twdoc or .docx)
       │
       ▼
   Layout Engine → PageLayout

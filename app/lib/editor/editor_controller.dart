@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -6,14 +7,38 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
 import 'package:tutuaword/bridge/document_io.dart';
+import 'package:tutuaword/bridge/document_properties.dart';
+import 'package:tutuaword/bridge/document_session_store.dart';
+import 'package:tutuaword/bridge/macos_file_access.dart';
 import 'package:tutuaword/bridge/native_engine.dart';
 import 'package:tutuaword/bridge/twdoc_io.dart';
+import 'package:tutuaword/editor/autosave_scheduler.dart';
 import 'package:tutuaword/editor/display_list.dart';
+import 'package:tutuaword/ui/paste_special_dialog.dart';
+
+/// Clipboard payload read from the system pasteboard.
+class EditorClipboardPayload {
+  const EditorClipboardPayload({this.plainText, this.html, this.docxBytes});
+
+  final String? plainText;
+  final String? html;
+  final Uint8List? docxBytes;
+
+  bool get hasFormattedContent =>
+      (html != null && html!.trim().isNotEmpty) ||
+      (docxBytes != null && docxBytes!.isNotEmpty);
+}
 
 /// Editor controller — bridges Flutter UI to Rust engine (or mock for dev).
 class EditorController extends ChangeNotifier {
-  EditorController() {
+  EditorController({
+    DocumentSessionStore? sessionStore,
+    bool enableAutosave = true,
+    Duration? autosaveInterval,
+  }) : _sessionStore = sessionStore ?? DocumentSessionStore.defaultStore() {
+    _recentEntries = _sessionStore.loadRecentEntries();
     _engine = NativeEngine.load();
     _statusText = _engine == null
         ? 'Mock mode (build libtw_ffi to enable Rust engine)'
@@ -26,6 +51,14 @@ class EditorController extends ChangeNotifier {
       _syncRibbonFromCaret();
     }
     _recomputePageCount();
+    if (enableAutosave) {
+      final interval = autosaveInterval ?? _sessionStore.loadAutosaveInterval();
+      _autosaveScheduler = AutosaveScheduler(
+        interval: interval,
+        onTick: performAutosave,
+      );
+      _autosaveScheduler!.start();
+    }
   }
 
   static const _pageMargin = 72.0;
@@ -46,6 +79,8 @@ class EditorController extends ChangeNotifier {
   int _pageCount = 1;
   int _currentPage = 0;
   bool _printPreview = false;
+  bool _documentReadOnly = false;
+  DocumentProperties _documentProperties = DocumentProperties.empty;
   bool _preferTextRendering = false;
   bool _trackChanges = false;
   List<String> _spellMisspellings = const [];
@@ -55,6 +90,8 @@ class EditorController extends ChangeNotifier {
   bool _strikethrough = false;
   bool _subscript = false;
   bool _superscript = false;
+  Color _fontColor = Colors.black;
+  Color? _highlightColor;
   double _zoom = 1.0;
   bool _showRuler = false;
   bool _showNavigationPane = false;
@@ -74,8 +111,15 @@ class EditorController extends ChangeNotifier {
   double _selFocusY = 0;
   int _selPage = 0;
   List<GlyphSelectionRect> _selectionRects = const [];
+  bool _glyphDragActive = false;
   TextEditingController? _textController;
   FocusNode? _textFocusNode;
+  final DocumentSessionStore _sessionStore;
+  AutosaveScheduler? _autosaveScheduler;
+  List<RecentDocumentEntry> _recentEntries = const [];
+  String? _scopedAccessPath;
+  int _editGeneration = 0;
+  int _lastAutosavedGeneration = 0;
 
   /// Active page text field — used for cut/copy/paste and Select All.
   void attachTextEditor(TextEditingController controller, FocusNode focusNode) {
@@ -119,7 +163,12 @@ class EditorController extends ChangeNotifier {
         '';
   }
 
-  bool get canCutOrCopy => selectedText.isNotEmpty;
+  bool get canCutOrCopy {
+    if (usesGlyphRendering && _engine != null) {
+      return hasGlyphSelection;
+    }
+    return selectedText.isNotEmpty;
+  }
 
   Future<void> copySelection() async {
     final text = selectedText;
@@ -133,66 +182,152 @@ class EditorController extends ChangeNotifier {
     await Clipboard.setData(ClipboardData(text: text));
     if (usesGlyphRendering && _engine != null) {
       _deleteGlyphSelection();
+      _markDocumentDirty();
       notifyListeners();
       return;
     }
     _replaceSelection('');
+    _markDocumentDirty();
+  }
+
+  static const _clipboardHtml = 'text/html';
+
+  Future<EditorClipboardPayload> readClipboard() async {
+    final plain = await Clipboard.getData(Clipboard.kTextPlain);
+    final html = await Clipboard.getData(_clipboardHtml);
+    return EditorClipboardPayload(
+      plainText: plain?.text,
+      html: html?.text,
+    );
   }
 
   Future<void> paste({bool plainText = false}) async {
-    final data = await Clipboard.getData(Clipboard.kTextPlain);
-    final text = data?.text;
-    if (text == null || text.isEmpty) return;
+    final payload = await readClipboard();
+    await pastePayload(payload, plainText: plainText);
+  }
+
+  Future<void> showPasteSpecialDialog(BuildContext context) async {
+    final payload = await readClipboard();
+    final mode = await PasteSpecialDialog.show(
+      context,
+      hasFormattedContent: payload.hasFormattedContent,
+    );
+    if (mode == null) return;
+    await pastePayload(
+      payload,
+      plainText: mode == PasteSpecialMode.plainText,
+    );
+  }
+
+  Future<void> pastePayload(
+    EditorClipboardPayload payload, {
+    required bool plainText,
+  }) async {
     if (usesGlyphRendering && _engine != null) {
       if (hasGlyphSelection) {
         _deleteGlyphSelection();
       }
       final runId = _caretRunId ?? _defaultRunId();
       if (runId == null) return;
-      if (!_engine!.tryInsertText(runId, _caretOffset, text)) return;
-      _caretOffset += text.length;
-      _selAnchorRunId = runId;
-      _selAnchorOffset = _caretOffset;
-      _selFocusRunId = runId;
-      _selFocusOffset = _caretOffset;
-      _selectionRects = const [];
+
+      final pasted = !plainText &&
+              _tryPasteFormatted(runId, payload) ||
+          _tryPastePlain(runId, payload.plainText);
+      if (!pasted) return;
+
+      _collapseGlyphSelectionToCaret(runId);
       _refreshFromEngine();
+      _syncRibbonFromCaret();
+      _markDocumentDirty();
       notifyListeners();
       return;
     }
+
+    final text = payload.plainText;
+    if (text == null || text.isEmpty) return;
     _replaceSelection(plainText ? text : text);
+    _markDocumentDirty();
     _textFocusNode?.requestFocus();
+  }
+
+  bool _tryPasteFormatted(String runId, EditorClipboardPayload payload) {
+    if (payload.docxBytes != null &&
+        payload.docxBytes!.isNotEmpty &&
+        _engine!.tryPasteDocx(runId, _caretOffset, payload.docxBytes!)) {
+      _advanceCaretAfterPaste(payload.plainText?.length ?? 0);
+      return true;
+    }
+    final html = payload.html?.trim();
+    if (html != null &&
+        html.isNotEmpty &&
+        _engine!.tryPasteHtml(runId, _caretOffset, html)) {
+      _advanceCaretAfterPaste(payload.plainText?.length ?? 0);
+      return true;
+    }
+    return false;
+  }
+
+  bool _tryPastePlain(String runId, String? text) {
+    if (text == null || text.isEmpty) return false;
+    if (!_engine!.tryInsertText(runId, _caretOffset, text)) return false;
+    _advanceCaretAfterPaste(text.length);
+    return true;
+  }
+
+  void _advanceCaretAfterPaste(int charCount) {
+    _caretOffset += charCount;
+  }
+
+  void _collapseGlyphSelectionToCaret(String runId) {
+    _selAnchorRunId = runId;
+    _selAnchorOffset = _caretOffset;
+    _selFocusRunId = runId;
+    _selFocusOffset = _caretOffset;
+    _selectionRects = const [];
   }
 
   void selectAll() {
     if (usesGlyphRendering && _engine != null) {
+      ensureGlyphCaret();
+      _engine!.waitForLayoutSync();
       final start = _engine!.hitTestPage(0, _pageMargin, _pageMargin + _fontSize);
-      if (start == null) return;
-      final lastPage = _pageCount - 1;
-      final end = _engine!.hitTestPage(
-        lastPage,
-        _pageWidth - _pageMargin,
-        _pageHeight - _pageMargin,
-      );
-      if (end == null) return;
-      _selPage = lastPage;
+      final end = _engine!.fetchDocumentTailHit(0);
+      if (start == null || end == null) return;
+
+      _selPage = 0;
+      _engine!.setCurrentPageIndex(0);
       _selAnchorRunId = start.runId;
       _selAnchorOffset = start.charOffset;
       _selFocusRunId = end.runId;
-      _selFocusOffset = end.charOffset;
+      var focusOffset = end.charOffset;
+      if (_caretRunId == end.runId && _caretOffset > focusOffset) {
+        focusOffset = _caretOffset;
+      }
+      _selFocusOffset = focusOffset;
       _caretRunId = end.runId;
-      _caretOffset = end.charOffset;
-      _selAnchorX = _pageMargin;
-      _selAnchorY = _pageMargin + _fontSize;
-      _selFocusX = _pageWidth - _pageMargin;
-      _selFocusY = _pageHeight - _pageMargin;
+      _caretOffset = focusOffset;
+
+      final anchorGeom = _engine!.caretAtPosition(0, start.runId, start.charOffset);
+      final focusGeom = _engine!.caretAtPosition(0, end.runId, focusOffset);
+      _selAnchorX = anchorGeom?.x ?? _pageMargin;
+      _selAnchorY = anchorGeom?.y ?? (_pageMargin + _fontSize);
+      _selFocusX = focusGeom?.x ?? (_pageWidth - _pageMargin);
+      _selFocusY = focusGeom?.y ?? (_pageHeight - _pageMargin);
+      _caretGeometry = focusGeom ??
+          CaretGeometry(
+            x: _selFocusX,
+            y: _selFocusY,
+            height: _fontSize * _lineHeightFactor,
+          );
+
       _selectionRects = _engine!.selectionRectsOnPage(
-        _selPage,
+        0,
         _selAnchorX,
         _selAnchorY,
         _selFocusX,
         _selFocusY,
       );
+      _syncRibbonFromCaret();
       notifyListeners();
       return;
     }
@@ -263,6 +398,8 @@ class EditorController extends ChangeNotifier {
   int get pageCount => _pageCount;
   int get currentPage => _currentPage;
   bool get printPreview => _printPreview;
+  bool get documentReadOnly => _documentReadOnly;
+  DocumentProperties get documentProperties => _documentProperties;
   bool get preferTextRendering => _preferTextRendering;
   bool get trackChanges => _trackChanges;
   List<String> get spellMisspellings => _spellMisspellings;
@@ -276,12 +413,18 @@ class EditorController extends ChangeNotifier {
   bool get strikethrough => _strikethrough;
   bool get subscript => _subscript;
   bool get superscript => _superscript;
+  Color get fontColor => _fontColor;
+  Color? get highlightColor => _highlightColor;
   double get zoom => _zoom;
   bool get showRuler => _showRuler;
   bool get showNavigationPane => _showNavigationPane;
   String get activeParagraphStyle => _activeParagraphStyle;
   double get indentLeft => _indentLeft;
   String? get infoMessage => _infoMessage;
+  List<String> get recentDocuments =>
+      List.unmodifiable(_recentEntries.map((entry) => entry.path));
+  Duration get autosaveInterval =>
+      _autosaveScheduler?.interval ?? DocumentSessionStore.defaultAutosaveInterval;
   CaretGeometry? get caretGeometry => _caretGeometry;
   /// Page index (0-based) where the caret/selection is active.
   int get caretPage => _selPage;
@@ -395,7 +538,26 @@ class EditorController extends ChangeNotifier {
 
   void togglePrintPreview() {
     _printPreview = !_printPreview;
+    _statusText = _printPreview ? 'Print preview' : 'Print layout';
     notifyListeners();
+  }
+
+  /// Whether the given page accepts direct editing in the canvas.
+  bool isPageEditable(int pageIndex) {
+    if (_documentReadOnly) return false;
+    if (_printPreview) return false;
+    if (_preferTextRendering && pageIndex != _currentPage) return false;
+    return true;
+  }
+
+  void _refreshDocumentMetadata() {
+    if (_engine == null) {
+      _documentProperties = DocumentProperties.empty;
+      _documentReadOnly = false;
+      return;
+    }
+    _documentProperties = _engine!.fetchDocumentProperties();
+    _documentReadOnly = _engine!.isDocumentReadOnly();
   }
 
   void insertCharacter(String char) {
@@ -410,6 +572,7 @@ class EditorController extends ChangeNotifier {
       _documentText += char;
       _recomputePageCount();
     }
+    _markDocumentDirty();
     notifyListeners();
   }
 
@@ -421,6 +584,19 @@ class EditorController extends ChangeNotifier {
     if (_documentText.isEmpty) return;
     _documentText = _documentText.substring(0, _documentText.length - 1);
     _recomputePageCount();
+    _markDocumentDirty();
+    notifyListeners();
+  }
+
+  void deleteForward() {
+    if (usesGlyphRendering) {
+      deleteGlyphForward();
+      return;
+    }
+    if (_documentText.isEmpty) return;
+    _documentText = _documentText.substring(1);
+    _recomputePageCount();
+    _markDocumentDirty();
     notifyListeners();
   }
 
@@ -498,25 +674,39 @@ class EditorController extends ChangeNotifier {
     if (_preferTextRendering) return; // TextField fallback handles arrows.
     if (_caretRunId == null) return;
 
+    final extend = HardwareKeyboard.instance.isShiftPressed;
+    if (extend) {
+      _ensureSelectionAnchorForExtend();
+    }
+
     switch (key) {
       case LogicalKeyboardKey.arrowLeft:
-        _moveGlyphCaretOffset(-1);
+        _moveGlyphCaretOffset(-1, extendSelection: extend);
         return;
       case LogicalKeyboardKey.arrowRight:
-        _moveGlyphCaretOffset(1);
+        _moveGlyphCaretOffset(1, extendSelection: extend);
         return;
       case LogicalKeyboardKey.arrowUp:
-        _moveGlyphCaretUpDown(-1);
+        _moveGlyphCaretUpDown(-1, extendSelection: extend);
         return;
       case LogicalKeyboardKey.arrowDown:
-        _moveGlyphCaretUpDown(1);
+        _moveGlyphCaretUpDown(1, extendSelection: extend);
         return;
       default:
         return;
     }
   }
 
-  void _moveGlyphCaretOffset(int delta) {
+  void _ensureSelectionAnchorForExtend() {
+    if (_caretRunId == null) return;
+    if (_selAnchorRunId != null && hasGlyphSelection) return;
+    _selAnchorRunId = _caretRunId;
+    _selAnchorOffset = _caretOffset;
+    _selAnchorX = _caretGeometry?.x ?? _pageMargin;
+    _selAnchorY = _caretGeometry?.y ?? (_pageMargin + _fontSize);
+  }
+
+  void _moveGlyphCaretOffset(int delta, {bool extendSelection = false}) {
     final runId = _caretRunId;
     if (runId == null) return;
 
@@ -525,7 +715,7 @@ class EditorController extends ChangeNotifier {
     if (candidate != _caretOffset) {
       final after = _engine!.caretAtPosition(_selPage, runId, candidate);
       if (after != null && !_sameCaretGeometry(before, after)) {
-        _setGlyphCaret(runId, candidate, after);
+        _applyGlyphCaretMove(runId, candidate, after, extendSelection: extendSelection);
         return;
       }
     }
@@ -534,6 +724,10 @@ class EditorController extends ChangeNotifier {
     if (before == null) return;
     final nudge = delta > 0 ? 2.0 : -2.0;
     final probeX = (before.x + nudge).clamp(_pageMargin, _pageWidth - _pageMargin);
+    if (extendSelection) {
+      _moveGlyphCaretToHit(_selPage, probeX, before.y, extendSelection: true);
+      return;
+    }
     hitTestAt(_selPage, probeX, before.y);
   }
 
@@ -544,22 +738,91 @@ class EditorController extends ChangeNotifier {
   }
 
   void _setGlyphCaret(String runId, int offset, CaretGeometry geometry) {
+    _applyGlyphCaretMove(runId, offset, geometry, extendSelection: false);
+  }
+
+  void _applyGlyphCaretMove(
+    String runId,
+    int offset,
+    CaretGeometry geometry, {
+    required bool extendSelection,
+  }) {
     _caretRunId = runId;
     _caretOffset = offset;
     _caretGeometry = geometry;
-    _selAnchorRunId = runId;
-    _selAnchorOffset = offset;
-    _selFocusRunId = runId;
-    _selFocusOffset = offset;
-    _selectionRects = const [];
+    if (extendSelection) {
+      _selFocusRunId = runId;
+      _selFocusOffset = offset;
+      _selFocusX = geometry.x;
+      _selFocusY = geometry.y;
+      _selectionRects = _engine!.selectionRectsOnPage(
+        _selPage,
+        _selAnchorX,
+        _selAnchorY,
+        _selFocusX,
+        _selFocusY,
+      );
+    } else {
+      _selAnchorRunId = runId;
+      _selAnchorOffset = offset;
+      _selFocusRunId = runId;
+      _selFocusOffset = offset;
+      _selectionRects = const [];
+    }
     _syncRibbonFromCaret();
     notifyListeners();
   }
 
-  void _moveGlyphCaretUpDown(int direction) {
+  void _moveGlyphCaretToHit(
+    int pageIndex,
+    double x,
+    double y, {
+    required bool extendSelection,
+  }) {
+    if (_engine == null) return;
+    final result = _engine!.hitTestPage(pageIndex, x, y);
+    if (result == null) return;
+    _selPage = pageIndex;
+    _caretRunId = result.runId;
+    _caretOffset = result.charOffset;
+    _caretGeometry = _engine!.caretGeometryAt(pageIndex, x, y);
+    if (extendSelection) {
+      _selFocusRunId = result.runId;
+      _selFocusOffset = result.charOffset;
+      _selFocusX = x;
+      _selFocusY = y;
+      _selectionRects = _engine!.selectionRectsOnPage(
+        pageIndex,
+        _selAnchorX,
+        _selAnchorY,
+        _selFocusX,
+        _selFocusY,
+      );
+    } else {
+      _selAnchorRunId = result.runId;
+      _selAnchorOffset = result.charOffset;
+      _selFocusRunId = result.runId;
+      _selFocusOffset = result.charOffset;
+      _selectionRects = const [];
+    }
+    _syncRibbonFromCaret();
+    notifyListeners();
+  }
+
+  void _moveGlyphCaretUpDown(int direction, {bool extendSelection = false}) {
     if (_caretGeometry == null) return;
     final stepY = _fontSize * _lineHeightFactor;
     final newY = _caretGeometry!.y + stepY * direction;
+    if (extendSelection) {
+      _ensureSelectionAnchorForExtend();
+      _moveGlyphCaretToHit(
+        _selPage,
+        _caretGeometry!.x,
+        newY,
+        extendSelection: true,
+      );
+      return;
+    }
     // Keep X stable so we land on the nearest glyph segment for that line.
     hitTestAt(_selPage, _caretGeometry!.x, newY);
   }
@@ -595,10 +858,186 @@ class EditorController extends ChangeNotifier {
     _syncRibbonFromCaret();
   }
 
+  bool isPointInGlyphSelection(int pageIndex, Offset point) {
+    if (!hasGlyphSelection || pageIndex != _selPage || _selectionRects.isEmpty) {
+      return false;
+    }
+    for (final rect in _selectionRects) {
+      final bounds = Rect.fromLTWH(rect.x, rect.y, rect.width, rect.height);
+      if (bounds.inflate(2).contains(point)) return true;
+    }
+    return false;
+  }
+
+  void beginGlyphDrag(int pageIndex) {
+    if (!hasGlyphSelection) return;
+    _glyphDragActive = true;
+    _activateGlyphPage(pageIndex);
+  }
+
+  void updateGlyphDragDropCaret(int pageIndex, double x, double y) {
+    if (!_glyphDragActive || _engine == null) return;
+    _activateGlyphPage(pageIndex);
+    final result = _engine!.hitTestPage(pageIndex, x, y);
+    if (result == null) {
+      _placeCaretOnEmptyPage(pageIndex, x, y);
+      return;
+    }
+    _caretRunId = result.runId;
+    _caretOffset = result.charOffset;
+    _caretGeometry = _engine!.caretGeometryAt(pageIndex, x, y);
+    notifyListeners();
+  }
+
+  void completeGlyphDrag(int pageIndex, double x, double y) {
+    if (!_glyphDragActive) return;
+    _glyphDragActive = false;
+    moveGlyphSelectionTo(pageIndex, x, y);
+  }
+
+  void cancelGlyphDrag() {
+    _glyphDragActive = false;
+  }
+
+  bool get isGlyphDragActive => _glyphDragActive;
+
+  /// Move the current glyph selection to a hit-tested drop position.
+  void moveGlyphSelectionTo(int pageIndex, double x, double y) {
+    if (_engine == null || !hasGlyphSelection) return;
+    final text = selectedText;
+    if (text.isEmpty) return;
+
+    final drop = _engine!.hitTestPage(pageIndex, x, y);
+    if (drop != null && _isDropInsideSelection(drop.runId, drop.charOffset)) {
+      return;
+    }
+
+    _deleteGlyphSelection();
+
+    final dropAfter = _engine!.hitTestPage(pageIndex, x, y);
+    if (dropAfter == null) return;
+    if (!_engine!.tryInsertText(dropAfter.runId, dropAfter.charOffset, text)) return;
+
+    _caretRunId = dropAfter.runId;
+    _caretOffset = dropAfter.charOffset + text.length;
+    _collapseGlyphSelectionToCaret(dropAfter.runId);
+    _refreshFromEngine();
+    _syncCaretGeometry();
+    _syncRibbonFromCaret();
+    _markDocumentDirty();
+    notifyListeners();
+  }
+
+  bool _isDropInsideSelection(String dropRunId, int dropOffset) {
+    if (_selAnchorRunId == null || _selFocusRunId == null) return false;
+    if (dropRunId == _selAnchorRunId &&
+        dropOffset == _selAnchorOffset &&
+        dropRunId == _selFocusRunId &&
+        dropOffset == _selFocusOffset) {
+      return true;
+    }
+    if (_selAnchorRunId == _selFocusRunId && dropRunId == _selAnchorRunId) {
+      final lo = _selAnchorOffset < _selFocusOffset
+          ? _selAnchorOffset
+          : _selFocusOffset;
+      final hi = _selAnchorOffset < _selFocusOffset
+          ? _selFocusOffset
+          : _selAnchorOffset;
+      return dropOffset > lo && dropOffset < hi;
+    }
+    return false;
+  }
+
+    /// Double-click word selection at a page position.
+  void selectGlyphWordAt(int pageIndex, double x, double y) {
+    if (_engine == null) return;
+    hitTestAt(pageIndex, x, y);
+    final runId = _caretRunId;
+    if (runId == null) return;
+
+    final bounds = _wordBoundsInRun(runId, _caretOffset);
+    if (bounds.$1 >= bounds.$2) return;
+
+    _selPage = pageIndex;
+    _selAnchorRunId = runId;
+    _selAnchorOffset = bounds.$1;
+    _selFocusRunId = runId;
+    _selFocusOffset = bounds.$2;
+    _caretRunId = runId;
+    _caretOffset = bounds.$2;
+
+    final anchorGeom = _engine!.caretAtPosition(pageIndex, runId, bounds.$1);
+    final focusGeom = _engine!.caretAtPosition(pageIndex, runId, bounds.$2);
+    _selAnchorX = anchorGeom?.x ?? x;
+    _selAnchorY = anchorGeom?.y ?? y;
+    _selFocusX = focusGeom?.x ?? x;
+    _selFocusY = focusGeom?.y ?? y;
+    _caretGeometry = focusGeom ?? _caretGeometry;
+
+    _selectionRects = _engine!.selectionRectsOnPage(
+      pageIndex,
+      _selAnchorX,
+      _selAnchorY,
+      _selFocusX,
+      _selFocusY,
+    );
+    _syncRibbonFromCaret();
+    notifyListeners();
+  }
+
+  (int, int) _wordBoundsInRun(String runId, int offset) {
+    final wordChar = RegExp(r'[\p{L}\p{N}_]', unicode: true);
+    bool isWordCharAt(int index) {
+      if (index < 0) return false;
+      final ch = _engine!.fetchTextRange(runId, index, runId, index + 1);
+      return ch != null && ch.isNotEmpty && wordChar.hasMatch(ch);
+    }
+
+    var pos = offset;
+    if (!isWordCharAt(pos) && !isWordCharAt(pos - 1)) {
+      while (pos < 1 << 16 && !isWordCharAt(pos)) {
+        pos++;
+        final probe = _engine!.fetchTextRange(runId, pos, runId, pos + 1);
+        if (probe == null) break;
+        if (probe.isEmpty) break;
+      }
+      if (!isWordCharAt(pos)) {
+        pos = offset;
+        while (pos > 0 && !isWordCharAt(pos - 1)) {
+          pos--;
+        }
+        if (pos > 0 && isWordCharAt(pos - 1)) {
+          var end = pos;
+          while (pos > 0 && isWordCharAt(pos - 1)) {
+            pos--;
+          }
+          return (pos, end);
+        }
+        return (offset, offset);
+      }
+    } else if (pos > 0 && !isWordCharAt(pos) && isWordCharAt(pos - 1)) {
+      pos--;
+    }
+
+    var start = pos;
+    while (start > 0 && isWordCharAt(start - 1)) {
+      start--;
+    }
+    var end = pos;
+    while (isWordCharAt(end)) {
+      end++;
+    }
+    return (start, end);
+  }
+
   void insertGlyphCharacter(String char) {
     if (_engine == null) return;
     // Never insert control characters as glyphs (Enter used to produce tofu □).
-    if (char == '\n' || char == '\r' || char.codeUnitAt(0) < 0x20) {
+    // Tab is an exception: layout treats `\t` as a tab stop advance.
+    if (char == '\n' || char == '\r') {
+      return;
+    }
+    if (char != '\t' && char.codeUnitAt(0) < 0x20) {
       return;
     }
     final runId = _caretRunId ?? _defaultRunId();
@@ -631,6 +1070,7 @@ class EditorController extends ChangeNotifier {
         height: _caretGeometry!.height,
       );
     }
+    _markDocumentDirty();
     notifyListeners();
   }
 
@@ -647,6 +1087,7 @@ class EditorController extends ChangeNotifier {
     // Place caret on the new paragraph (line below the previous caret).
     final nextY = prevY + _fontSize * _lineHeightFactor;
     hitTestAt(_selPage, prevX.clamp(_pageMargin, _pageWidth - _pageMargin), nextY);
+    _markDocumentDirty();
     notifyListeners();
   }
 
@@ -667,6 +1108,7 @@ class EditorController extends ChangeNotifier {
       _selFocusOffset = _caretOffset;
       _selectionRects = const [];
       _refreshFromEngine();
+      _markDocumentDirty();
       notifyListeners();
       return;
     }
@@ -692,6 +1134,49 @@ class EditorController extends ChangeNotifier {
     _selectionRects = const [];
     _refreshFromEngine();
     _syncCaretGeometry();
+    _markDocumentDirty();
+    notifyListeners();
+  }
+
+  void deleteGlyphForward() {
+    if (_engine == null) return;
+    if (hasGlyphSelection) {
+      _deleteGlyphSelection();
+      return;
+    }
+    final runId = _caretRunId ?? _defaultRunId();
+    if (runId == null) return;
+    if (_engine!.deleteRange(runId, _caretOffset, _caretOffset + 1)) {
+      _selAnchorRunId = runId;
+      _selAnchorOffset = _caretOffset;
+      _selFocusRunId = runId;
+      _selFocusOffset = _caretOffset;
+      _selectionRects = const [];
+      _refreshFromEngine();
+      _markDocumentDirty();
+      notifyListeners();
+      return;
+    }
+
+    // At a run boundary — delete the following character via cross-run range.
+    final geom = _engine!.caretAtPosition(_selPage, runId, _caretOffset);
+    if (geom == null) return;
+    final probeX = (geom.x + 2.0).clamp(_pageMargin, _pageWidth - _pageMargin);
+    final next = _engine!.hitTestPage(_selPage, probeX, geom.y);
+    if (next == null) return;
+    if (next.runId == runId && next.charOffset == _caretOffset) return;
+
+    final endOff = next.charOffset + 1;
+    if (!_engine!.deleteDocRange(runId, _caretOffset, next.runId, endOff)) return;
+
+    _selAnchorRunId = runId;
+    _selAnchorOffset = _caretOffset;
+    _selFocusRunId = runId;
+    _selFocusOffset = _caretOffset;
+    _selectionRects = const [];
+    _refreshFromEngine();
+    _syncCaretGeometry();
+    _markDocumentDirty();
     notifyListeners();
   }
 
@@ -722,6 +1207,7 @@ class EditorController extends ChangeNotifier {
     _selectionRects = const [];
     _refreshFromEngine();
     _syncCaretGeometry();
+    _markDocumentDirty();
     notifyListeners();
   }
 
@@ -783,6 +1269,7 @@ class EditorController extends ChangeNotifier {
       formatJson: json,
     );
     _refreshFromEngine();
+    _syncRibbonFromCaret();
   }
 
   void _applyParaFormatJson(String json) {
@@ -832,9 +1319,12 @@ class EditorController extends ChangeNotifier {
   }
 
   void setFontSize(double size) {
-    _fontSize = size.clamp(6, 96);
+    final clamped = size.clamp(6, 96).toDouble();
+    _fontSize = clamped;
     if (usesGlyphRendering && _engine != null) {
-      _applyCharFormatJson('{"font_size":$_fontSize}');
+      _applyCharFormatJson('{"font_size":$clamped}');
+      // Caret sync can lag behind the format apply; keep the picked size visible.
+      _fontSize = clamped;
     } else if (_preferTextRendering) {
       _recomputePageCount();
     }
@@ -847,6 +1337,66 @@ class EditorController extends ChangeNotifier {
 
   void decreaseFontSize() {
     setFontSize(_fontSize - 1);
+  }
+
+  void setFontColor(Color color) {
+    _fontColor = color;
+    if (usesGlyphRendering && _engine != null) {
+      _applyCharFormatJson(_encodeColorPatch(color: color));
+    }
+    notifyListeners();
+  }
+
+  void setHighlight(Color color) {
+    _highlightColor = color;
+    if (usesGlyphRendering && _engine != null) {
+      _applyCharFormatJson(_encodeColorPatch(highlight: color));
+    }
+    notifyListeners();
+  }
+
+  void clearHighlight() {
+    _highlightColor = null;
+    if (usesGlyphRendering && _engine != null) {
+      _applyCharFormatJson('{"clear_highlight":true}');
+    }
+    notifyListeners();
+  }
+
+  String _encodeColorPatch({Color? color, Color? highlight}) {
+    final map = <String, dynamic>{};
+    if (color != null) {
+      map['color'] = {
+        'r': color.red,
+        'g': color.green,
+        'b': color.blue,
+        'a': color.alpha,
+      };
+    }
+    if (highlight != null) {
+      map['highlight'] = {
+        'r': highlight.red,
+        'g': highlight.green,
+        'b': highlight.blue,
+        'a': highlight.alpha,
+      };
+    }
+    return jsonEncode(map);
+  }
+
+  Color? _colorFromFormatJson(dynamic value) {
+    if (value is! Map) return null;
+    final r = value['r'];
+    final g = value['g'];
+    final b = value['b'];
+    if (r is! num || g is! num || b is! num) return null;
+    final a = value['a'];
+    return Color.fromARGB(
+      a is num ? a.round().clamp(0, 255) : 255,
+      r.round().clamp(0, 255),
+      g.round().clamp(0, 255),
+      b.round().clamp(0, 255),
+    );
   }
 
   void setAlignment(TextAlign align) {
@@ -956,7 +1506,17 @@ class EditorController extends ChangeNotifier {
     _subscript = charFmt['subscript'] == true;
     _superscript = charFmt['superscript'] == true;
     _fontFamily = charFmt['font_family'] as String? ?? 'Calibri';
-    _fontSize = (charFmt['font_size'] as num?)?.toDouble() ?? 11;
+    final fontSize = charFmt['font_size'];
+    if (fontSize is num) {
+      _fontSize = fontSize.toDouble();
+    } else if (fontSize is String) {
+      final parsed = double.tryParse(fontSize);
+      if (parsed != null) {
+        _fontSize = parsed.clamp(6, 96);
+      }
+    }
+    _fontColor = _colorFromFormatJson(charFmt['color']) ?? Colors.black;
+    _highlightColor = _colorFromFormatJson(charFmt['highlight']);
     _alignment = _alignmentFromJson(paraFmt['alignment'] as String?);
     _indentLeft = (paraFmt['indent_left'] as num?)?.toDouble() ?? 0;
 
@@ -1085,21 +1645,33 @@ class EditorController extends ChangeNotifier {
       }
 
       final outPath = path.endsWith('.pdf') ? path : '$path.pdf';
+      final ok = await exportPdfToPath(outPath);
+      if (!ok) {
+        _statusText = 'PDF export failed';
+        notifyListeners();
+      }
+    } catch (e) {
+      _statusText = 'PDF export failed: $e';
+      notifyListeners();
+    }
+  }
+
+  /// Export structural PDF bytes to [path] without a file picker (tests / automation).
+  @visibleForTesting
+  Future<bool> exportPdfToPath(String path) async {
+    try {
+      final outPath = path.endsWith('.pdf') ? path : '$path.pdf';
       Uint8List? bytes;
       if (_engine != null) {
         bytes = _engine!.exportPdfBytes();
       }
-      if (bytes == null || bytes.isEmpty) {
-        _statusText = 'PDF export failed';
-        notifyListeners();
-        return;
-      }
+      if (bytes == null || bytes.isEmpty) return false;
       await File(outPath).writeAsBytes(bytes);
       _statusText = 'PDF exported';
       notifyListeners();
-    } catch (e) {
-      _statusText = 'PDF export failed: $e';
-      notifyListeners();
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 
@@ -1107,6 +1679,7 @@ class EditorController extends ChangeNotifier {
     if (_engine != null && _engine!.undoEdit()) {
       _refreshFromEngine();
       _syncRibbonFromCaret();
+      _markDocumentDirty();
       _statusText = 'Undo';
     }
     notifyListeners();
@@ -1116,9 +1689,192 @@ class EditorController extends ChangeNotifier {
     if (_engine != null && _engine!.redoEdit()) {
       _refreshFromEngine();
       _syncRibbonFromCaret();
+      _markDocumentDirty();
       _statusText = 'Redo';
     }
     notifyListeners();
+  }
+
+  void _markDocumentDirty() {
+    _editGeneration++;
+  }
+
+  void _syncSavedGeneration() {
+    _lastAutosavedGeneration = _editGeneration;
+  }
+
+  Future<void> setAutosaveInterval(Duration interval) async {
+    await _sessionStore.saveAutosaveInterval(interval);
+    _autosaveScheduler?.setInterval(interval);
+    notifyListeners();
+  }
+
+  /// Timer callback and manual test hook for autosave.
+  @visibleForTesting
+  Future<void> performAutosave() async {
+    if (_editGeneration == _lastAutosavedGeneration) return;
+    try {
+      final bytes = await _serializeDocument(formatExtension: 'twdoc');
+      if (bytes.isEmpty) return;
+      await _sessionStore.writeAutosave(
+        bytes: bytes,
+        sourcePath: _currentPath,
+        format: 'twdoc',
+      );
+      _lastAutosavedGeneration = _editGeneration;
+    } catch (_) {
+      // Autosave failures should not interrupt editing.
+    }
+  }
+
+  /// Load the on-disk autosave draft if present (crash recovery).
+  @visibleForTesting
+  Future<bool> tryRecoverAutosave() async {
+    final snapshot = await _sessionStore.readAutosave();
+    if (snapshot == null) return false;
+
+    final path = snapshot.sourcePath ?? 'Recovered Draft.twdoc';
+    if (_engine != null && _engine!.openDocumentBytes(snapshot.bytes, path: path) == 0) {
+      _currentPath = snapshot.sourcePath;
+      _currentPage = 0;
+      _engine!.setCurrentPageIndex(0);
+      _refreshFromEngine();
+      _refreshDocumentMetadata();
+      _caretRunId = null;
+      _ensureGlyphCaret();
+      _syncRibbonFromCaret();
+      _syncSavedGeneration();
+      _statusText = 'Recovered unsaved draft';
+      _infoMessage = 'Restored draft from ${snapshot.savedAt.toLocal()}';
+      notifyListeners();
+      return true;
+    }
+
+    _documentText = DocumentReader.extractText(snapshot.bytes, path: path);
+    _displayListBytes = Uint8List(0);
+    _displayVersion++;
+    _currentPath = snapshot.sourcePath;
+    _preferTextRendering = true;
+    _recomputePageCount();
+    _syncSavedGeneration();
+    _statusText = 'Recovered unsaved draft (mock)';
+    notifyListeners();
+    return true;
+  }
+
+  Future<void> openRecentDocument(String path) async {
+    await openDocumentFromPath(path);
+  }
+
+  Future<void> _persistRecentEntries() async {
+    await _sessionStore.saveRecentEntries(_recentEntries);
+  }
+
+  RecentDocumentEntry _recentEntryForPath(String path) {
+    final normalized = p.normalize(path);
+    for (final entry in _recentEntries) {
+      if (p.normalize(entry.path) == normalized) {
+        return entry;
+      }
+    }
+    return RecentDocumentEntry(path: normalized);
+  }
+
+  Future<void> _recordRecentPath(String path) async {
+    String? bookmark;
+    if (Platform.isMacOS) {
+      bookmark = await MacOSFileAccess.createBookmark(path);
+    }
+    _recentEntries = _sessionStore.bumpRecentEntry(
+      _recentEntries,
+      RecentDocumentEntry(path: path, bookmark: bookmark),
+    );
+    await _persistRecentEntries();
+    notifyListeners();
+  }
+
+  Future<void> _releaseScopedAccess() async {
+    final previous = _scopedAccessPath;
+    _scopedAccessPath = null;
+    if (previous != null) {
+      await MacOSFileAccess.stopAccess(previous);
+    }
+  }
+
+  Future<Uint8List> _readDocumentBytes(String path) async {
+    await _releaseScopedAccess();
+    final entry = _recentEntryForPath(path);
+    final ok = await MacOSFileAccess.startAccess(path, bookmark: entry.bookmark);
+    if (!ok) {
+      throw FileSystemException('Could not access file', path);
+    }
+    _scopedAccessPath = path;
+    return File(path).readAsBytes();
+  }
+
+  String _openFailureMessage(Object error) {
+    final message = error.toString();
+    if (Platform.isMacOS &&
+        (message.contains('Could not access file') ||
+            message.contains('Operation not permitted') ||
+            message.contains('Permission denied'))) {
+      return 'Open failed: use Open… to select the file again';
+    }
+    return 'Open failed: $error';
+  }
+
+  Future<void> newDocument() async {
+    if (_engine != null) {
+      if (!_engine!.newDocument()) {
+        _statusText = 'New document failed';
+        notifyListeners();
+        return;
+      }
+      _resetDocumentState();
+      await _sessionStore.clearAutosave();
+      _syncSavedGeneration();
+      _statusText = 'New document';
+      notifyListeners();
+      return;
+    }
+    _resetDocumentState();
+    await _sessionStore.clearAutosave();
+    _syncSavedGeneration();
+    notifyListeners();
+  }
+
+  void _resetDocumentState() {
+    _currentPath = null;
+    _currentPage = 0;
+    _documentText = '';
+    _displayListBytes = Uint8List(0);
+    _displayVersion = 0;
+    _pageCount = 1;
+    _caretRunId = null;
+    _caretOffset = 0;
+    _caretGeometry = null;
+    _selAnchorRunId = null;
+    _selAnchorOffset = 0;
+    _selFocusRunId = null;
+    _selFocusOffset = 0;
+    _selectionRects = const [];
+    _selPage = 0;
+    _spellMisspellings = const [];
+    _infoMessage = null;
+    _documentProperties = DocumentProperties.empty;
+    _documentReadOnly = false;
+    _pageDisplayLists.clear();
+    _preferTextRendering = _engine == null;
+    if (_engine != null) {
+      _engine!.setCurrentPageIndex(0);
+      _refreshFromEngine();
+      _refreshDocumentMetadata();
+      _caretRunId = null;
+      _ensureGlyphCaret();
+      _syncRibbonFromCaret();
+    } else {
+      _recomputePageCount();
+    }
   }
 
   Future<void> saveDocument() async {
@@ -1137,6 +1893,43 @@ class EditorController extends ChangeNotifier {
       dialogTitle: 'Save document as',
       forceFormat: ext,
     );
+  }
+
+  /// Persist the current document to [path] without a file picker (tests / automation).
+  Future<bool> saveDocumentToPath(
+    String path, {
+    String? formatExtension,
+  }) async {
+    try {
+      final ext = formatExtension ?? _extensionFromPath(path) ?? 'twdoc';
+      final outPath = path.endsWith('.$ext') ? path : '$path.$ext';
+      final bytes = await _serializeDocument(formatExtension: formatExtension ?? ext);
+      await File(outPath).writeAsBytes(bytes);
+      _currentPath = outPath;
+      await _recordRecentPath(outPath);
+      await _sessionStore.clearAutosave();
+      _syncSavedGeneration();
+      _statusText = 'Saved';
+      notifyListeners();
+      return true;
+    } catch (_) {
+      _statusText = 'Save failed';
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<Uint8List> _serializeDocument({String? formatExtension}) async {
+    if (_engine != null) {
+      if (formatExtension != null) {
+        final bytes = _engine!.saveDocumentAsBytes(formatExtension) ?? Uint8List(0);
+        if (bytes.isNotEmpty) return bytes;
+      } else {
+        final bytes = _engine!.saveDocumentBytes();
+        if (bytes != null && bytes.isNotEmpty) return bytes;
+      }
+    }
+    return TwdocWriter.fromText(_documentText);
   }
 
   Future<void> _saveWithExtension({
@@ -1160,21 +1953,12 @@ class EditorController extends ChangeNotifier {
 
       final ext = forceFormat ?? defaultExtension;
       final outPath = path.endsWith('.$ext') ? path : '$path.$ext';
-      Uint8List bytes;
-      if (_engine != null) {
-        if (forceFormat != null) {
-          bytes = _engine!.saveDocumentAsBytes(ext) ?? Uint8List(0);
-        } else {
-          bytes = _engine!.saveDocumentBytes() ?? TwdocWriter.fromText(_documentText);
-        }
-        if (bytes.isEmpty) {
-          bytes = TwdocWriter.fromText(_documentText);
-        }
-      } else {
-        bytes = TwdocWriter.fromText(_documentText);
-      }
+      final bytes = await _serializeDocument(formatExtension: forceFormat);
       await File(outPath).writeAsBytes(bytes);
       _currentPath = outPath;
+      await _recordRecentPath(outPath);
+      await _sessionStore.clearAutosave();
+      _syncSavedGeneration();
       _statusText = 'Saved';
       notifyListeners();
     } catch (e) {
@@ -1199,6 +1983,26 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void acceptAllRevisions() {
+    if (_engine != null) {
+      final ok = _engine!.acceptAllRevisions();
+      _statusText = ok ? 'Accepted all revisions' : 'Accept revisions failed';
+    } else {
+      _statusText = 'Accept revisions (mock)';
+    }
+    notifyListeners();
+  }
+
+  void rejectAllRevisions() {
+    if (_engine != null) {
+      final ok = _engine!.rejectAllRevisions();
+      _statusText = ok ? 'Rejected all revisions' : 'Reject revisions failed';
+    } else {
+      _statusText = 'Reject revisions (mock)';
+    }
+    notifyListeners();
+  }
+
   Future<void> spellCheckDocument() async {
     if (_engine != null) {
       final words = _engine!.spellCheckMisspellings();
@@ -1219,6 +2023,18 @@ class EditorController extends ChangeNotifier {
       _statusText = 'Spell check (mock): no issues';
     }
     notifyListeners();
+  }
+
+  Future<void> openDocumentFromPath(String path) async {
+    _statusText = 'Opening…';
+    notifyListeners();
+    try {
+      final bytes = await _readDocumentBytes(path);
+      await _openDocumentBytes(bytes, path: path);
+    } catch (e) {
+      _statusText = _openFailureMessage(e);
+      notifyListeners();
+    }
   }
 
   Future<void> openDocument() async {
@@ -1245,30 +2061,60 @@ class EditorController extends ChangeNotifier {
         return;
       }
 
-      final bytes = await File(path).readAsBytes();
-      final textFromFile = DocumentReader.extractText(bytes, path: path);
-
-      if (_engine != null && _engine!.openDocumentBytes(bytes, path: path)) {
-        _currentPage = 0;
-        _engine!.setCurrentPageIndex(0);
-        _refreshFromEngine();
-        _statusText = 'Opened';
-      } else {
-        _documentText = textFromFile;
-        _displayListBytes = Uint8List(0);
-        _displayVersion++;
-        _recomputePageCount();
-        _preferTextRendering = true;
-        _statusText = _engine == null ? 'Opened (mock mode)' : 'Opened (mock fallback)';
-      }
-
-      _currentPath = path;
-      _currentPage = 0;
-      notifyListeners();
+      final bytes = await _readDocumentBytes(path);
+      await _openDocumentBytes(bytes, path: path);
     } catch (e) {
       _statusText = 'Open failed: $e';
       notifyListeners();
     }
+  }
+
+  Future<void> _openDocumentBytes(Uint8List bytes, {required String path}) async {
+    if (DocumentReader.isPasswordProtectedDocx(bytes, path: path)) {
+      _statusText = 'Password-protected documents are not supported';
+      notifyListeners();
+      return;
+    }
+
+    final textFromFile = DocumentReader.extractText(bytes, path: path);
+
+    if (_engine != null) {
+      final code = _engine!.openDocumentBytes(bytes, path: path);
+      if (code == 0) {
+        _currentPage = 0;
+        _engine!.setCurrentPageIndex(0);
+        _refreshFromEngine();
+        _refreshDocumentMetadata();
+        _caretRunId = null;
+        _ensureGlyphCaret();
+        _syncRibbonFromCaret();
+        _statusText = _documentReadOnly
+            ? 'Opened (read-only)'
+            : 'Opened';
+      } else {
+        final err = _engine!.getLastError();
+        _statusText = (err != null && err.toLowerCase().contains('password'))
+            ? 'Password-protected documents are not supported'
+            : 'Open failed: ${err ?? 'unknown error'}';
+        notifyListeners();
+        return;
+      }
+    } else {
+      _documentText = textFromFile;
+      _displayListBytes = Uint8List(0);
+      _displayVersion++;
+      _recomputePageCount();
+      _preferTextRendering = true;
+      _documentProperties = DocumentProperties.empty;
+      _documentReadOnly = false;
+      _statusText = 'Opened (mock mode)';
+    }
+
+    _currentPath = path;
+    _currentPage = 0;
+    await _recordRecentPath(path);
+    _syncSavedGeneration();
+    notifyListeners();
   }
 
   void _refreshFromEngine() {
@@ -1357,6 +2203,13 @@ class EditorController extends ChangeNotifier {
   /// Whether the UI is in glyph/engine editing mode (vs TextField fallback).
   bool get usesGlyphRendering => !_preferTextRendering;
 
+  /// Test hook: mark the session read-only without opening a protected file.
+  @visibleForTesting
+  void setDocumentReadOnlyForTest(bool readOnly) {
+    _documentReadOnly = readOnly;
+    notifyListeners();
+  }
+
   /// Test hook: inject display list bytes and switch to glyph rendering mode.
   @visibleForTesting
   void setDisplayListForTest(
@@ -1379,6 +2232,11 @@ class EditorController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _autosaveScheduler?.stop();
+    unawaited(_releaseScopedAccess());
+    if (Platform.isMacOS) {
+      unawaited(MacOSFileAccess.stopAllAccess());
+    }
     super.dispose();
   }
 }

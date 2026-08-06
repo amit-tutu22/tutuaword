@@ -1,15 +1,23 @@
+import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
 import 'package:path/path.dart' as p;
+import 'package:tutuaword/bridge/document_properties.dart';
 
 typedef TwInitNative = Int32 Function(Pointer<NativeFunction<Int32 Function(Uint32, Pointer<Uint8>, IntPtr)>>);
 typedef TwInitDart = int Function(Pointer<NativeFunction<Int32 Function(Uint32, Pointer<Uint8>, IntPtr)>>);
 
 typedef TwApplyInsertTextNative = Int32 Function(Pointer<Utf8>, Uint32, Pointer<Utf8>);
 typedef TwApplyInsertTextDart = int Function(Pointer<Utf8>, int, Pointer<Utf8>);
+
+typedef TwApplyPasteHtmlNative = Int32 Function(Pointer<Utf8>, Uint32, Pointer<Utf8>);
+typedef TwApplyPasteHtmlDart = int Function(Pointer<Utf8>, int, Pointer<Utf8>);
+
+typedef TwApplyPasteDocxNative = Int32 Function(Pointer<Utf8>, Uint32, Pointer<Uint8>, IntPtr);
+typedef TwApplyPasteDocxDart = int Function(Pointer<Utf8>, int, Pointer<Uint8>, int);
 
 typedef TwGetDisplayListNative = Int32 Function(
   Pointer<Pointer<Uint8>>,
@@ -46,6 +54,15 @@ typedef TwGetPageDisplayListDart = int Function(
 typedef TwGetDocumentTextNative = Int32 Function(Pointer<Pointer<Uint8>>, Pointer<IntPtr>);
 typedef TwGetDocumentTextDart = int Function(Pointer<Pointer<Uint8>>, Pointer<IntPtr>);
 
+typedef TwGetLastErrorNative = Int32 Function(Pointer<Pointer<Uint8>>, Pointer<IntPtr>);
+typedef TwGetLastErrorDart = int Function(Pointer<Pointer<Uint8>>, Pointer<IntPtr>);
+
+typedef TwGetDocumentPropertiesJsonNative = Int32 Function(Pointer<Pointer<Uint8>>, Pointer<IntPtr>);
+typedef TwGetDocumentPropertiesJsonDart = int Function(Pointer<Pointer<Uint8>>, Pointer<IntPtr>);
+
+typedef TwIsDocumentReadOnlyNative = Int32 Function();
+typedef TwIsDocumentReadOnlyDart = int Function();
+
 typedef TwOpenDocumentWithPathNative = Int32 Function(
   Pointer<Uint8>,
   IntPtr,
@@ -59,6 +76,9 @@ typedef TwOpenDocumentWithPathDart = int Function(
 
 typedef TwSaveDocumentNative = Int32 Function(Pointer<Pointer<Uint8>>, Pointer<IntPtr>);
 typedef TwSaveDocumentDart = int Function(Pointer<Pointer<Uint8>>, Pointer<IntPtr>);
+
+typedef TwNewDocumentNative = Int32 Function();
+typedef TwNewDocumentDart = int Function();
 
 typedef TwSetCurrentPageNative = Int32 Function(Uint32);
 typedef TwSetCurrentPageDart = int Function(int);
@@ -205,9 +225,19 @@ typedef TwSpellCheckDocumentDart = int Function(
 
 typedef TwSetTrackChangesNative = Int32 Function(Int32);
 typedef TwSetTrackChangesDart = int Function(int);
+typedef TwAcceptAllRevisionsNative = Int32 Function();
+typedef TwAcceptAllRevisionsDart = int Function();
+typedef TwRejectAllRevisionsNative = Int32 Function();
+typedef TwRejectAllRevisionsDart = int Function();
 
 typedef TwHitTestNative = Int32 Function(Uint32, Float, Float, Pointer<Utf8>, IntPtr, Pointer<Uint32>);
 typedef TwHitTestDart = int Function(int, double, double, Pointer<Utf8>, int, Pointer<Uint32>);
+
+typedef TwDocumentTailHitNative = Int32 Function(Uint32, Pointer<Utf8>, IntPtr, Pointer<Uint32>);
+typedef TwDocumentTailHitDart = int Function(int, Pointer<Utf8>, int, Pointer<Uint32>);
+
+typedef TwWaitForLayoutNative = Int32 Function();
+typedef TwWaitForLayoutDart = int Function();
 
 typedef TwCaretGeometryNative = Int32 Function(Uint32, Float, Float, Pointer<Float>, Pointer<Float>, Pointer<Float>);
 typedef TwCaretGeometryDart = int Function(int, double, double, Pointer<Float>, Pointer<Float>, Pointer<Float>);
@@ -235,11 +265,18 @@ typedef TwSelectionRectsDart = int Function(int, double, double, double, double,
 typedef TwFreeBufferNative = Void Function(Pointer<Uint8>, IntPtr);
 typedef TwFreeBufferDart = void Function(Pointer<Uint8>, int);
 
+typedef TwShutdownNative = Void Function();
+typedef TwShutdownDart = void Function();
+
 class NativeEngine {
   NativeEngine._(this._lib);
 
+  static NativeEngine? _cached;
+
   final DynamicLibrary _lib;
   late final TwApplyInsertTextDart applyInsertText;
+  late final TwApplyPasteHtmlDart applyPasteHtml;
+  late final TwApplyPasteDocxDart applyPasteDocx;
   late final TwApplyCharFormatDart applyCharFormat;
   late final TwApplyParaFormatDart applyParaFormat;
   late final TwApplyDeleteRangeDart applyDeleteRange;
@@ -248,11 +285,15 @@ class NativeEngine {
   late final TwGetDisplayListDart getDisplayList;
   late final TwGetPageDisplayListDart getPageDisplayList;
   late final TwGetDocumentTextDart getDocumentText;
+  late final TwGetLastErrorDart getLastErrorNative;
+  late final TwGetDocumentPropertiesJsonDart getDocumentPropertiesJson;
+  late final TwIsDocumentReadOnlyDart isDocumentReadOnlyNative;
   late final TwGetTextRangeDart getTextRange;
   late final TwGetCaretFormatDart getCaretFormat;
   late final TwClearFormatDart clearFormatNative;
   late final TwInsertPageBreakDart insertPageBreak;
   late final TwOpenDocumentWithPathDart openDocumentWithPath;
+  late final TwNewDocumentDart newDocumentNative;
   late final TwSaveDocumentDart saveDocument;
   late final TwSetCurrentPageDart setCurrentPage;
   late final TwApplyHeading1Dart applyHeading1;
@@ -267,13 +308,18 @@ class NativeEngine {
   late final TwSaveDocumentAsDart saveDocumentAs;
   late final TwSpellCheckDocumentDart spellCheckDocument;
   late final TwSetTrackChangesDart setTrackChanges;
+  late final TwAcceptAllRevisionsDart acceptAllRevisionsNative;
+  late final TwRejectAllRevisionsDart rejectAllRevisionsNative;
   late final TwHitTestDart hitTest;
+  late final TwDocumentTailHitDart documentTailHit;
+  late final TwWaitForLayoutDart waitForLayoutNative;
   late final TwCaretGeometryDart caretGeometry;
   late final TwCaretAtPositionDart caretAtPositionNative;
   late final TwSelectionRectsDart selectionRects;
   late final TwFreeBufferDart freeBuffer;
 
   static NativeEngine? load() {
+    if (_cached != null) return _cached;
     try {
       final lib = _openLibrary();
       final engine = NativeEngine._(lib);
@@ -282,6 +328,10 @@ class NativeEngine {
       );
       engine.applyInsertText =
           lib.lookupFunction<TwApplyInsertTextNative, TwApplyInsertTextDart>('tw_apply_insert_text');
+      engine.applyPasteHtml =
+          lib.lookupFunction<TwApplyPasteHtmlNative, TwApplyPasteHtmlDart>('tw_apply_paste_html');
+      engine.applyPasteDocx =
+          lib.lookupFunction<TwApplyPasteDocxNative, TwApplyPasteDocxDart>('tw_apply_paste_docx');
       engine.applyCharFormat =
           lib.lookupFunction<TwApplyCharFormatNative, TwApplyCharFormatDart>('tw_apply_char_format');
       engine.applyParaFormat =
@@ -298,6 +348,13 @@ class NativeEngine {
           TwGetPageDisplayListDart>('tw_get_page_display_list');
       engine.getDocumentText =
           lib.lookupFunction<TwGetDocumentTextNative, TwGetDocumentTextDart>('tw_get_document_text');
+      engine.getLastErrorNative =
+          lib.lookupFunction<TwGetLastErrorNative, TwGetLastErrorDart>('tw_get_last_error');
+      engine.getDocumentPropertiesJson = lib.lookupFunction<TwGetDocumentPropertiesJsonNative,
+          TwGetDocumentPropertiesJsonDart>('tw_get_document_properties_json');
+      engine.isDocumentReadOnlyNative =
+          lib.lookupFunction<TwIsDocumentReadOnlyNative, TwIsDocumentReadOnlyDart>(
+              'tw_is_document_read_only');
       engine.getTextRange =
           lib.lookupFunction<TwGetTextRangeNative, TwGetTextRangeDart>('tw_get_text_range');
       engine.getCaretFormat = lib.lookupFunction<TwGetCaretFormatNative, TwGetCaretFormatDart>(
@@ -308,6 +365,8 @@ class NativeEngine {
           'tw_insert_page_break');
       engine.openDocumentWithPath = lib.lookupFunction<TwOpenDocumentWithPathNative,
           TwOpenDocumentWithPathDart>('tw_open_document_with_path');
+      engine.newDocumentNative =
+          lib.lookupFunction<TwNewDocumentNative, TwNewDocumentDart>('tw_new_document');
       engine.saveDocument =
           lib.lookupFunction<TwSaveDocumentNative, TwSaveDocumentDart>('tw_save_document');
       engine.setCurrentPage =
@@ -334,7 +393,15 @@ class NativeEngine {
           TwSpellCheckDocumentDart>('tw_spell_check_document');
       engine.setTrackChanges =
           lib.lookupFunction<TwSetTrackChangesNative, TwSetTrackChangesDart>('tw_set_track_changes');
+      engine.acceptAllRevisionsNative = lib.lookupFunction<TwAcceptAllRevisionsNative,
+          TwAcceptAllRevisionsDart>('tw_accept_all_revisions');
+      engine.rejectAllRevisionsNative = lib.lookupFunction<TwRejectAllRevisionsNative,
+          TwRejectAllRevisionsDart>('tw_reject_all_revisions');
       engine.hitTest = lib.lookupFunction<TwHitTestNative, TwHitTestDart>('tw_hit_test');
+      engine.documentTailHit =
+          lib.lookupFunction<TwDocumentTailHitNative, TwDocumentTailHitDart>('tw_document_tail_hit');
+      engine.waitForLayoutNative =
+          lib.lookupFunction<TwWaitForLayoutNative, TwWaitForLayoutDart>('tw_wait_for_layout');
       engine.caretGeometry =
           lib.lookupFunction<TwCaretGeometryNative, TwCaretGeometryDart>('tw_caret_geometry');
       engine.caretAtPositionNative = lib.lookupFunction<TwCaretAtPositionNative, TwCaretAtPositionDart>(
@@ -342,10 +409,19 @@ class NativeEngine {
       engine.selectionRects =
           lib.lookupFunction<TwSelectionRectsNative, TwSelectionRectsDart>('tw_selection_rects');
       engine.freeBuffer = lib.lookupFunction<TwFreeBufferNative, TwFreeBufferDart>('tw_free_buffer');
+      _cached = engine;
       return engine;
     } catch (_) {
       return null;
     }
+  }
+
+  /// Release the native session — for tests and app shutdown.
+  static void shutdown() {
+    final engine = _cached;
+    if (engine == null) return;
+    engine._lib.lookupFunction<TwShutdownNative, TwShutdownDart>('tw_shutdown')();
+    _cached = null;
   }
 
   static DynamicLibrary _openLibrary() {
@@ -589,20 +665,52 @@ extension NativeEngineOps on NativeEngine {
     }
   }
 
-  bool openDocumentBytes(Uint8List bytes, {String? path}) {
+  bool newDocument() => newDocumentNative() == 0;
+
+  int openDocumentBytes(Uint8List bytes, {String? path}) {
     final ptr = calloc<Uint8>(bytes.length);
     final pathPtr = path?.toNativeUtf8();
     try {
       ptr.asTypedList(bytes.length).setAll(0, bytes);
       return openDocumentWithPath(
-            ptr,
-            bytes.length,
-            pathPtr ?? nullptr.cast<Utf8>(),
-          ) ==
-          0;
+        ptr,
+        bytes.length,
+        pathPtr ?? nullptr.cast<Utf8>(),
+      );
     } finally {
       if (pathPtr != null) calloc.free(pathPtr);
       calloc.free(ptr);
+    }
+  }
+
+  String? getLastError() => _readNativeString(getLastErrorNative);
+
+  DocumentProperties fetchDocumentProperties() {
+    final json = _readNativeString(getDocumentPropertiesJson);
+    if (json == null || json.isEmpty) return DocumentProperties.empty;
+    try {
+      return DocumentProperties.fromJson(jsonDecode(json) as Map<String, dynamic>);
+    } catch (_) {
+      return DocumentProperties.empty;
+    }
+  }
+
+  bool isDocumentReadOnly() => isDocumentReadOnlyNative() == 1;
+
+  String? _readNativeString(int Function(Pointer<Pointer<Uint8>>, Pointer<IntPtr>) reader) {
+    final outPtr = calloc<Pointer<Uint8>>();
+    final outLen = calloc<IntPtr>();
+    try {
+      if (reader(outPtr, outLen) != 0) return null;
+      final len = outLen.value;
+      final ptr = outPtr.value;
+      if (ptr == nullptr || len == 0) return null;
+      final bytes = ptr.asTypedList(len).sublist(0);
+      freeBuffer(ptr, len);
+      return utf8.decode(bytes);
+    } finally {
+      calloc.free(outPtr);
+      calloc.free(outLen);
     }
   }
 
@@ -646,6 +754,29 @@ extension NativeEngineOps on NativeEngine {
     } finally {
       calloc.free(runPtr);
       calloc.free(textPtr);
+    }
+  }
+
+  bool tryPasteHtml(String runId, int offset, String html) {
+    final runPtr = runId.toNativeUtf8();
+    final htmlPtr = html.toNativeUtf8();
+    try {
+      return applyPasteHtml(runPtr, offset, htmlPtr) == 0;
+    } finally {
+      calloc.free(runPtr);
+      calloc.free(htmlPtr);
+    }
+  }
+
+  bool tryPasteDocx(String runId, int offset, Uint8List bytes) {
+    final runPtr = runId.toNativeUtf8();
+    final dataPtr = calloc<Uint8>(bytes.length);
+    try {
+      dataPtr.asTypedList(bytes.length).setAll(0, bytes);
+      return applyPasteDocx(runPtr, offset, dataPtr, bytes.length) == 0;
+    } finally {
+      calloc.free(runPtr);
+      calloc.free(dataPtr);
     }
   }
 
@@ -828,11 +959,33 @@ extension NativeEngineOps on NativeEngine {
 
   bool setTrackChangesEnabled(bool enabled) => setTrackChanges(enabled ? 1 : 0) == 0;
 
+  bool acceptAllRevisions() => acceptAllRevisionsNative() == 0;
+
+  bool rejectAllRevisions() => rejectAllRevisionsNative() == 0;
+
   HitTestResult? hitTestPage(int page, double x, double y) {
     final runIdBuf = calloc<Uint8>(64);
     final offsetOut = calloc<Uint32>();
     try {
       final result = hitTest(page, x, y, runIdBuf.cast<Utf8>(), 64, offsetOut);
+      if (result != 0) return null;
+      final runId = runIdBuf.cast<Utf8>().toDartString();
+      return HitTestResult(runId: runId, charOffset: offsetOut.value);
+    } finally {
+      calloc.free(runIdBuf);
+      calloc.free(offsetOut);
+    }
+  }
+
+  void waitForLayoutSync() {
+    waitForLayoutNative();
+  }
+
+  HitTestResult? fetchDocumentTailHit(int page) {
+    final runIdBuf = calloc<Uint8>(64);
+    final offsetOut = calloc<Uint32>();
+    try {
+      final result = documentTailHit(page, runIdBuf.cast<Utf8>(), 64, offsetOut);
       if (result != 0) return null;
       final runId = runIdBuf.cast<Utf8>().toDartString();
       return HitTestResult(runId: runId, charOffset: offsetOut.value);

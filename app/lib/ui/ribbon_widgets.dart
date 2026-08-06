@@ -357,10 +357,14 @@ class _RibbonDropdownState extends State<RibbonDropdown> {
           child: Row(
             children: [
               Expanded(
-                child: Text(
-                  widget.value,
-                  style: WordTheme.ribbonLabel.copyWith(fontSize: 11),
-                  overflow: TextOverflow.ellipsis,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    widget.value,
+                    style: WordTheme.ribbonLabel.copyWith(fontSize: 11),
+                    maxLines: 1,
+                  ),
                 ),
               ),
               const Icon(Icons.arrow_drop_down, size: 14, color: WordTheme.ribbonText),
@@ -385,6 +389,11 @@ const kRibbonFontFamilies = [
   'Courier New',
   'Consolas',
 ];
+
+/// Point size label for the Home tab font-size dropdown.
+String formatRibbonFontSize(double size) {
+  return size.round().clamp(1, 999).toString();
+}
 
 /// Common Word point sizes for the Home tab ribbon.
 const kRibbonFontSizes = [

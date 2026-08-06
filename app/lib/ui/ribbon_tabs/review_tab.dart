@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
 import 'package:tutuaword/ui/ribbon_widgets.dart';
 
-/// Tooltip for Review tab accept/reject until edit commands exist.
-const kTrackChangeReviewTooltip =
-    'Coming soon — accept/reject track-change commands are not yet in the engine';
+/// Accept/reject currently apply to all revisions in the document (TC ladder c).
+const kTrackChangeAcceptTooltip = 'Accept all track-change revisions in the document';
+const kTrackChangeRejectTooltip = 'Reject all track-change revisions in the document';
 
 class ReviewTab extends StatelessWidget {
   const ReviewTab({super.key, required this.controller});
@@ -53,14 +53,14 @@ class ReviewTab extends StatelessWidget {
                 RibbonIconButton(
                   icon: Icons.check,
                   label: 'Accept',
-                  tooltip: kTrackChangeReviewTooltip,
-                  onPressed: null,
+                  tooltip: kTrackChangeAcceptTooltip,
+                  onPressed: controller.acceptAllRevisions,
                 ),
                 RibbonIconButton(
                   icon: Icons.close,
                   label: 'Reject',
-                  tooltip: kTrackChangeReviewTooltip,
-                  onPressed: null,
+                  tooltip: kTrackChangeRejectTooltip,
+                  onPressed: controller.rejectAllRevisions,
                 ),
               ],
             ),

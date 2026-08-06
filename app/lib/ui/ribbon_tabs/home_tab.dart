@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
+import 'package:tutuaword/ui/ribbon_color_picker.dart';
 import 'package:tutuaword/ui/ribbon_widgets.dart';
 import 'package:tutuaword/ui/word_theme.dart';
 
@@ -10,13 +11,16 @@ class HomeTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          RibbonGroup(
-            label: 'Clipboard',
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) {
+        return SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              RibbonGroup(
+                label: 'Clipboard',
             child: Row(
               children: [
                 RibbonLargeButton(
@@ -68,8 +72,8 @@ class HomeTab extends StatelessWidget {
                     ),
                     const SizedBox(width: 4),
                     RibbonDropdown(
-                      value: controller.fontSize.toInt().toString(),
-                      width: 40,
+                      value: formatRibbonFontSize(controller.fontSize),
+                      width: 48,
                       items: kRibbonFontSizes,
                       onSelected: (size) => controller.setFontSize(double.parse(size)),
                     ),
@@ -123,8 +127,20 @@ class HomeTab extends StatelessWidget {
                       selected: controller.superscript,
                       onPressed: controller.toggleSuperscript,
                     ),
-                    RibbonIconButton(icon: Icons.format_color_text, onPressed: null),
-                    RibbonIconButton(icon: Icons.format_color_fill, onPressed: null),
+                    RibbonColorButton(
+                      icon: Icons.format_color_text,
+                      tooltip: 'Font Color',
+                      barColor: controller.fontColor,
+                      onColorSelected: controller.setFontColor,
+                      onAutomatic: () => controller.setFontColor(Colors.black),
+                    ),
+                    RibbonColorButton(
+                      icon: Icons.format_color_fill,
+                      tooltip: 'Text Highlight Color',
+                      barColor: controller.highlightColor ?? const Color(0xFFFFFF00),
+                      onColorSelected: controller.setHighlight,
+                      onClear: controller.clearHighlight,
+                    ),
                   ],
                 ),
               ],
@@ -229,8 +245,10 @@ class HomeTab extends StatelessWidget {
               onPressed: null,
             ),
           ),
-        ],
-      ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

@@ -2,6 +2,10 @@
 
 Consolidated phase plan mapping architecture documentation, ADRs, crates, and exit criteria. See also [roadmap.md](roadmap.md) and [README.md](README.md).
 
+**Word-risk staging:** When product MVP and this phase plan disagree (especially “DOCX only in Phase 3”), follow [risk-mitigation.md](risk-mitigation.md) delivery stages **S0–S5** — DOCX import/passthrough belongs on the critical path from **S1**, with Word visual baselines as fidelity gates (self-goldens alone are not enough).
+
+**Feature backlog:** Per-capability stages, tests, and baseline status for all 28 product areas are in [feature-phases.md](feature-phases.md) (F01–F28, waves W0–W5).
+
 ## Phase 0: Architecture (Complete)
 
 All documentation under `docs/` — vision, roadmap, 13 module specs, 10 ADRs, performance budgets, testing strategy.

@@ -15,6 +15,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
       - name: Run Rust tests
         run: cargo test --workspace
+      - name: F02.S1 typing latency gate (release)
+        run: cargo test -p tw-core --release i_f02_s1_typing_latency -- --nocapture
+      - name: DOCX corpus + Tier A numbering/styles gates
+        run: cargo test -p tw-docx --test corpus_render --test tier_a_numbering_styles --test numbering_and_revisions
 
   flutter:
     runs-on: ubuntu-latest

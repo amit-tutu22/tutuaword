@@ -1,6 +1,14 @@
 use tw_edit::{apply, Command, EditSession};
 use tw_model::{Block, Document, Paragraph};
-use tw_pdf::{DisplayListPdfExporter, PdfExportOptions, PdfExporter};
+use tw_pdf::{DisplayListPdfExporter, PdfExportOptions, PdfExporter, PdfFidelity};
+
+#[test]
+fn u_f01_s3_pdf_starts_with_header() {
+    let doc = Document::new();
+    let exporter = DisplayListPdfExporter;
+    let pdf = exporter.export(&doc, &PdfExportOptions::default()).unwrap();
+    assert!(pdf.starts_with(b"%PDF"));
+}
 
 #[test]
 fn export_empty_document_produces_valid_pdf() {
@@ -74,4 +82,23 @@ fn export_long_document_spans_multiple_pdf_pages() {
     let pdf_str = String::from_utf8_lossy(&pdf);
     let page_count = pdf_str.matches("/Type /Page").count();
     assert!(page_count > 1, "expected multiple PDF pages, got {page_count}");
+}
+
+#[test]
+fn visual_match_fidelity_errors_until_font_embedding_exists() {
+    let doc = Document::new();
+    let exporter = DisplayListPdfExporter;
+    let err = exporter
+        .export(
+            &doc,
+            &PdfExportOptions {
+                fidelity: PdfFidelity::VisualMatch,
+                embed_fonts: false,
+            },
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("VisualMatch") || err.to_string().contains("embed_fonts"),
+        "{err}"
+    );
 }

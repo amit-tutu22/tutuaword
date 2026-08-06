@@ -46,13 +46,18 @@ impl TextBuffer {
     }
 
     pub fn slice(&self, run_id: NodeId, char_range: Range<usize>) -> Cow<'_, str> {
-        if let Some(rope) = self.ropes.get(&run_id) {
-            let start = rope.char_to_byte(char_range.start);
-            let end = rope.char_to_byte(char_range.end);
-            Cow::Owned(rope.slice(start..end).to_string())
-        } else {
-            Cow::Borrowed("")
+        let Some(rope) = self.ropes.get(&run_id) else {
+            return Cow::Borrowed("");
+        };
+        let len = rope.len_chars();
+        let start = char_range.start.min(len);
+        let end = char_range.end.min(len);
+        if start >= end {
+            return Cow::Borrowed("");
         }
+        let start_byte = byte_offset_for_char(rope, start);
+        let end_byte = byte_offset_for_char(rope, end);
+        Cow::Owned(rope.slice(start_byte..end_byte).to_string())
     }
 
     pub fn len(&self, run_id: NodeId) -> usize {
@@ -68,5 +73,14 @@ impl TextBuffer {
 
     pub fn sync_from_run(&mut self, run_id: NodeId, text: &str) {
         self.ropes.insert(run_id, Rope::from_str(text));
+    }
+}
+
+fn byte_offset_for_char(rope: &Rope, char_idx: usize) -> usize {
+    let len = rope.len_chars();
+    if char_idx >= len {
+        rope.len_bytes()
+    } else {
+        rope.char_to_byte(char_idx)
     }
 }

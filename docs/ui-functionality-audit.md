@@ -112,7 +112,7 @@ These tabs receive **no** `EditorController` (`ribbon.dart`). Entire tabs are vi
 |---------|--------|-------|
 | Spelling & Grammar | Working | `spellCheckDocument` |
 | Track Changes | Working | Toggle flag |
-| Accept / Reject | P1 | Disabled; no accept/reject edit commands |
+| Accept / Reject | P1 | Wired to accept/reject **all** revisions; per-change nav still open |
 | Translate, Thesaurus, Language, New Comment, Compare, Restrict Editing | P2 | Disabled |
 
 ### View (`view_tab.dart`) + Status bar (`status_bar.dart`)

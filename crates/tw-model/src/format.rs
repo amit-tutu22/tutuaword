@@ -13,6 +13,16 @@ pub struct CharFormat {
     pub color: Option<Color>,
     pub highlight: Option<Color>,
     pub language: Option<String>,
+    /// Extra space between characters, in points (`w:spacing` in `w:rPr`).
+    pub character_spacing: Option<f32>,
+    /// All capitals (`w:caps`).
+    pub all_caps: Option<bool>,
+    /// Small capitals OpenType feature (`w:smallCaps`).
+    pub small_caps: Option<bool>,
+    /// Hidden / vanish text (`w:vanish`) — omitted from export plaintext and layout.
+    pub hidden: Option<bool>,
+    /// Standard ligatures (`liga`). `None` enables ligatures when the font supports them.
+    pub ligatures: Option<bool>,
 }
 
 impl CharFormat {
@@ -50,10 +60,71 @@ impl CharFormat {
         if other.language.is_some() {
             self.language = other.language.clone();
         }
+        if other.character_spacing.is_some() {
+            self.character_spacing = other.character_spacing;
+        }
+        if other.all_caps.is_some() {
+            self.all_caps = other.all_caps;
+        }
+        if other.small_caps.is_some() {
+            self.small_caps = other.small_caps;
+        }
+        if other.hidden.is_some() {
+            self.hidden = other.hidden;
+        }
+        if other.ligatures.is_some() {
+            self.ligatures = other.ligatures;
+        }
     }
 
     pub fn equals(&self, other: &CharFormat) -> bool {
         self == other
+    }
+
+    /// Whether two formats are equivalent for merging adjacent runs.
+    ///
+    /// Explicit "off" values (`bold: Some(false)`, `underline: None`, etc.) match
+    /// unset fields so ribbon toggles do not leave splinter runs behind.
+    pub fn merge_equivalent(&self, other: &CharFormat) -> bool {
+        self.normalized_for_merge() == other.normalized_for_merge()
+    }
+
+    fn normalized_for_merge(&self) -> CharFormat {
+        let mut f = self.clone();
+        if f.bold == Some(false) {
+            f.bold = None;
+        }
+        if f.italic == Some(false) {
+            f.italic = None;
+        }
+        if f.strikethrough == Some(false) {
+            f.strikethrough = None;
+        }
+        if f.superscript == Some(false) {
+            f.superscript = None;
+        }
+        if f.subscript == Some(false) {
+            f.subscript = None;
+        }
+        if f.underline == Some(UnderlineStyle::None) {
+            f.underline = None;
+        }
+        if f.character_spacing == Some(0.0) {
+            f.character_spacing = None;
+        }
+        if f.all_caps == Some(false) {
+            f.all_caps = None;
+        }
+        if f.small_caps == Some(false) {
+            f.small_caps = None;
+        }
+        if f.hidden == Some(false) {
+            f.hidden = None;
+        }
+        if f.ligatures == Some(true) {
+            f.ligatures = None;
+        }
+        f
     }
 }
 

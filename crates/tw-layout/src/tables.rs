@@ -154,7 +154,7 @@ pub fn layout_table_slice(
     // Stretch every cell to the band it occupies so borders align, then clip
     // glyph lines that extend past the cell band (wrapped text can exceed the
     // row height estimate before reconciliation).
-    for (cell, (ri, rowspan)) in cells.iter_mut().zip(cell_spans.iter()) {
+    for (cell, &(ri, rowspan)) in cells.iter_mut().zip(cell_spans.iter()) {
         cell.height = row_heights[ri..(ri + rowspan).min(placed_end)]
             .iter()
             .sum::<f32>()
@@ -166,8 +166,8 @@ pub fn layout_table_slice(
     let mut grid_lines = Vec::new();
     let mut grid_line_colors = Vec::new();
     let default_border = table.format.border.unwrap_or_default();
-    for (cell, (ri, _)) in cells.iter().zip(cell_spans.iter()) {
-        let row = &table.rows[*ri];
+    for (cell, &(ri, _)) in cells.iter().zip(cell_spans.iter()) {
+        let row = &table.rows[ri];
         let cell_idx = row.cells.iter().position(|c| c.id == cell.cell_id);
         let border = cell_idx
             .and_then(|i| row.cells.get(i))

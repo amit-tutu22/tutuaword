@@ -9,9 +9,33 @@ pub enum PdfError {
     ExportFailed(String),
 }
 
-#[derive(Debug, Clone, Default)]
+/// PDF fidelity gate (see `docs/risk-mitigation.md`).
+///
+/// Structural export is available today (layout positions, Helvetica).
+/// VisualMatch requires font embedding and must not be reported as met until then.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PdfFidelity {
+    /// Glyph positions from layout; fixed Helvetica — not a Word visual match.
+    #[default]
+    Structural,
+    /// Font-embedded visual match — unavailable until embedding lands.
+    VisualMatch,
+}
+
+#[derive(Debug, Clone)]
 pub struct PdfExportOptions {
+    pub fidelity: PdfFidelity,
+    /// When true, requests VisualMatch (errors until embedding is implemented).
     pub embed_fonts: bool,
+}
+
+impl Default for PdfExportOptions {
+    fn default() -> Self {
+        Self {
+            fidelity: PdfFidelity::Structural,
+            embed_fonts: false,
+        }
+    }
 }
 
 pub trait PdfExporter: Send + Sync {
@@ -21,7 +45,16 @@ pub trait PdfExporter: Send + Sync {
 pub struct DisplayListPdfExporter;
 
 impl PdfExporter for DisplayListPdfExporter {
-    fn export(&self, doc: &Document, _options: &PdfExportOptions) -> Result<Vec<u8>, PdfError> {
+    fn export(&self, doc: &Document, options: &PdfExportOptions) -> Result<Vec<u8>, PdfError> {
+        let wants_visual =
+            options.embed_fonts || options.fidelity == PdfFidelity::VisualMatch;
+        if wants_visual {
+            return Err(PdfError::ExportFailed(
+                "PDF VisualMatch / embed_fonts is not implemented yet (Helvetica structural export only; see docs/risk-mitigation.md and docs/long-tail-gaps.md)"
+                    .into(),
+            ));
+        }
+
         let mut engine = LayoutEngine::new();
         let layout = engine.layout_document(doc);
         let mut pdf = MinimalPdfWriter::new();

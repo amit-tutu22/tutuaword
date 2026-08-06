@@ -1,6 +1,8 @@
 use parking_lot::Mutex;
+use serde::Deserialize;
 use std::ffi::{c_char, CStr};
 use std::slice;
+use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 use tw_core::Session;
 use tw_edit::{Command, DocPosition, DocRange};
@@ -8,8 +10,19 @@ use tw_model::{CharFormat, NodeId, ParaFormat};
 use uuid::Uuid;
 
 static SESSION: Mutex<Option<Session>> = Mutex::new(None);
+static LAST_ERROR: StdMutex<Option<String>> = StdMutex::new(None);
 
 type EventCallback = extern "C" fn(event_type: u32, data: *const u8, len: usize);
+
+#[derive(Default, Deserialize)]
+struct CharFormatPatch {
+    #[serde(flatten)]
+    format: CharFormat,
+    #[serde(default)]
+    clear_color: bool,
+    #[serde(default)]
+    clear_highlight: bool,
+}
 
 static mut EVENT_CALLBACK: Option<EventCallback> = None;
 
@@ -25,6 +38,11 @@ fn wait_for_events(timeout: Duration, mut on_event: impl FnMut(tw_core::BridgeEv
     let deadline = std::time::Instant::now() + timeout;
     while std::time::Instant::now() < deadline {
         if let Some(event) = poll_session_event() {
+            if let tw_core::BridgeEvent::Error { message } = &event {
+                if let Ok(mut guard) = LAST_ERROR.lock() {
+                    *guard = Some(message.clone());
+                }
+            }
             if let Some(code) = on_event(event) {
                 return code;
             }
@@ -105,6 +123,21 @@ pub extern "C" fn tw_init(callback: EventCallback) -> i32 {
 pub extern "C" fn tw_shutdown() {
     let mut guard = SESSION.lock();
     *guard = None;
+}
+
+#[no_mangle]
+pub extern "C" fn tw_new_document() -> i32 {
+    let enqueued = {
+        let guard = SESSION.lock();
+        let Some(session) = guard.as_ref() else {
+            return -1;
+        };
+        session.new_document()
+    };
+    if !enqueued {
+        return -4;
+    }
+    wait_for_document_ready()
 }
 
 #[no_mangle]
@@ -191,6 +224,57 @@ pub extern "C" fn tw_get_page_display_list(
     }
     std::mem::forget(leaked);
     0
+}
+
+#[no_mangle]
+pub extern "C" fn tw_get_last_error(out_ptr: *mut *const u8, out_len: *mut usize) -> i32 {
+    let guard = match LAST_ERROR.lock() {
+        Ok(guard) => guard,
+        Err(_) => return -1,
+    };
+    let Some(message) = guard.as_ref() else {
+        return -1;
+    };
+    let leaked = message.clone().into_bytes();
+    unsafe {
+        *out_ptr = leaked.as_ptr();
+        *out_len = leaked.len();
+    }
+    std::mem::forget(leaked);
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn tw_get_document_properties_json(
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    let guard = SESSION.lock();
+    let Some(session) = guard.as_ref() else {
+        return -1;
+    };
+
+    let json = session.get_display_list_bytes().document_properties_json;
+    let leaked = json.into_bytes();
+    unsafe {
+        *out_ptr = leaked.as_ptr();
+        *out_len = leaked.len();
+    }
+    std::mem::forget(leaked);
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn tw_is_document_read_only() -> i32 {
+    let guard = SESSION.lock();
+    let Some(session) = guard.as_ref() else {
+        return -1;
+    };
+    if session.get_display_list_bytes().read_only {
+        1
+    } else {
+        0
+    }
 }
 
 #[no_mangle]
@@ -288,6 +372,9 @@ pub extern "C" fn tw_open_document_with_path(
     };
     if !session.open_bytes_with_path(bytes, path_hint) {
         return -4;
+    }
+    if let Ok(mut guard) = LAST_ERROR.lock() {
+        *guard = None;
     }
     drop(guard);
     wait_for_document_ready()
@@ -413,12 +500,46 @@ pub extern "C" fn tw_apply_char_format(
     let Some(json) = parse_cstr(format_json_ptr) else {
         return -3;
     };
-    let format: CharFormat = match serde_json::from_str(&json) {
-        Ok(f) => f,
+    let patch: CharFormatPatch = match serde_json::from_str(&json) {
+        Ok(p) => p,
         Err(_) => return -3,
     };
+    let format = patch.format;
 
     let collapsed = start_run == end_run && start_offset == end_offset;
+    let range = DocRange {
+        start: DocPosition {
+            run_id: start_run,
+            char_offset: start_offset as usize,
+        },
+        end: DocPosition {
+            run_id: end_run,
+            char_offset: end_offset as usize,
+        },
+    };
+
+    if patch.clear_color || patch.clear_highlight {
+        if !session.apply(Command::ClearCharFormatFields {
+            range: range.clone(),
+            clear_color: patch.clear_color,
+            clear_highlight: patch.clear_highlight,
+        }) {
+            return -4;
+        }
+    }
+
+    let has_format_fields = serde_json::from_str::<serde_json::Value>(&json)
+        .ok()
+        .is_some_and(|value| {
+            value
+                .as_object()
+                .is_some_and(|obj| obj.keys().any(|k| k != "clear_color" && k != "clear_highlight"))
+        });
+    if !has_format_fields {
+        drop(guard);
+        return wait_for_document_edit();
+    }
+
     let command = if collapsed {
         // Format from the caret to the end of the run — avoids restyling text
         // before the caret when toggling ribbon buttons with a collapsed selection.
@@ -610,6 +731,56 @@ pub extern "C" fn tw_insert_page_break(caret_run_id_ptr: *const c_char) -> i32 {
     };
     let caret_run_id = parse_node_id(caret_run_id_ptr);
     if !session.insert_page_break_at(caret_run_id) {
+        return -4;
+    }
+    drop(guard);
+    wait_for_document_edit()
+}
+
+/// Paste sanitized HTML from the system clipboard at `[run_id, offset)`.
+#[no_mangle]
+pub extern "C" fn tw_apply_paste_html(
+    run_id_ptr: *const c_char,
+    offset: u32,
+    html_ptr: *const c_char,
+) -> i32 {
+    let guard = SESSION.lock();
+    let Some(session) = guard.as_ref() else {
+        return -1;
+    };
+    let Some(run_id) = parse_node_id(run_id_ptr) else {
+        return -2;
+    };
+    let Some(html) = parse_cstr(html_ptr) else {
+        return -3;
+    };
+    if !session.paste_html_at(run_id, offset as usize, html.into_bytes()) {
+        return -4;
+    }
+    drop(guard);
+    wait_for_document_edit()
+}
+
+/// Paste a DOCX package from the clipboard at `[run_id, offset)`.
+#[no_mangle]
+pub extern "C" fn tw_apply_paste_docx(
+    run_id_ptr: *const c_char,
+    offset: u32,
+    data: *const u8,
+    len: usize,
+) -> i32 {
+    let guard = SESSION.lock();
+    let Some(session) = guard.as_ref() else {
+        return -1;
+    };
+    let Some(run_id) = parse_node_id(run_id_ptr) else {
+        return -2;
+    };
+    if data.is_null() || len == 0 {
+        return -3;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(data, len) }.to_vec();
+    if !session.paste_docx_at(run_id, offset as usize, bytes) {
         return -4;
     }
     drop(guard);
@@ -820,6 +991,32 @@ pub extern "C" fn tw_set_track_changes(enabled: i32) -> i32 {
 }
 
 #[no_mangle]
+pub extern "C" fn tw_accept_all_revisions() -> i32 {
+    let guard = SESSION.lock();
+    let Some(session) = guard.as_ref() else {
+        return -1;
+    };
+    if session.accept_all_revisions() {
+        0
+    } else {
+        -2
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn tw_reject_all_revisions() -> i32 {
+    let guard = SESSION.lock();
+    let Some(session) = guard.as_ref() else {
+        return -1;
+    };
+    if session.reject_all_revisions() {
+        0
+    } else {
+        -2
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn tw_hit_test(
     page: u32,
     x: f32,
@@ -833,6 +1030,36 @@ pub extern "C" fn tw_hit_test(
         return -1;
     };
     let Some(result) = session.hit_test(page, x, y) else {
+        return -2;
+    };
+    let run_uuid = result.run_id.as_uuid().to_string();
+    let bytes = run_uuid.as_bytes();
+    if run_id_cap == 0 || out_run_id.is_null() {
+        return -3;
+    }
+    let copy_len = bytes.len().min(run_id_cap.saturating_sub(1));
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_run_id as *mut u8, copy_len);
+        *out_run_id.add(copy_len) = 0;
+        if !out_offset.is_null() {
+            *out_offset = result.char_offset as u32;
+        }
+    }
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn tw_document_tail_hit(
+    page: u32,
+    out_run_id: *mut c_char,
+    run_id_cap: usize,
+    out_offset: *mut u32,
+) -> i32 {
+    let guard = SESSION.lock();
+    let Some(session) = guard.as_ref() else {
+        return -1;
+    };
+    let Some(result) = session.document_tail_hit(page) else {
         return -2;
     };
     let run_uuid = result.run_id.as_uuid().to_string();
@@ -962,4 +1189,10 @@ pub extern "C" fn tw_selection_rects(
         std::ptr::copy_nonoverlapping(rects.as_ptr(), out_ptr, copy_len);
     }
     0
+}
+
+/// Block until the worker publishes a fresh layout snapshot (for select-all, copy, etc.).
+#[no_mangle]
+pub extern "C" fn tw_wait_for_layout() -> i32 {
+    wait_for_document_ready()
 }

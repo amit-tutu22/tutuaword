@@ -1,4 +1,4 @@
-use tw_model::{CharFormat, NodeId, NumberingRef, ParaFormat, StyleId};
+use tw_model::{CharFormat, NodeId, NumberingRef, ParaFormat, Revision, StyleId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DocPosition {
@@ -41,6 +41,12 @@ pub enum Command {
         range: DocRange,
         format: CharFormat,
         merge: bool,
+    },
+    /// Clear direct color/highlight flags across a document range.
+    ClearCharFormatFields {
+        range: DocRange,
+        clear_color: bool,
+        clear_highlight: bool,
     },
     SetParaFormat {
         paragraph_id: NodeId,
@@ -141,6 +147,30 @@ pub enum Command {
         after_block_id: NodeId,
         block: tw_model::Block,
     },
+    /// Accept the track-change revision on a single run (TC ladder step c).
+    AcceptRevision {
+        run_id: NodeId,
+    },
+    /// Reject the track-change revision on a single run.
+    RejectRevision {
+        run_id: NodeId,
+    },
+    /// Accept every revision in the document.
+    AcceptAllRevisions,
+    /// Reject every revision in the document.
+    RejectAllRevisions,
+    /// Undo helper for accept/reject revision commands.
+    RestoreRevisionRuns {
+        snapshots: Vec<RevisionRunSnapshot>,
+    },
+}
+
+/// Snapshot of a run before accept/reject so undo can restore text + revision.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RevisionRunSnapshot {
+    pub run_id: NodeId,
+    pub text: String,
+    pub revision: Option<Revision>,
 }
 
 impl Command {
@@ -181,6 +211,15 @@ impl Command {
                 }
             }
             Command::SetCharFormatRange { .. } => {
+                if result.old_run_formats.is_empty() {
+                    None
+                } else {
+                    Some(Command::RestoreRunFormats {
+                        formats: result.old_run_formats.clone(),
+                    })
+                }
+            }
+            Command::ClearCharFormatFields { .. } => {
                 if result.old_run_formats.is_empty() {
                     None
                 } else {
@@ -311,6 +350,14 @@ impl Command {
                 })
             }
             Command::InsertBlock { .. } => None,
+            Command::AcceptRevision { .. }
+            | Command::RejectRevision { .. }
+            | Command::AcceptAllRevisions
+            | Command::RejectAllRevisions => {
+                let snapshots = result.revision_snapshots.clone()?;
+                Some(Command::RestoreRevisionRuns { snapshots })
+            }
+            Command::RestoreRevisionRuns { .. } => None,
         }
     }
 }
@@ -337,6 +384,8 @@ pub struct EditResult {
     pub find_replace_undo: Option<Vec<(NodeId, usize, String, String)>>,
     /// Character boundary to re-split when undoing/redoing paragraph merges.
     pub split_boundary: Option<(NodeId, usize)>,
+    /// Run text + revision snapshots for accept/reject undo.
+    pub revision_snapshots: Option<Vec<RevisionRunSnapshot>>,
 }
 
 #[derive(Debug, thiserror::Error)]

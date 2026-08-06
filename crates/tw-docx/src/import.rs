@@ -5,6 +5,7 @@ use tw_model::{Block, Document, Paragraph};
 use zip::ZipArchive;
 
 use crate::paragraph::{paragraph_properties_xml, parse_paragraph};
+use crate::properties::{parse_app_properties, parse_core_properties, parse_read_only_from_settings};
 use crate::styles::{
     parse_numbering_xml, parse_para_properties, parse_section_properties, parse_styles_xml,
     parse_theme_xml,
@@ -17,6 +18,10 @@ use crate::xml_util::{
 use crate::{DocxError, DocxPackage, ImportResult};
 
 pub fn import_docx(source: &[u8]) -> Result<ImportResult, DocxError> {
+    if crate::encryption::is_password_protected(source)? {
+        return Err(DocxError::PasswordProtected);
+    }
+
     let cursor = Cursor::new(source);
     let mut archive = ZipArchive::new(cursor)?;
 
@@ -29,6 +34,9 @@ pub fn import_docx(source: &[u8]) -> Result<ImportResult, DocxError> {
     let mut styles_xml = None;
     let mut numbering_xml = None;
     let mut theme_xml = None;
+    let mut core_properties_xml = None;
+    let mut app_properties_xml = None;
+    let mut settings_xml = None;
     let mut header_parts: HashMap<String, String> = HashMap::new();
     let mut footer_parts: HashMap<String, String> = HashMap::new();
 
@@ -50,6 +58,15 @@ pub fn import_docx(source: &[u8]) -> Result<ImportResult, DocxError> {
             "word/theme/theme1.xml" => {
                 theme_xml = Some(String::from_utf8_lossy(&data).into_owned());
             }
+            "word/settings.xml" => {
+                settings_xml = Some(String::from_utf8_lossy(&data).into_owned());
+            }
+            "docProps/core.xml" => {
+                core_properties_xml = Some(String::from_utf8_lossy(&data).into_owned());
+            }
+            "docProps/app.xml" => {
+                app_properties_xml = Some(String::from_utf8_lossy(&data).into_owned());
+            }
             n if n.starts_with("word/header") && n.ends_with(".xml") => {
                 header_parts.insert(name.clone(), String::from_utf8_lossy(&data).into_owned());
             }
@@ -66,6 +83,21 @@ pub fn import_docx(source: &[u8]) -> Result<ImportResult, DocxError> {
     let relationships = media.relationships.clone();
     let mut document =
         parse_document_xml(&xml, &styles_xml, &numbering_xml, &theme_xml, &media);
+
+    let mut props = tw_model::DocumentProperties::default();
+    if let Some(core) = core_properties_xml.as_deref() {
+        props.merge(parse_core_properties(core));
+    }
+    if let Some(app) = app_properties_xml.as_deref() {
+        props.merge(parse_app_properties(app));
+    }
+    document.properties = props;
+
+    if let Some(settings) = settings_xml.as_deref() {
+        if parse_read_only_from_settings(settings) {
+            document.settings.read_only = true;
+        }
+    }
 
     apply_headers_footers(
         &mut document,

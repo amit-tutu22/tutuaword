@@ -142,6 +142,8 @@ fn snapshot_buffer_stores_multiple_pages_and_switches_index() {
         0,
         10,
         "page one\npage two".into(),
+        "{}".into(),
+        false,
     ));
 
     let snap0 = buffer.read();

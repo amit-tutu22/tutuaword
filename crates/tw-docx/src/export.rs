@@ -417,6 +417,9 @@ fn serialize_run_properties(format: &CharFormat) -> String {
     props.push_str(&toggle("w:b", format.bold));
     props.push_str(&toggle("w:i", format.italic));
     props.push_str(&toggle("w:strike", format.strikethrough));
+    props.push_str(&toggle("w:caps", format.all_caps));
+    props.push_str(&toggle("w:smallCaps", format.small_caps));
+    props.push_str(&toggle("w:vanish", format.hidden));
     if let Some(color) = format.color {
         props.push_str(&format!(r#"<w:color w:val="{}"/>"#, hex_rgb(color)));
     }
@@ -434,6 +437,12 @@ fn serialize_run_properties(format: &CharFormat) -> String {
             r#"<w:u w:val="{}"/>"#,
             underline_value(underline)
         ));
+    }
+    if let Some(spacing) = format.character_spacing {
+        let twips = crate::export::to_twips(spacing);
+        if twips != 0 {
+            props.push_str(&format!(r#"<w:spacing w:val="{twips}"/>"#));
+        }
     }
     if format.superscript == Some(true) {
         props.push_str(r#"<w:vertAlign w:val="superscript"/>"#);
@@ -791,7 +800,7 @@ fn to_emu(points: f32) -> i64 {
     (points * EMU_PER_POINT).round() as i64
 }
 
-fn escape_xml(text: &str) -> String {
+pub(crate) fn escape_xml(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")

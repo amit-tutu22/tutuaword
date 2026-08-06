@@ -129,6 +129,7 @@ fn a_merged_cell_keeps_its_span() {
             border: Some(BorderSpec::default()),
         },
         rows: vec![TableRow::with_cells(vec![wide])],
+        style_id: None,
     };
     doc.sections[0].blocks = vec![Block::Table(table)];
 

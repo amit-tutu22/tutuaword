@@ -18,6 +18,8 @@ pub struct PageSnapshot {
     pub page_width: f32,
     pub page_height: f32,
     pub document_text: String,
+    pub document_properties_json: String,
+    pub read_only: bool,
 }
 
 impl PageSnapshot {
@@ -52,6 +54,8 @@ impl SnapshotBuffer {
             page_width: 612.0,
             page_height: 792.0,
             document_text: String::new(),
+            document_properties_json: String::from("{}"),
+            read_only: false,
         };
         Self {
             front: RwLock::new(empty.clone()),
@@ -81,6 +85,8 @@ pub fn snapshot_from_pages(
     page_index: u32,
     version: u64,
     document_text: String,
+    document_properties_json: String,
+    read_only: bool,
 ) -> PageSnapshot {
     let page_count = pages.len().max(1) as u32;
     let mut snapshot = PageSnapshot {
@@ -92,6 +98,8 @@ pub fn snapshot_from_pages(
         page_width: 612.0,
         page_height: 792.0,
         document_text,
+        document_properties_json,
+        read_only,
     };
     snapshot = snapshot.with_page_index(page_index);
     snapshot
@@ -102,6 +110,8 @@ pub fn snapshot_from_display_list(
     page_index: u32,
     page_count: u32,
     document_text: String,
+    document_properties_json: String,
+    read_only: bool,
 ) -> PageSnapshot {
     let _ = page_count;
     snapshot_from_pages(
@@ -113,6 +123,8 @@ pub fn snapshot_from_display_list(
         page_index,
         list.version,
         document_text,
+        document_properties_json,
+        read_only,
     )
 }
 
@@ -121,7 +133,15 @@ pub fn document_plain_text(doc: &tw_model::Document) -> String {
         .iter()
         .flat_map(|s| s.blocks.iter())
         .filter_map(|b| b.paragraph())
-        .map(|p| p.full_text())
+        .map(|p| p.visible_text())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+pub fn document_properties_json(doc: &tw_model::Document, layout_page_count: u32) -> String {
+    let mut props = doc.properties.clone();
+    if props.page_count.is_none() {
+        props.page_count = Some(layout_page_count);
+    }
+    serde_json::to_string(&props).unwrap_or_else(|_| "{}".into())
 }

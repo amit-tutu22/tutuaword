@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:tutuaword/editor/document_view.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
 import 'package:tutuaword/editor/editor_menu.dart';
+import 'package:tutuaword/ui/document_properties_dialog.dart';
 import 'package:tutuaword/ui/info_bar.dart';
 import 'package:tutuaword/ui/ribbon.dart';
 import 'package:tutuaword/ui/status_bar.dart';
@@ -47,6 +48,9 @@ class _EditorScreenState extends State<EditorScreen> {
     super.initState();
     _controller = EditorController();
     _controller.addListener(_onUpdate);
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _controller.tryRecoverAutosave();
+    });
   }
 
   void _onUpdate() => setState(() {});
@@ -62,9 +66,16 @@ class _EditorScreenState extends State<EditorScreen> {
   Widget build(BuildContext context) {
     return EditorMenuBar(
       controller: _controller,
+      onNew: () => _controller.newDocument(),
       onOpen: () => _controller.openDocument(),
+      onOpenRecent: (path) => _controller.openRecentDocument(path),
       onSave: () => _controller.saveDocument(),
       onSaveAs: (ext) => _controller.saveDocumentAs(extension: ext),
+      onShowProperties: () => DocumentPropertiesDialog.show(
+        context,
+        _controller.documentProperties,
+      ),
+      onShowPasteSpecial: () => _controller.showPasteSpecialDialog(context),
       child: Material(
         color: WordTheme.tabStripSurface,
         child: Column(

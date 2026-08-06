@@ -10,69 +10,78 @@ class ViewTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          RibbonGroup(
-            label: 'Views',
-            child: Row(
-              children: [
-                RibbonLargeButton(icon: Icons.article_outlined, label: 'Read\nMode', onPressed: null),
-                RibbonLargeButton(
-                  icon: Icons.print_outlined,
-                  label: 'Print\nLayout',
-                  tooltip: controller.printPreview
-                      ? 'Return to print layout'
-                      : 'Print layout view',
-                  onPressed: controller.togglePrintPreview,
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) {
+        return SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              RibbonGroup(
+                label: 'Views',
+                child: Row(
+                  children: [
+                    RibbonLargeButton(icon: Icons.article_outlined, label: 'Read\nMode', onPressed: null),
+                    RibbonLargeButton(
+                      icon: Icons.print_outlined,
+                      label: 'Print\nLayout',
+                      tooltip: 'Print layout editing view',
+                      onPressed: controller.printPreview ? controller.togglePrintPreview : null,
+                    ),
+                    RibbonLargeButton(
+                      icon: Icons.preview_outlined,
+                      label: 'Print\nPreview',
+                      tooltip: 'Read-only print preview',
+                      onPressed: !controller.printPreview ? controller.togglePrintPreview : null,
+                    ),
+                    RibbonLargeButton(icon: Icons.web, label: 'Web\nLayout', onPressed: null),
+                  ],
                 ),
-                RibbonLargeButton(icon: Icons.web, label: 'Web\nLayout', onPressed: null),
-              ],
-            ),
-          ),
-          RibbonGroup(
-            label: 'Show',
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                _RibbonCheckbox(
-                  label: 'Ruler',
-                  value: controller.showRuler,
-                  onChanged: (_) => controller.toggleRuler(),
+              ),
+              RibbonGroup(
+                label: 'Show',
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    _RibbonCheckbox(
+                      label: 'Ruler',
+                      value: controller.showRuler,
+                      onChanged: (_) => controller.toggleRuler(),
+                    ),
+                    _RibbonCheckbox(
+                      label: 'Navigation\nPane',
+                      value: controller.showNavigationPane,
+                      onChanged: (_) => controller.toggleNavigationPane(),
+                    ),
+                  ],
                 ),
-                _RibbonCheckbox(
-                  label: 'Navigation\nPane',
-                  value: controller.showNavigationPane,
-                  onChanged: (_) => controller.toggleNavigationPane(),
+              ),
+              RibbonGroup(
+                label: 'Zoom',
+                child: Row(
+                  children: [
+                    RibbonLargeButton(icon: Icons.zoom_in, label: 'Zoom', onPressed: null),
+                    RibbonLargeButton(icon: Icons.fit_screen, label: 'One\nPage', onPressed: null),
+                    RibbonLargeButton(icon: Icons.view_week, label: 'Multiple\nPages', onPressed: null),
+                  ],
                 ),
-              ],
-            ),
+              ),
+              RibbonGroup(
+                label: 'Window',
+                showDivider: false,
+                child: Row(
+                  children: [
+                    RibbonLargeButton(icon: Icons.view_sidebar, label: 'New\nWindow', onPressed: null),
+                    RibbonLargeButton(icon: Icons.view_array, label: 'Arrange\nAll', onPressed: null),
+                    RibbonLargeButton(icon: Icons.vertical_split, label: 'Split', onPressed: null),
+                  ],
+                ),
+              ),
+            ],
           ),
-          RibbonGroup(
-            label: 'Zoom',
-            child: Row(
-              children: [
-                RibbonLargeButton(icon: Icons.zoom_in, label: 'Zoom', onPressed: null),
-                RibbonLargeButton(icon: Icons.fit_screen, label: 'One\nPage', onPressed: null),
-                RibbonLargeButton(icon: Icons.view_week, label: 'Multiple\nPages', onPressed: null),
-              ],
-            ),
-          ),
-          RibbonGroup(
-            label: 'Window',
-            showDivider: false,
-            child: Row(
-              children: [
-                RibbonLargeButton(icon: Icons.view_sidebar, label: 'New\nWindow', onPressed: null),
-                RibbonLargeButton(icon: Icons.view_array, label: 'Arrange\nAll', onPressed: null),
-                RibbonLargeButton(icon: Icons.vertical_split, label: 'Split', onPressed: null),
-              ],
-            ),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 }

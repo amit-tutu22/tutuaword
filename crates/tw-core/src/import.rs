@@ -37,6 +37,8 @@ pub enum ImportError {
     Html(#[from] tw_html::HtmlError),
     #[error("markdown error: {0}")]
     Markdown(#[from] tw_markdown::MarkdownError),
+    #[error("document is password-protected")]
+    PasswordProtected,
 }
 
 /// File extensions supported for import (Microsoft Word-compatible set).
@@ -107,6 +109,8 @@ fn detect_zip_format(data: &[u8]) -> Option<DetectedFormat> {
     let mut has_content_json = false;
     let mut has_document_xml = false;
     let mut has_odt_content = false;
+    let mut has_encrypted_package = false;
+    let mut has_encryption_info = false;
     let count = archive.len();
     for i in 0..count {
         let name = archive.by_index(i).ok()?.name().to_string();
@@ -116,6 +120,10 @@ fn detect_zip_format(data: &[u8]) -> Option<DetectedFormat> {
             has_document_xml = true;
         } else if name == "content.xml" {
             has_odt_content = true;
+        } else if name == "EncryptedPackage" {
+            has_encrypted_package = true;
+        } else if name.eq_ignore_ascii_case("encryptioninfo") {
+            has_encryption_info = true;
         }
     }
     if has_content_json {
@@ -124,6 +132,8 @@ fn detect_zip_format(data: &[u8]) -> Option<DetectedFormat> {
         Some(DetectedFormat::Docx)
     } else if has_odt_content {
         Some(DetectedFormat::Odt)
+    } else if has_encrypted_package || has_encryption_info {
+        Some(DetectedFormat::Docx)
     } else {
         None
     }

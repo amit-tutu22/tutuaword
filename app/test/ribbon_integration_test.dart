@@ -26,7 +26,7 @@ void main() {
     late EditorController controller;
 
     setUp(() {
-      controller = EditorController();
+      controller = EditorController(enableAutosave: false);
     });
 
     tearDown(() {
@@ -67,7 +67,7 @@ void main() {
     late EditorController controller;
 
     setUp(() {
-      controller = EditorController();
+      controller = EditorController(enableAutosave: false);
     });
 
     tearDown(() {
@@ -154,6 +154,19 @@ void main() {
       expect(controller.fontSize, 14);
     });
 
+    testWidgets('Home tab font size dropdown displays picked size in ribbon', (tester) async {
+      await pumpWide(tester, HomeTab(controller: controller));
+
+      await tester.tap(find.text('11'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('14').last);
+      await tester.pumpAndSettle();
+
+      expect(controller.fontSize, 14);
+      expect(find.text('14'), findsOneWidget);
+      expect(find.text('11'), findsNothing);
+    });
+
     testWidgets('Home tab italic and underline toggles update controller', (tester) async {
       await pumpWide(tester, HomeTab(controller: controller));
 
@@ -201,11 +214,27 @@ void main() {
       expect(find.text(kComingSoonTooltip), findsOneWidget);
     });
 
-    testWidgets('Review tab shows Export PDF and accept/reject placeholders', (tester) async {
+    testWidgets('Review tab shows Export PDF and accept/reject actions', (tester) async {
       await pumpWide(tester, ReviewTab(controller: controller));
 
       expect(find.text('Export\nPDF'), findsOneWidget);
-      expect(find.byTooltip(kTrackChangeReviewTooltip), findsWidgets);
+      expect(find.byTooltip(kTrackChangeAcceptTooltip), findsOneWidget);
+      expect(find.byTooltip(kTrackChangeRejectTooltip), findsOneWidget);
+    });
+
+    testWidgets('I-F01-S3-print-preview-toggle from View tab', (tester) async {
+      await pumpWide(tester, ViewTab(controller: controller));
+
+      expect(controller.printPreview, isFalse);
+      await tester.tap(find.text('Print\nPreview'));
+      await tester.pump();
+      expect(controller.printPreview, isTrue);
+      expect(controller.statusText, contains('Print preview'));
+
+      await tester.tap(find.text('Print\nLayout'));
+      await tester.pump();
+      expect(controller.printPreview, isFalse);
+      expect(controller.statusText, contains('Print layout'));
     });
 
     testWidgets('Switching tabs via ribbon strip updates visible content', (tester) async {

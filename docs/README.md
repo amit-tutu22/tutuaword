@@ -9,26 +9,28 @@ Read these documents in order if you are new to the project:
 1. [Vision](vision.md) — product goals, principles, non-goals, open questions
 2. [Roadmap](roadmap.md) — six development phases with measurable exit criteria
 3. [Phase Plan](phase-plan.md) — detailed phase-wise implementation with ADRs and crates
-3. [Architecture Overview](architecture/overview.md) — layers, process model, data flow
-4. [Crate Map](architecture/crate-map.md) — Rust crate boundaries and dependency rules
-5. [Document Model](architecture/document-model.md) — node tree, IDs, styles, revisions
-6. [Text Engine](architecture/text-engine.md) — rope buffer, cursor, selection, IME, clipboard
-7. [Layout Engine](architecture/layout-engine.md) — shaping, line breaking, pagination
-8. [Rendering](architecture/rendering.md) — display list, glyph atlas, Flutter painter
-9. [FFI Bridge](architecture/ffi-bridge.md) — Rust/Dart boundary, threading, WASM
-10. [File Formats](architecture/file-formats.md) — import/export matrix, native format
-11. [DOCX Compatibility](architecture/docx-compatibility.md) — OOXML fidelity strategy
-12. [Performance Budgets](performance-budgets.md) — targets and measurement methods
-13. [Testing Strategy](testing-strategy.md) — golden images, round-trip corpus, benchmarks
-14. [Long-Tail Gaps](long-tail-gaps.md) — partial/peripheral features not yet built (PDF fonts, Hunspell, parsers, plugins, AI)
-15. [UI Functionality Audit](ui-functionality-audit.md) — ribbon/menu wiring vs engine; P0/P1/P2 control status
+4. [Feature Phases](feature-phases.md) — F01–F28 capability backlog: stages, tests, waves, baseline status
+5. [Architecture Overview](architecture/overview.md) — layers, process model, data flow
+6. [Crate Map](architecture/crate-map.md) — Rust crate boundaries and dependency rules
+7. [Document Model](architecture/document-model.md) — node tree, IDs, styles, revisions
+8. [Text Engine](architecture/text-engine.md) — rope buffer, cursor, selection, IME, clipboard
+9. [Layout Engine](architecture/layout-engine.md) — shaping, line breaking, pagination
+10. [Rendering](architecture/rendering.md) — display list, glyph atlas, Flutter painter
+11. [FFI Bridge](architecture/ffi-bridge.md) — Rust/Dart boundary, threading, WASM
+12. [File Formats](architecture/file-formats.md) — import/export matrix, native format
+13. [DOCX Compatibility](architecture/docx-compatibility.md) — OOXML fidelity strategy
+14. [Performance Budgets](performance-budgets.md) — targets and measurement methods
+15. [Testing Strategy](testing-strategy.md) — golden images, round-trip corpus, benchmarks
+16. [Risk Mitigation](risk-mitigation.md) — Word-compatibility risks, staging (S0–S5), residual risk (wins on conflicts)
+17. [Long-Tail Gaps](long-tail-gaps.md) — partial/peripheral features not yet built (PDF fonts, Hunspell, parsers, plugins, AI)
+18. [UI Functionality Audit](ui-functionality-audit.md) — ribbon/menu wiring vs engine; P0/P1/P2 control status
 
 ### Later Phases (interface specs only)
 
-15. [AI Platform](architecture/ai-platform.md)
-16. [Collaboration](architecture/collaboration.md)
-17. [Plugins](architecture/plugins.md)
-18. [Security](architecture/security.md)
+19. [AI Platform](architecture/ai-platform.md)
+20. [Collaboration](architecture/collaboration.md)
+21. [Plugins](architecture/plugins.md)
+22. [Security](architecture/security.md)
 
 ### Architecture Decision Records
 

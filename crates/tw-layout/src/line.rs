@@ -582,6 +582,9 @@ fn shape_line(
                     });
                 }
                 cursor_x += g.x_advance;
+                if let Some(spacing) = run.format.character_spacing {
+                    cursor_x += spacing;
+                }
                 if codepoint == ' ' {
                     justify_stops.push(cursor_x);
                 }
@@ -599,15 +602,41 @@ fn shape_line(
                 kind: super::types::DecorationKind::Highlight,
             });
         }
-        if run.format.underline.is_some_and(|u| u != tw_model::UnderlineStyle::None) {
-            decorations.push(super::types::TextDecoration {
-                x: seg_start_x,
-                y: baseline_y + (line_descent * 0.25),
-                width: seg_end_x - seg_start_x,
-                height: (size * 0.05).max(1.0),
-                color,
-                kind: super::types::DecorationKind::Underline,
-            });
+        if let Some(style) = run.format.underline {
+            if style != tw_model::UnderlineStyle::None {
+                let thickness = (size * 0.05).max(1.0);
+                let base_y = baseline_y + (line_descent * 0.25);
+                match style {
+                    tw_model::UnderlineStyle::Double => {
+                        decorations.push(super::types::TextDecoration {
+                            x: seg_start_x,
+                            y: base_y,
+                            width: seg_end_x - seg_start_x,
+                            height: thickness,
+                            color,
+                            kind: super::types::DecorationKind::DoubleUnderline,
+                        });
+                        decorations.push(super::types::TextDecoration {
+                            x: seg_start_x,
+                            y: base_y + thickness + 1.0,
+                            width: seg_end_x - seg_start_x,
+                            height: thickness,
+                            color,
+                            kind: super::types::DecorationKind::DoubleUnderline,
+                        });
+                    }
+                    _ => {
+                        decorations.push(super::types::TextDecoration {
+                            x: seg_start_x,
+                            y: base_y,
+                            width: seg_end_x - seg_start_x,
+                            height: thickness,
+                            color,
+                            kind: super::types::DecorationKind::Underline,
+                        });
+                    }
+                }
+            }
         }
         if run.format.strikethrough == Some(true) || is_deleted {
             decorations.push(super::types::TextDecoration {
@@ -659,6 +688,9 @@ fn run_segments_for_range(
         byte_cursor = run_end;
 
         if run_end <= start_byte || run_start >= end_byte {
+            continue;
+        }
+        if run.format.hidden == Some(true) {
             continue;
         }
 

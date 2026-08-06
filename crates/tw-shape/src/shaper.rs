@@ -1,5 +1,6 @@
 use crate::{FontDatabase, FontId, GlyphRasterizer, RasterizedGlyph};
-use rustybuzz::{Direction, UnicodeBuffer};
+use rustybuzz::{Direction, Feature, UnicodeBuffer};
+use rustybuzz::ttf_parser::Tag;
 use tw_model::CharFormat;
 
 #[derive(Debug, Clone)]
@@ -52,11 +53,20 @@ impl TextShaper {
 
     pub fn shape(&mut self, text: &str, format: &CharFormat, font_id: FontId) -> ShapedRun {
         let size = format.font_size.unwrap_or(12.0);
-        let char_count = text.chars().count();
+        let display_text = caps_display_text(text, format);
+        let features = shaping_features(format);
+        let char_count = display_text.chars().count();
 
         let mut glyphs = Vec::new();
-        for (segment, segment_font, char_offset) in self.split_by_coverage(text, font_id) {
-            self.shape_segment(&segment, size, segment_font, char_offset, &mut glyphs);
+        for (segment, segment_font, char_offset) in self.split_by_coverage(&display_text, font_id) {
+            self.shape_segment(
+                &segment,
+                size,
+                segment_font,
+                char_offset,
+                &features,
+                &mut glyphs,
+            );
         }
 
         let mut cluster_to_glyph = vec![0; char_count.max(1)];
@@ -109,6 +119,7 @@ impl TextShaper {
         size: f32,
         font_id: FontId,
         char_offset: usize,
+        features: &[Feature],
         out: &mut Vec<GlyphInfo>,
     ) {
         let Some(face_index) = self.fonts.face(font_id).map(|f| f.index) else {
@@ -125,7 +136,7 @@ impl TextShaper {
         buffer.push_str(text);
         buffer.set_direction(Direction::LeftToRight);
 
-        let output = rustybuzz::shape(&face, &[], buffer);
+        let output = rustybuzz::shape(&face, features, buffer);
         let scale = size / face.units_per_em() as f32;
 
         // rustybuzz reports clusters as byte offsets; the rest of the engine
@@ -187,5 +198,74 @@ impl TextShaper {
     ) -> RasterizedGlyph {
         self.rasterizer
             .rasterize_glyph(&self.fonts, font_id, glyph_id, size)
+    }
+}
+
+fn caps_display_text(text: &str, format: &CharFormat) -> String {
+    if format.all_caps == Some(true) {
+        text.to_uppercase()
+    } else {
+        text.to_string()
+    }
+}
+
+fn shaping_features(format: &CharFormat) -> Vec<Feature> {
+    let mut features = Vec::new();
+    if format.small_caps == Some(true) {
+        features.push(Feature {
+            tag: Tag::from_bytes(b"smcp"),
+            value: 1,
+            start: 0,
+            end: u32::MAX,
+        });
+    }
+    if format.ligatures != Some(false) {
+        features.push(Feature {
+            tag: Tag::from_bytes(b"liga"),
+            value: 1,
+            start: 0,
+            end: u32::MAX,
+        });
+    }
+    features
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn all_caps_uppercases_before_shaping() {
+        assert_eq!(
+            caps_display_text("Hello", &CharFormat {
+                all_caps: Some(true),
+                ..Default::default()
+            }),
+            "HELLO"
+        );
+    }
+
+    #[test]
+    fn ligature_feature_enabled_by_default() {
+        let features = shaping_features(&CharFormat::default());
+        assert!(features.iter().any(|f| f.tag == Tag::from_bytes(b"liga")));
+    }
+
+    #[test]
+    fn ligature_feature_can_be_disabled() {
+        let features = shaping_features(&CharFormat {
+            ligatures: Some(false),
+            ..Default::default()
+        });
+        assert!(!features.iter().any(|f| f.tag == Tag::from_bytes(b"liga")));
+    }
+
+    #[test]
+    fn small_caps_adds_smcp_feature() {
+        let features = shaping_features(&CharFormat {
+            small_caps: Some(true),
+            ..Default::default()
+        });
+        assert!(features.iter().any(|f| f.tag == Tag::from_bytes(b"smcp")));
     }
 }

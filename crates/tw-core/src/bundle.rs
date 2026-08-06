@@ -120,7 +120,10 @@ pub fn import_document_bundle(
             odt_package: None,
         }),
         DetectedFormat::Docx => {
-            let result = tw_docx::import(data)?;
+            let result = tw_docx::import(data).map_err(|e| match e {
+                tw_docx::DocxError::PasswordProtected => ImportError::PasswordProtected,
+                other => ImportError::Docx(other),
+            })?;
             Ok(ImportBundle {
                 document: result.document,
                 source_format: format,

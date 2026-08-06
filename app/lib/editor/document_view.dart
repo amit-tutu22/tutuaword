@@ -85,7 +85,16 @@ class _DocumentViewState extends State<DocumentView> {
     final version = widget.controller.displayVersion;
     final bytes = widget.controller.displayListForPage(index);
     if (bytes.isEmpty) {
-      _pending.remove(index);
+      if (!mounted || version != widget.controller.displayVersion) {
+        _pending.remove(index);
+        return;
+      }
+      // Cache an empty snapshot so itemBuilder stops scheduling loads every
+      // frame (otherwise pumpAndSettle never completes in widget tests).
+      setState(() {
+        _snapshots[index] = DisplayListSnapshot.empty();
+        _pending.remove(index);
+      });
       return;
     }
 
@@ -184,8 +193,7 @@ class _DocumentViewState extends State<DocumentView> {
         _scheduleLoad(index);
         // In text-fallback mode a single TextEditingController is shared with
         // the controller, so only the active page may host the editor.
-        final readOnly =
-            controller.preferTextRendering && index != controller.currentPage;
+        final readOnly = !controller.isPageEditable(index);
         return Center(
           child: Transform.scale(
             scale: controller.zoom,
@@ -244,7 +252,9 @@ class _PageCanvasState extends State<_PageCanvas> {
   bool _syncingFromController = false;
 
   bool get _wantGlyphEditor =>
-      !widget.controller.preferTextRendering && !widget.readOnly;
+      widget.controller.isPageEditable(widget.pageIndex) &&
+      !widget.controller.preferTextRendering &&
+      !widget.readOnly;
 
   bool get _canPaintDisplayList =>
       !widget.controller.preferTextRendering &&
@@ -361,9 +371,24 @@ class _PageCanvasState extends State<_PageCanvas> {
               offset: const Offset(0, 2),
             ),
           ],
+          border: widget.controller.printPreview
+              ? Border.all(color: const Color(0xFFB4B4B4), width: 1)
+              : null,
         ),
         child: Stack(
           children: [
+            if (widget.controller.printPreview)
+              Positioned(
+                top: 6,
+                right: 8,
+                child: Text(
+                  'Page ${widget.pageIndex + 1}',
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: Colors.grey.shade600,
+                  ),
+                ),
+              ),
             if (_wantGlyphEditor)
               GlyphEditorSurface(
                 controller: widget.controller,
@@ -379,6 +404,13 @@ class _PageCanvasState extends State<_PageCanvas> {
                   snapshot: widget.snapshot!,
                   atlasImage: widget.atlasImage,
                   images: widget.images,
+                ),
+              )
+            else if (widget.controller.printPreview)
+              Center(
+                child: Text(
+                  'Page ${widget.pageIndex + 1}',
+                  style: TextStyle(color: Colors.grey.shade500, fontSize: 12),
                 ),
               )
             else if (_useTextEditor && !widget.readOnly && _textController != null)

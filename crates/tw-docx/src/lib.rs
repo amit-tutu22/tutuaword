@@ -5,6 +5,7 @@ use tw_model::Document;
 pub type PartName = String;
 
 mod export;
+mod encryption;
 mod fingerprint;
 mod image_convert;
 mod import;
@@ -12,6 +13,7 @@ mod media;
 mod numbering;
 mod opc;
 mod paragraph;
+mod properties;
 mod styles;
 mod table;
 mod xml_util;
@@ -77,6 +79,8 @@ pub(crate) const MINIMAL_CONTENT_TYPES: &[u8] = br#"<?xml version="1.0" encoding
 pub enum DocxError {
     #[error("word/document.xml missing from docx package")]
     MissingDocumentPart,
+    #[error("document is password-protected")]
+    PasswordProtected,
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("zip error: {0}")]

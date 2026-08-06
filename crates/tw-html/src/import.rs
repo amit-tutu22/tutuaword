@@ -8,7 +8,32 @@ pub fn import_html(source: &[u8]) -> Result<Document, HtmlError> {
     if !(trimmed.starts_with('<') || trimmed.to_ascii_lowercase().contains("<html")) {
         return Err(HtmlError::InvalidFormat);
     }
-    Ok(parse_html(&text))
+    Ok(parse_html(&sanitize_html(&text)))
+}
+
+/// Strip script/style blocks before parsing clipboard HTML.
+pub fn sanitize_html(html: &str) -> String {
+    let mut out = strip_tag_blocks(html, "script");
+    out = strip_tag_blocks(&out, "style");
+    out
+}
+
+fn strip_tag_blocks(html: &str, tag: &str) -> String {
+    let mut result = html.to_string();
+    let open = format!("<{tag}");
+    let close = format!("</{tag}>");
+    loop {
+        let lower = result.to_ascii_lowercase();
+        let Some(start) = lower.find(&open) else {
+            break;
+        };
+        let Some(rel) = lower[start..].find(&close) else {
+            break;
+        };
+        let end = start + rel + close.len();
+        result.replace_range(start..end, "");
+    }
+    result
 }
 
 fn parse_html(html: &str) -> Document {

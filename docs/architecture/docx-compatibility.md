@@ -12,7 +12,7 @@ Not every OOXML element can be fully parsed into our model and regenerated ident
 | **B** | Render + Preserve | Parse to model | Correct | Partial | Preserved via passthrough | Styles, themes, numbering, headers/footers |
 | **C** | Preserve Only | Store verbatim | Placeholder or skip | None | Preserved verbatim | Macros, ActiveX, ink, custom XML |
 
-**Goal:** 95%+ of real-world documents render correctly. Tier A elements round-trip losslessly. Tier B elements render correctly and survive save. Tier C elements are never lost.
+**Goal:** Per-category Word visual pass rates plus lossless Tier A round-trip and Tier B/C passthrough survival — see the fidelity SLA in [risk-mitigation.md](../risk-mitigation.md). Avoid a single “95%/99%” slogan until Word baselines and corpus gates exist.
 
 ## Package Passthrough Strategy
 

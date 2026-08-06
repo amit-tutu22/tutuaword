@@ -97,4 +97,16 @@ mod tests {
             "Save test"
         );
     }
+
+    /// U-F01-S1-save-roundtrip-twdoc
+    #[test]
+    fn u_f01_s1_save_roundtrip_twdoc() {
+        let doc = Document::with_paragraph("Native round-trip");
+        let bytes = NativeFormat::export(&doc).unwrap();
+        let loaded = NativeFormat::import(&bytes).unwrap();
+        assert_eq!(
+            loaded.sections[0].blocks[0].paragraph().unwrap().full_text(),
+            "Native round-trip"
+        );
+    }
 }

@@ -41,6 +41,11 @@ impl EditSession {
         }
     }
 
+    /// Re-register rope buffers after out-of-band document mutation (tests).
+    pub fn resync_buffer(&mut self) {
+        self.sync_buffer();
+    }
+
     pub fn apply(&mut self, command: Command) -> Result<EditResult, EditError> {
         let result = apply(&mut self.document, &mut self.buffer, command.clone())?;
         self.redo_stack.clear();
@@ -53,8 +58,8 @@ impl EditSession {
             return Ok(None);
         };
         if let Some(inverse) = command.inverse(&result) {
-            let inverse_result = apply(&mut self.document, &mut self.buffer, inverse.clone())?;
-            self.redo_stack.push((inverse, inverse_result.clone()));
+            let inverse_result = apply(&mut self.document, &mut self.buffer, inverse)?;
+            self.redo_stack.push((command, result));
             return Ok(Some(inverse_result));
         }
         Ok(None)
@@ -160,20 +165,15 @@ mod tests {
             ""
         );
 
-        for _ in 0..100 {
-            let offset = session.document.sections[0].blocks[0]
-                .paragraph()
-                .unwrap()
-                .full_text()
-                .chars()
-                .count();
-            session
-                .apply(Command::InsertText {
-                    run_id,
-                    offset,
-                    text: "x".into(),
-                })
-                .unwrap();
+        for i in 0..100 {
+            session.redo().unwrap();
+            assert_eq!(
+                session.document.sections[0].blocks[0]
+                    .paragraph()
+                    .unwrap()
+                    .full_text(),
+                "x".repeat(i + 1)
+            );
         }
         assert_eq!(
             session.document.sections[0].blocks[0]

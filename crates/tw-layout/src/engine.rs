@@ -64,10 +64,14 @@ impl LayoutEngine {
     }
 
     pub fn layout_document(&mut self, doc: &Document) -> DocumentLayout {
-        self.shaper.configure_from_theme(
-            &doc.settings.theme.minor_font,
-            &doc.settings.theme.major_font,
-        );
+        let minor_font = doc
+            .styles
+            .defaults
+            .char_format
+            .font_family
+            .as_deref()
+            .unwrap_or(&doc.settings.theme.minor_font);
+        self.shaper.configure_from_theme(minor_font, &doc.settings.theme.major_font);
         let tab_interval = doc.settings.default_tab_stop.max(1.0);
         let mut format = doc
             .sections
