@@ -140,9 +140,25 @@ fn worker_loop(
                         Err(RecvTimeoutError::Disconnected) => break None,
                     }
                 }
-                match cmd_rx.recv() {
-                    Ok(queued) => break Some(queued),
-                    Err(_) => break None,
+                // Idle wait must cover font registration too: a host that parks
+                // here on `cmd_rx` alone never answers `register_face`, and the
+                // caller blocks on its reply channel forever.
+                crossbeam_channel::select! {
+                    recv(cmd_rx) -> msg => match msg {
+                        Ok(queued) => break Some(queued),
+                        Err(_) => break None,
+                    },
+                    recv(font_rx) -> msg => match msg {
+                        Ok((spec, data, reply)) => {
+                            let result = core.register_face(&spec, data);
+                            let _ = reply.send(result);
+                            continue;
+                        }
+                        Err(_) => match cmd_rx.recv() {
+                            Ok(queued) => break Some(queued),
+                            Err(_) => break None,
+                        },
+                    },
                 }
             },
         };

@@ -6,11 +6,8 @@ class LayoutTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
+    return RibbonTabScroller(
+      children: [
           RibbonGroup(
             label: 'Page Setup',
             child: Row(
@@ -47,8 +44,7 @@ class LayoutTab extends StatelessWidget {
             showDivider: false,
             child: RibbonLargeButton(icon: Icons.border_style, label: 'Page\nBorders', onPressed: null),
           ),
-        ],
-      ),
+      ],
     );
   }
 }

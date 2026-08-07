@@ -24,6 +24,11 @@ Future<bool> nativeFfiEventsAvailable() async {
   final engine = NativeEngine.load();
   if (engine == null) return false;
 
+  // `tw_init` returns before the worker has laid out the startup document, so
+  // hit testing page 0 first would find an empty page. Wait before `reset`,
+  // which discards the buffered startup event.
+  await NativeEngine.ensureStartupReady(timeout: const Duration(seconds: 5));
+
   NativeEventRouter.instance.reset();
   final runId = nativeDefaultRunId(engine);
   if (runId == null) {

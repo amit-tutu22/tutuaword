@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:io';
+import 'dart:io' if (dart.library.html) 'package:tutuaword/bridge/platform_stub.dart';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
@@ -8,6 +8,7 @@ import 'package:path/path.dart' as p;
 import 'package:tutuaword/bridge/document_io.dart';
 import 'package:tutuaword/bridge/document_properties.dart';
 import 'package:tutuaword/bridge/document_session_store.dart';
+import 'package:tutuaword/bridge/file_bytes.dart';
 import 'package:tutuaword/bridge/macos_file_access.dart';
 import 'package:tutuaword/bridge/twdoc_io.dart';
 import 'package:tutuaword/editor/autosave_scheduler.dart';
@@ -83,8 +84,7 @@ class DocumentSessionController extends ChangeNotifier {
 
   String get documentTitle {
     if (_currentPath == null) return 'Document1';
-    final parts = _currentPath!.split(Platform.pathSeparator);
-    final name = parts.last;
+    final name = p.basename(_currentPath!);
     final dot = name.lastIndexOf('.');
     return dot == -1 ? name : name.substring(0, dot);
   }
@@ -252,8 +252,9 @@ class DocumentSessionController extends ChangeNotifier {
     _statusText = 'Opening…';
     notifyListeners();
     try {
-      final useInMemoryBytes = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
-      final result = await FilePicker.platform.pickFiles(
+      final useInMemoryBytes =
+          kIsWeb || (!kIsWeb && (Platform.isAndroid || Platform.isIOS));
+      final result = await FilePicker.pickFiles(
         dialogTitle: 'Open document',
         type: FileType.custom,
         allowedExtensions: kSupportedOpenExtensions,
@@ -342,7 +343,11 @@ class DocumentSessionController extends ChangeNotifier {
       final ext = formatExtension ?? _extensionFromPath(path) ?? 'twdoc';
       final outPath = path.endsWith('.$ext') ? path : '$path.$ext';
       final bytes = await _serializeDocument(formatExtension: formatExtension ?? ext);
-      await File(outPath).writeAsBytes(bytes);
+      if (kIsWeb) {
+        await downloadBytes(filename: p.basename(outPath), bytes: bytes);
+      } else {
+        await writeBytesToPath(outPath, bytes);
+      }
       _currentPath = outPath;
       await _recordRecentPath(outPath);
       await _sessionStore.clearAutosave();
@@ -360,7 +365,31 @@ class DocumentSessionController extends ChangeNotifier {
 
   Future<void> exportPdf() async {
     try {
-      final path = await FilePicker.platform.saveFile(
+      final bytes = _host.engine?.exportPdfBytes();
+      if (bytes == null || bytes.isEmpty) {
+        _statusText = 'PDF export failed';
+        notifyListeners();
+        return;
+      }
+      if (kIsWeb) {
+        await downloadBytes(filename: 'document.pdf', bytes: bytes);
+        _statusText = 'PDF exported';
+        notifyListeners();
+        return;
+      }
+      if (Platform.isAndroid || Platform.isIOS) {
+        final path = await FilePicker.saveFile(
+          dialogTitle: 'Export PDF',
+          fileName: 'document.pdf',
+          type: FileType.custom,
+          allowedExtensions: ['pdf'],
+          bytes: bytes,
+        );
+        _statusText = path == null ? 'PDF export cancelled' : 'PDF exported';
+        notifyListeners();
+        return;
+      }
+      final path = await FilePicker.saveFile(
         dialogTitle: 'Export PDF',
         fileName: 'document.pdf',
         type: FileType.custom,
@@ -388,7 +417,11 @@ class DocumentSessionController extends ChangeNotifier {
       final outPath = path.endsWith('.pdf') ? path : '$path.pdf';
       final bytes = _host.engine?.exportPdfBytes();
       if (bytes == null || bytes.isEmpty) return false;
-      await File(outPath).writeAsBytes(bytes);
+      if (kIsWeb) {
+        await downloadBytes(filename: p.basename(outPath), bytes: bytes);
+      } else {
+        await writeBytesToPath(outPath, bytes);
+      }
       _statusText = 'PDF exported';
       notifyListeners();
       return true;
@@ -417,9 +450,48 @@ class DocumentSessionController extends ChangeNotifier {
     String? forceFormat,
   }) async {
     try {
-      final path = await FilePicker.platform.saveFile(
+      final ext = forceFormat ?? defaultExtension;
+      final bytes = await _serializeDocument(formatExtension: forceFormat);
+      if (kIsWeb) {
+        final outPath = p.basename(suggestedPath).endsWith('.$ext')
+            ? p.basename(suggestedPath)
+            : '${p.basename(suggestedPath)}.$ext';
+        await downloadBytes(filename: outPath, bytes: bytes);
+        _currentPath = outPath;
+        await _recordRecentPath(outPath);
+        await _sessionStore.clearAutosave();
+        _syncSavedGeneration();
+        _statusText = 'Saved';
+        notifyListeners();
+        onSessionChanged();
+        return;
+      }
+      if (Platform.isAndroid || Platform.isIOS) {
+        final path = await FilePicker.saveFile(
+          dialogTitle: dialogTitle,
+          fileName: p.basename(suggestedPath),
+          type: FileType.custom,
+          allowedExtensions: [defaultExtension],
+          bytes: bytes,
+        );
+        if (path == null) {
+          _statusText = 'Save cancelled';
+          notifyListeners();
+          return;
+        }
+        final outPath = path.endsWith('.$ext') ? path : '$path.$ext';
+        _currentPath = outPath;
+        await _recordRecentPath(outPath);
+        await _sessionStore.clearAutosave();
+        _syncSavedGeneration();
+        _statusText = 'Saved';
+        notifyListeners();
+        onSessionChanged();
+        return;
+      }
+      final path = await FilePicker.saveFile(
         dialogTitle: dialogTitle,
-        fileName: suggestedPath.split(Platform.pathSeparator).last,
+        fileName: p.basename(suggestedPath),
         type: FileType.custom,
         allowedExtensions: [defaultExtension],
       );
@@ -428,10 +500,8 @@ class DocumentSessionController extends ChangeNotifier {
         notifyListeners();
         return;
       }
-      final ext = forceFormat ?? defaultExtension;
       final outPath = path.endsWith('.$ext') ? path : '$path.$ext';
-      final bytes = await _serializeDocument(formatExtension: forceFormat);
-      await File(outPath).writeAsBytes(bytes);
+      await writeBytesToPath(outPath, bytes);
       _currentPath = outPath;
       await _recordRecentPath(outPath);
       await _sessionStore.clearAutosave();
@@ -464,6 +534,15 @@ class DocumentSessionController extends ChangeNotifier {
   }
 
   Future<void> _recordRecentPath(String path) async {
+    if (kIsWeb) {
+      _recentEntries = _sessionStore.bumpRecentEntry(
+        _recentEntries,
+        RecentDocumentEntry(path: p.basename(path)),
+      );
+      await _persistRecentEntries();
+      notifyListeners();
+      return;
+    }
     String? bookmark;
     if (Platform.isMacOS) {
       bookmark = await MacOSFileAccess.createBookmark(path);
@@ -483,12 +562,15 @@ class DocumentSessionController extends ChangeNotifier {
   }
 
   Future<Uint8List> _readDocumentBytes(String path) async {
+    if (kIsWeb) {
+      throw UnsupportedError('open by path is not supported on web; use Open…');
+    }
     await _releaseScopedAccess();
     final entry = _recentEntryForPath(path);
     final ok = await MacOSFileAccess.startAccess(path, bookmark: entry.bookmark);
     if (!ok) throw FileSystemException('Could not access file', path);
     _scopedAccessPath = path;
-    return File(path).readAsBytes();
+    return Uint8List.fromList(await File(path).readAsBytes());
   }
 
   String _openFailureMessage(Object error) {

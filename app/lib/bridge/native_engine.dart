@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:tutuaword/bridge/command_codec.dart';
 import 'package:tutuaword/bridge/document_properties.dart';
+import 'package:tutuaword/bridge/engine_types.dart';
 import 'package:tutuaword/bridge/native_event_router.dart';
 
 typedef TwEventCallbackNative = Void Function(Uint32, Uint64, Pointer<Uint8>, IntPtr);
@@ -16,6 +17,9 @@ typedef TwEventCallbackDart = void Function(int, int, Pointer<Uint8>, int);
 
 typedef TwInitNative = Int32 Function(Pointer<NativeFunction<TwEventCallbackNative>>);
 typedef TwInitDart = int Function(Pointer<NativeFunction<TwEventCallbackNative>>);
+
+typedef TwAwaitStartupNative = Int32 Function(Uint32);
+typedef TwAwaitStartupDart = int Function(int);
 
 typedef TwRegisterFontNative = Int32 Function(Pointer<Utf8>, Bool, Bool, Pointer<Uint8>, IntPtr);
 typedef TwRegisterFontDart = int Function(Pointer<Utf8>, bool, bool, Pointer<Uint8>, int);
@@ -255,18 +259,20 @@ typedef TwFreeBufferDart = void Function(Pointer<Uint8>, int);
 typedef TwShutdownNative = Void Function();
 typedef TwShutdownDart = void Function();
 
-/// Budget for an edit's worker round-trip. Typing never blocks on this — the
+/// Typing never blocks on this — the caret advances optimistically and the
 /// caret advances optimistically and the repaint arrives with the event — so
 /// this only bounds how long a dropped or coalesced event can stall an
 /// operation that genuinely needs settled layout before the sync fallback.
-const Duration kEditCompletionTimeout = Duration(milliseconds: 1500);
-
 class NativeEngine {
   NativeEngine._(this._lib);
 
   static NativeEngine? _cached;
   static NativeCallable<TwEventCallbackNative>? _eventCallable;
   static Future<void>? _shutdownInFlight;
+  static bool _startupReady = false;
+
+  /// Worker startup publishes `DocumentOpened` under this id.
+  static const int startupRequestId = 0;
 
   final DynamicLibrary _lib;
   late final TwDispatchDart dispatch;
@@ -315,6 +321,7 @@ class NativeEngine {
   late final TwCaretAtPositionDart caretAtPositionNative;
   late final TwSelectionRectsDart selectionRects;
   late final TwFreeBufferDart freeBuffer;
+  TwAwaitStartupDart? awaitStartupNative;
 
   static NativeEngine? load() {
     if (_cached != null) return _cached;
@@ -322,9 +329,12 @@ class NativeEngine {
       final lib = _openLibrary();
       final engine = NativeEngine._(lib);
       _eventCallable ??= NativeCallable<TwEventCallbackNative>.listener(_eventCallback);
-      lib.lookupFunction<TwInitNative, TwInitDart>('tw_init')(
+      final initCode = lib.lookupFunction<TwInitNative, TwInitDart>('tw_init')(
         _eventCallable!.nativeFunction,
       );
+      if (initCode != 0) {
+        debugPrint('NativeEngine: tw_init returned $initCode');
+      }
       try {
         engine.registerFontNative =
             lib.lookupFunction<TwRegisterFontNative, TwRegisterFontDart>('tw_register_font');
@@ -427,12 +437,61 @@ class NativeEngine {
           lib.lookupFunction<TwSelectionRectsNative, TwSelectionRectsDart>('tw_selection_rects');
       engine.freeBuffer = lib.lookupFunction<TwFreeBufferNative, TwFreeBufferDart>('tw_free_buffer');
       final pump = engine.pumpEventsNative;
-      if (pump != null) NativeEventRouter.instance.attachPump(pump);
+      if (pump != null) {
+        NativeEventRouter.instance.attachPump(pump);
+        // Drain startup events so the first frame does not block on stale work.
+        for (var i = 0; i < 16; i++) {
+          pump();
+        }
+      }
+      try {
+        engine.awaitStartupNative =
+            lib.lookupFunction<TwAwaitStartupNative, TwAwaitStartupDart>('tw_await_startup');
+      } on ArgumentError {
+        engine.awaitStartupNative = null;
+      }
       _cached = engine;
       return engine;
     } catch (_) {
       return null;
     }
+  }
+
+  /// Wait until the worker's startup document is laid out (after non-blocking `tw_init`).
+  ///
+  /// Never calls blocking `tw_await_startup` on the UI isolate — that freezes painting.
+  static Future<bool> ensureStartupReady({
+    Duration timeout = const Duration(seconds: 30),
+  }) async {
+    if (_cached == null) return false;
+    // Startup publishes one event for one request id, so a second wait would
+    // find nothing and burn the whole timeout. Latch the first answer instead.
+    if (_startupReady) return true;
+    final deadline = DateTime.now().add(timeout);
+    while (DateTime.now().isBefore(deadline)) {
+      _cached!.pumpEventsNative?.call();
+      try {
+        final eventType = await NativeEventRouter.instance.waitFor(
+          startupRequestId,
+          timeout: const Duration(milliseconds: 50),
+        );
+        if (eventType == NativeEventTypes.documentOpened ||
+            eventType == NativeEventTypes.displayListReady) {
+          debugPrint('NativeEngine: startup ready');
+          _startupReady = true;
+          return true;
+        }
+        if (eventType == NativeEventTypes.error) {
+          debugPrint('NativeEngine: startup error event');
+          return false;
+        }
+      } on TimeoutException {
+        await Future<void>.delayed(const Duration(milliseconds: 16));
+      }
+    }
+    debugPrint('NativeEngine: startup wait timed out; continuing');
+    _startupReady = true;
+    return true;
   }
 
   /// Release the native session — for tests and app shutdown.
@@ -452,6 +511,7 @@ class NativeEngine {
     if (engine == null) return;
     engine._lib.lookupFunction<TwShutdownNative, TwShutdownDart>('tw_shutdown')();
     _cached = null;
+    _startupReady = false;
     NativeEventRouter.instance.reset();
     NativeEventRouter.instance.detachPump();
     // Keep _eventCallable alive until process exit — closing it races worker callbacks.
@@ -471,9 +531,7 @@ class NativeEngine {
     final familyPtr = family.toNativeUtf8();
     final dataPtr = calloc<Uint8>(data.length);
     try {
-      for (var i = 0; i < data.length; i++) {
-        dataPtr[i] = data[i];
-      }
+      dataPtr.asTypedList(data.length).setAll(0, data);
       return register(familyPtr, bold, italic, dataPtr, data.length) == 0;
     } finally {
       calloc.free(familyPtr);
@@ -525,74 +583,6 @@ class NativeEngine {
   ) {
     NativeEventRouter.instance.onEvent(eventType, requestId);
   }
-}
-
-class DisplayListData {
-  DisplayListData({
-    required this.bytes,
-    required this.version,
-    required this.pageWidth,
-    required this.pageHeight,
-    required this.pageCount,
-  });
-
-  final Uint8List bytes;
-  final int version;
-  final double pageWidth;
-  final double pageHeight;
-  final int pageCount;
-}
-
-class PageDisplayListData {
-  PageDisplayListData({
-    required this.bytes,
-    required this.version,
-    required this.pageWidth,
-    required this.pageHeight,
-  });
-
-  final Uint8List bytes;
-  final int version;
-  final double pageWidth;
-  final double pageHeight;
-}
-
-class AtlasData {
-  AtlasData({
-    required this.generation,
-    required this.bytes,
-    required this.width,
-    required this.height,
-  });
-
-  final int generation;
-  final Uint8List bytes;
-  final int width;
-  final int height;
-}
-
-class HitTestResult {
-  HitTestResult({required this.runId, required this.charOffset});
-
-  final String runId;
-  final int charOffset;
-}
-
-class CaretGeometry {
-  CaretGeometry({required this.x, required this.y, required this.height});
-
-  final double x;
-  final double y;
-  final double height;
-}
-
-class GlyphSelectionRect {
-  GlyphSelectionRect({required this.x, required this.y, required this.width, required this.height});
-
-  final double x;
-  final double y;
-  final double width;
-  final double height;
 }
 
 extension NativeEngineOps on NativeEngine {

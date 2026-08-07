@@ -3,8 +3,8 @@ import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tutuaword/bridge/engine_types.dart';
 import 'package:tutuaword/bridge/mock_native_engine.dart';
-import 'package:tutuaword/bridge/native_engine.dart';
 import 'package:tutuaword/bridge/native_event_router.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
 import 'package:tutuaword/editor/glyph_editor_surface.dart';

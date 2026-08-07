@@ -1,8 +1,8 @@
 import 'dart:async';
-import 'dart:ffi';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
+import 'package:tutuaword/bridge/event_pump.dart';
 
 /// Wire format event types (LE u32 in callback payload bytes 0..4).
 abstract final class NativeEventTypes {
@@ -14,7 +14,7 @@ abstract final class NativeEventTypes {
 }
 
 /// Drains the native event channel, returning how many events were forwarded.
-typedef NativeEventPump = int Function();
+typedef NativeEventPump = EventPump;
 
 /// Routes FFI worker events to per-[requestId] completers (R0.2 correlation).
 class NativeEventRouter {
@@ -68,9 +68,9 @@ class NativeEventRouter {
   /// pointer from a deferred callback yields recycled stack bytes and request
   /// ids that match nothing.
   @visibleForTesting
-  void handleWireEvent(int eventType, Pointer<Uint8> data, int len) {
-    if (len < 12) return;
-    final bd = ByteData.sublistView(data.asTypedList(len));
+  void handleWireEvent(int eventType, Uint8List data) {
+    if (data.length < 12) return;
+    final bd = ByteData.sublistView(data);
     onEvent(eventType, bd.getUint64(4, Endian.little));
   }
 

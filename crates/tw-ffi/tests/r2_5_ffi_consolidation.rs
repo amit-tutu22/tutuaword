@@ -7,7 +7,7 @@ use std::time::Duration;
 use tw_edit::{command_to_json_str, Command};
 use tw_ffi::{
     tw_dispatch, tw_document_tail_hit, tw_free_buffer, tw_get_caret_format, tw_get_document_text,
-    tw_init, tw_last_request_id, tw_shutdown, tw_undo,
+    tw_await_startup, tw_init, tw_last_request_id, tw_pump_events, tw_shutdown, tw_undo,
 };
 use tw_model::{CharFormat, NodeId};
 use uuid::Uuid;
@@ -24,6 +24,7 @@ extern "C" fn noop_callback(
 
 fn init_session() {
     assert_eq!(tw_init(noop_callback), 0);
+    assert_eq!(tw_await_startup(30_000), 0);
 }
 
 fn shutdown_session() {
@@ -63,6 +64,7 @@ fn document_text() -> String {
 
 fn wait_for_document_text<F: Fn(&str) -> bool>(predicate: F) {
     for _ in 0..500 {
+        tw_pump_events();
         if predicate(&document_text()) {
             return;
         }

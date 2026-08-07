@@ -6,11 +6,8 @@ class ReferencesTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
+    return RibbonTabScroller(
+      children: [
           RibbonGroup(
             label: 'Table of Contents',
             child: RibbonLargeButton(icon: Icons.list_alt, label: 'Table of\nContents', onPressed: null),
@@ -43,8 +40,7 @@ class ReferencesTab extends StatelessWidget {
               ],
             ),
           ),
-        ],
-      ),
+      ],
     );
   }
 }

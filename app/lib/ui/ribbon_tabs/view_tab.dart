@@ -13,11 +13,8 @@ class ViewTab extends StatelessWidget {
     return ListenableBuilder(
       listenable: controller,
       builder: (context, _) {
-        return SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
+        return RibbonTabScroller(
+          children: [
               RibbonGroup(
                 label: 'Views',
                 child: Row(
@@ -78,8 +75,7 @@ class ViewTab extends StatelessWidget {
                   ],
                 ),
               ),
-            ],
-          ),
+          ],
         );
       },
     );

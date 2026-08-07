@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
-import 'package:tutuaword/main.dart';
+import 'package:tutuaword/editor/editor_screen.dart';
 import 'package:tutuaword/ui/info_bar.dart';
 import 'package:tutuaword/ui/ribbon.dart';
 import 'package:tutuaword/ui/ribbon_tabs/design_tab.dart';

@@ -1400,6 +1400,82 @@ mod tests {
         }
     }
 
+    /// A token with no break opportunity inside it must still be broken at the
+    /// margin. Left to run, it prints past the page edge and is unreadable on a
+    /// narrow viewport.
+    #[test]
+    fn breaks_a_word_wider_than_the_column_at_the_margin() {
+        let mut doc = Document::new();
+        doc.sections[0].blocks.clear();
+        // No spaces, hyphens, or punctuation: UAX #14 offers no break at all.
+        let word = "W".repeat(400);
+        doc.sections[0]
+            .blocks
+            .push(Block::Paragraph(Paragraph::with_text(word.clone())));
+
+        let mut engine = LayoutEngine::new();
+        let layout = engine.layout_document(&doc);
+        let content_width = layout.pages[0].content_width;
+        let lines: Vec<_> = layout
+            .pages
+            .iter()
+            .flat_map(|p| p.boxes.iter())
+            .filter_map(|b| match b {
+                LayoutBox::TextLine(l) => Some(l),
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            lines.len() > 1,
+            "a 400-character word must break across lines, got {}",
+            lines.len()
+        );
+        for line in &lines {
+            assert!(
+                line.width <= content_width + 1.0,
+                "line width {} exceeds column {}",
+                line.width,
+                content_width
+            );
+        }
+        // Breaking must not drop or duplicate glyphs.
+        let glyphs: usize = lines.iter().map(|l| l.glyphs.len()).sum();
+        assert_eq!(glyphs, word.len(), "every character should survive the break");
+    }
+
+    /// The same token mid-paragraph: the words around it wrap normally and the
+    /// long one is broken rather than overflowing.
+    #[test]
+    fn breaks_an_overlong_token_surrounded_by_normal_words() {
+        let mut doc = Document::new();
+        doc.sections[0].blocks.clear();
+        let text = format!("alpha beta {} gamma delta", "X".repeat(300));
+        doc.sections[0]
+            .blocks
+            .push(Block::Paragraph(Paragraph::with_text(text)));
+
+        let mut engine = LayoutEngine::new();
+        let layout = engine.layout_document(&doc);
+        let content_width = layout.pages[0].content_width;
+        for line in layout
+            .pages
+            .iter()
+            .flat_map(|p| p.boxes.iter())
+            .filter_map(|b| match b {
+                LayoutBox::TextLine(l) => Some(l),
+                _ => None,
+            })
+        {
+            assert!(
+                line.width <= content_width + 1.0,
+                "line width {} exceeds column {}",
+                line.width,
+                content_width
+            );
+        }
+    }
+
     #[test]
     fn table_layout_produces_grid_lines() {
         let mut doc = Document::new();

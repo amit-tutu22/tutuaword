@@ -24,6 +24,7 @@ Native libraries are gitignored — run the matching script after pulling Rust c
 | Windows | `tw_ffi.dll` | `DynamicLibrary.open` |
 | Android | `jniLibs/*/libtw_ffi.so` | `DynamicLibrary.open('libtw_ffi.so')` |
 | iOS | `tw_ffi.xcframework` (static) | `DynamicLibrary.process()` |
+| Web (Chrome) | `app/web/wasm/tw_wasm_bg.wasm` | `tw-wasm` via JS (`TwEngine`) |
 
 ## Run
 
@@ -33,7 +34,11 @@ cd app
 flutter run -d macos       # after scripts/build-ffi.sh
 flutter run -d android     # after scripts/build-ffi.sh android
 flutter run -d ios         # after scripts/build-ffi.sh ios
+scripts/build-web.sh            # WASM → app/web/wasm/ (see script --help)
+flutter run -d chrome      # WASM inline engine (no tw-ffi)
 ```
+
+**Web / Chrome:** Build WASM bindings with `scripts/build-web.sh` from the repo root (`scripts/build-web.sh --help` for options; requires `wasm-bindgen` CLI). The app loads `tw-wasm` through `app/web/tw_wasm_loader.js`. Use **Open…** / **Save** via the browser file picker; documents download instead of writing to a local path.
 
 **Android:** Android Studio (SDK + NDK). Use **Open…** in the app to pick `.docx` files (system picker; no broad storage permission on Android 13+).
 
@@ -41,7 +46,7 @@ flutter run -d ios         # after scripts/build-ffi.sh ios
 
 ## Mobile fonts
 
-Android and iOS builds use injected fonts (no system font scan). On startup the app registers bundled `NotoSans-Regular.ttf` under common Word family names (`Arial`, `Calibri`, `Helvetica`, etc.). Rebuild the FFI library after changing font registration in Rust.
+Android, iOS, and web builds use injected fonts (no system font scan). On startup the app registers bundled `NotoSans-Regular.ttf` under common Word family names (`Arial`, `Calibri`, `Helvetica`, etc.). Rebuild the native/WASM engine after changing font registration in Rust.
 
 ## Cleanup
 

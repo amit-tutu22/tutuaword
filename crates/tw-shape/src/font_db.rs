@@ -76,7 +76,7 @@ pub enum FontRegistrationError {
     UnreadableFontData,
     /// The requested face index is past the end of the collection.
     FaceIndexOutOfRange { index: u32, face_count: u32 },
-    /// The active engine executor does not support host font injection (native threaded session).
+    /// The engine executor could not be reached — it has already shut down.
     RegistrationNotSupported,
 }
 

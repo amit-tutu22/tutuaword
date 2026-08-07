@@ -156,7 +156,7 @@ pub fn layout_paragraph(
             if tail.is_empty() || tail.chars().all(char::is_whitespace) {
                 continue;
             }
-            emit_line(
+            current_y += emit_line_wrapped(
                 shaper,
                 atlas,
                 atlas_ctx(
@@ -173,9 +173,10 @@ pub fn layout_paragraph(
                 font_id,
                 default_color,
                 true,
+                max_width,
+                line_height,
                 &mut lines,
             );
-            current_y += line_height;
             line_start = byte_idx;
             last_fit = None;
             continue;
@@ -198,43 +199,78 @@ pub fn layout_paragraph(
             continue;
         }
 
-        let break_at = match last_fit {
-            Some(fit) if fit > line_start => fit,
-            // A single unbreakable token wider than the column: let it overflow.
-            _ => byte_idx,
-        };
-        emit_line(
-            shaper,
-            atlas,
-            atlas_ctx(
+        // Close the line at the last opportunity that fit, if there was one.
+        let mut pending_width = width;
+        if let Some(fit) = last_fit.filter(|&fit| fit > line_start) {
+            emit_line(
+                shaper,
+                atlas,
+                atlas_ctx(
+                    para,
+                    &text,
+                    line_start,
+                    fit,
+                    x,
+                    current_y + ascent,
+                    tab_origin,
+                    tab_interval,
+                    &tab_stops,
+                ),
+                font_id,
+                default_color,
+                true,
+                &mut lines,
+            );
+            current_y += line_height;
+            line_start = fit;
+            pending_width = measure_range(
+                shaper,
                 para,
-                &text,
                 line_start,
-                break_at,
-                x,
-                current_y + ascent,
-                tab_origin,
+                trim_trailing(&text, line_start, byte_idx),
+                tab_origin - x,
                 tab_interval,
                 &tab_stops,
-            ),
-            font_id,
-            default_color,
-            true,
-            &mut lines,
-        );
-        current_y += line_height;
-        line_start = break_at;
-        last_fit = if break_at == byte_idx {
-            None
+                font_id,
+            );
+        }
+
+        // What is left before this opportunity can still exceed the column when
+        // it holds no opportunity of its own. Closing the line at `fit` only
+        // proves the text before `fit` fit, not the token after it.
+        if pending_width > max_width {
+            current_y += emit_line_wrapped(
+                shaper,
+                atlas,
+                atlas_ctx(
+                    para,
+                    &text,
+                    line_start,
+                    byte_idx,
+                    x,
+                    current_y + ascent,
+                    tab_origin,
+                    tab_interval,
+                    &tab_stops,
+                ),
+                font_id,
+                default_color,
+                true,
+                max_width,
+                line_height,
+                &mut lines,
+            );
+            line_start = byte_idx;
+            last_fit = None;
         } else {
-            Some(byte_idx)
-        };
+            last_fit = Some(byte_idx);
+        }
     }
 
     if line_start < text.len() {
         // Keep trailing whitespace on the paragraph's last line so a typed space
         // is visible and the caret can advance before the next character.
-        emit_line(
+        current_y += emit_line_wrapped(
             shaper,
             atlas,
             atlas_ctx(
@@ -251,9 +287,10 @@ pub fn layout_paragraph(
             font_id,
             default_color,
             false,
+            max_width,
+            line_height,
             &mut lines,
         );
-        current_y += line_height;
     }
 
     if lines.is_empty() {
@@ -363,6 +400,150 @@ fn emit_line(
         default_color,
     );
     lines.push(line);
+}
+
+/// Last character boundary in `start..end` whose text still fits `max_width`.
+///
+/// Only used for a token with no break opportunity of its own, so the choice is
+/// between breaking mid-character-cluster and running past the margin. Advances
+/// by at least one character: a column narrower than a single glyph must still
+/// make progress rather than spin.
+#[allow(clippy::too_many_arguments)]
+fn break_overlong(
+    shaper: &mut TextShaper,
+    para: &Paragraph,
+    text: &str,
+    start: usize,
+    end: usize,
+    max_width: f32,
+    tab_origin_offset: f32,
+    tab_interval: f32,
+    tab_stops: &[TabStop],
+    font_id: Option<tw_shape::FontId>,
+) -> usize {
+    // Interior boundaries only: `start` would make no progress and `end` is
+    // already known not to fit.
+    let boundaries: Vec<usize> = text[start..end]
+        .char_indices()
+        .skip(1)
+        .map(|(offset, _)| start + offset)
+        .collect();
+    if boundaries.is_empty() {
+        return end;
+    }
+    // Advances are non-negative, so width grows monotonically with the boundary
+    // and the fitting boundaries form a prefix.
+    let fitting = boundaries.partition_point(|&candidate| {
+        measure_range(
+            shaper,
+            para,
+            start,
+            candidate,
+            tab_origin_offset,
+            tab_interval,
+            tab_stops,
+            font_id,
+        ) <= max_width
+    });
+    if fitting == 0 {
+        boundaries[0]
+    } else {
+        boundaries[fitting - 1]
+    }
+}
+
+/// Emits `ctx.start..ctx.end`, splitting it across lines when it is wider than
+/// `max_width` and holds no break opportunity to split on — a long URL or an
+/// unspaced token. Word breaks those at the margin instead of letting them run
+/// off the page. Returns the total baseline height the emitted lines consumed.
+#[allow(clippy::too_many_arguments)]
+fn emit_line_wrapped(
+    shaper: &mut TextShaper,
+    atlas: &mut GlyphAtlas,
+    ctx: LineContext<'_>,
+    font_id: Option<tw_shape::FontId>,
+    default_color: u32,
+    trim_end: bool,
+    max_width: f32,
+    line_height: f32,
+    lines: &mut Vec<super::types::TextLine>,
+) -> f32 {
+    let mut start = ctx.start;
+    let mut baseline_y = ctx.baseline_y;
+    let mut consumed = 0.0;
+    while start < ctx.end {
+        let measured_end = trim_trailing(ctx.text, start, ctx.end);
+        let width = measure_range(
+            shaper,
+            ctx.para,
+            start,
+            measured_end,
+            ctx.tab_origin - ctx.x,
+            ctx.tab_interval,
+            ctx.tab_stops,
+            font_id,
+        );
+        if width <= max_width {
+            break;
+        }
+        let break_at = break_overlong(
+            shaper,
+            ctx.para,
+            ctx.text,
+            start,
+            ctx.end,
+            max_width,
+            ctx.tab_origin - ctx.x,
+            ctx.tab_interval,
+            ctx.tab_stops,
+            font_id,
+        );
+        if break_at <= start || break_at >= ctx.end {
+            break;
+        }
+        emit_line(
+            shaper,
+            atlas,
+            atlas_ctx(
+                ctx.para,
+                ctx.text,
+                start,
+                break_at,
+                ctx.x,
+                baseline_y,
+                ctx.tab_origin,
+                ctx.tab_interval,
+                ctx.tab_stops,
+            ),
+            font_id,
+            default_color,
+            true,
+            lines,
+        );
+        baseline_y += line_height;
+        consumed += line_height;
+        start = break_at;
+    }
+    emit_line(
+        shaper,
+        atlas,
+        atlas_ctx(
+            ctx.para,
+            ctx.text,
+            start,
+            ctx.end,
+            ctx.x,
+            baseline_y,
+            ctx.tab_origin,
+            ctx.tab_interval,
+            ctx.tab_stops,
+        ),
+        font_id,
+        default_color,
+        trim_end,
+        lines,
+    );
+    consumed + line_height
 }
 
 /// The face a run asks for: its family at its weight and slant, falling back to

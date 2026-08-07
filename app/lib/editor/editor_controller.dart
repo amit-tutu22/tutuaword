@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:io';
+import 'dart:io' if (dart.library.html) 'package:tutuaword/bridge/platform_stub.dart';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
@@ -7,9 +7,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:tutuaword/bridge/document_engine.dart';
 import 'package:tutuaword/bridge/document_properties.dart';
+import 'package:tutuaword/bridge/engine_loader.dart';
+import 'package:tutuaword/bridge/engine_types.dart';
 import 'package:tutuaword/bridge/document_session_store.dart';
 import 'package:tutuaword/bridge/mock_native_engine.dart';
-import 'package:tutuaword/bridge/native_engine.dart';
 import 'package:tutuaword/editor/controllers/document_session_controller.dart';
 import 'package:tutuaword/editor/controllers/engine_host.dart';
 import 'package:tutuaword/editor/controllers/formatting_controller.dart';
@@ -18,7 +19,8 @@ import 'package:tutuaword/editor/controllers/view_controller.dart';
 import 'package:tutuaword/editor/doc_range.dart';
 import 'package:tutuaword/ui/paste_special_dialog.dart';
 
-export 'package:tutuaword/bridge/native_engine.dart' show CaretGeometry, GlyphSelectionRect;
+export 'package:tutuaword/bridge/engine_types.dart'
+    show CaretGeometry, GlyphSelectionRect;
 export 'package:tutuaword/editor/doc_range.dart';
 
 /// Clipboard payload read from the system pasteboard.

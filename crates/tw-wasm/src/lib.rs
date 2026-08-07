@@ -97,74 +97,7 @@ impl std::fmt::Display for OpenError {
 
 impl std::error::Error for OpenError {}
 
+mod web_exports;
+
 #[cfg(feature = "wasm-bindgen")]
-mod bindgen_exports {
-    use super::*;
-    use tw_layout::WEIGHT_REGULAR;
-    use wasm_bindgen::prelude::*;
-
-  /// Browser/Node engine handle. Uses the inline executor and requires the host
-  /// to register fonts before opening documents.
-    #[wasm_bindgen]
-    pub struct TwEngine {
-        session: WasmSession,
-    }
-
-    #[wasm_bindgen]
-    impl TwEngine {
-        #[wasm_bindgen(constructor)]
-        pub fn new() -> Self {
-            Self {
-                session: WasmSession::new(),
-            }
-        }
-
-        /// Register a font face from raw bytes. `family` is matched case-insensitively.
-        pub fn register_font(
-            &mut self,
-            family: &str,
-            bold: bool,
-            italic: bool,
-            data: &[u8],
-        ) -> Result<(), JsValue> {
-            let mut spec = FontFaceSpec::new(family);
-            if bold {
-                spec = spec.bold();
-            } else {
-                spec = spec.weight(WEIGHT_REGULAR);
-            }
-            if italic {
-                spec = spec.italic();
-            }
-            self.session
-                .register_face(&spec, data.to_vec())
-                .map_err(|e| JsValue::from_str(&e.to_string()))?;
-            Ok(())
-        }
-
-        /// Open a document from raw bytes (DOCX, ODT, plain text, …).
-        pub fn open_document(&mut self, data: &[u8]) -> Result<(), JsValue> {
-            self.session
-                .open_bytes_and_wait(data.to_vec())
-                .map_err(|e| JsValue::from_str(&e.to_string()))
-        }
-
-        pub fn page_count(&self) -> u32 {
-            self.session.page_count()
-        }
-
-        pub fn text(&self) -> String {
-            self.session.document_text()
-        }
-
-        /// Sum of glyph advances on the first line of page 0 (layout width proxy).
-        pub fn first_line_advance(&self) -> f32 {
-            self.session.first_line_width(0)
-        }
-
-        /// Drive the inline engine and deliver any pending events.
-        pub fn pump(&mut self) -> u32 {
-            self.session.pump() as u32
-        }
-    }
-}
+pub use web_exports::bindgen_exports::TwEngine;

@@ -3,7 +3,7 @@ import 'dart:typed_data';
 
 import 'package:tutuaword/bridge/document_engine.dart';
 import 'package:tutuaword/bridge/document_properties.dart';
-import 'package:tutuaword/bridge/native_engine.dart';
+import 'package:tutuaword/bridge/engine_types.dart';
 
 /// In-memory engine for widget/unit tests (R2.4 — no TextField fallback).
 class MockDocumentEngine implements DocumentEngine {

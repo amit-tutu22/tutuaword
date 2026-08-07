@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'dart:io' if (dart.library.html) 'package:tutuaword/bridge/platform_stub.dart';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -22,14 +22,25 @@ class MobileFontBootstrap {
 
   /// Load bundled fonts and register them with the Rust engine when running on
   /// Android or iOS. Safe to call on desktop (no-op).
+  /// True after [registerBundledFonts] has finished (engine load + font bytes).
+  static bool isReady = false;
+
   static Future<void> registerBundledFonts() async {
-    if (kIsWeb || (!Platform.isAndroid && !Platform.isIOS)) {
+    if (kIsWeb) {
       return;
     }
+    if (!Platform.isAndroid && !Platform.isIOS) {
+      return;
+    }
+    // Yield so AppBootstrap can paint before tw_init / font registration.
+    await Future<void>.delayed(Duration.zero);
     final engine = NativeEngine.load();
     if (engine == null) {
+      debugPrint('MobileFontBootstrap: native engine not available');
+      isReady = true;
       return;
     }
+    debugPrint('MobileFontBootstrap: engine loaded');
     try {
       final data = await rootBundle.load(_assetPath);
       final bytes = data.buffer.asUint8List();
@@ -37,10 +48,16 @@ class MobileFontBootstrap {
         if (!engine.registerFont(family, bytes)) {
           debugPrint('MobileFontBootstrap: failed to register $family');
         }
+        // Each face blocks on the worker's reply; yield so frames keep painting.
+        await Future<void>.delayed(Duration.zero);
       }
       debugPrint('MobileFontBootstrap: registered ${_aliases.length} font aliases');
     } catch (e) {
       debugPrint('MobileFontBootstrap: skipped ($e)');
     }
+    debugPrint('MobileFontBootstrap: waiting for startup document…');
+    await NativeEngine.ensureStartupReady();
+    debugPrint('MobileFontBootstrap: startup complete');
+    isReady = true;
   }
 }

@@ -16,6 +16,29 @@ Widget wrapRibbonTooltip(String? tooltip, Widget child) {
   return Tooltip(message: tooltip, child: child);
 }
 
+/// Horizontal scroller for a ribbon tab's groups.
+///
+/// Phone-width screens cannot fit every group at once; drag horizontally to
+/// reach the rest. No overlay scrollbar — on a short ribbon a track reads as a
+/// rule through the icons.
+class RibbonTabScroller extends StatelessWidget {
+  const RibbonTabScroller({super.key, required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      physics: const BouncingScrollPhysics(),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: children,
+      ),
+    );
+  }
+}
+
 class RibbonGroup extends StatelessWidget {
   const RibbonGroup({
     super.key,

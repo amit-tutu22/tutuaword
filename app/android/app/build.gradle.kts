@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "com.example.tutuaword"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
@@ -42,4 +42,8 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    implementation("androidx.core:core-splashscreen:1.0.1")
 }

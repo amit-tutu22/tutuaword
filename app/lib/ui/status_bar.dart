@@ -9,77 +9,86 @@ class WordStatusBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // The home indicator sits over the app, so the surface extends past it
+    // while the controls stay above.
+    final viewPadding = MediaQuery.paddingOf(context);
     return Tooltip(
       message: controller.statusText,
       child: Container(
-        height: WordTheme.statusBarHeight,
         color: WordTheme.statusBarSurface,
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-        child: Row(
-          children: [
-            Flexible(
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: [
-                    _StatusItem('Page ${controller.currentPage + 1} of ${controller.pageCount}'),
-                    _divider(),
-                    _StatusItem('${controller.wordCount} words'),
-                    _divider(),
-                    const Icon(Icons.check_circle_outline, size: 12, color: Color(0xFF555555)),
-                    _divider(),
-                    _StatusItem('English (India)'),
-                    _divider(),
-                    _StatusItem('Accessibility: Good to go'),
-                  ],
+        padding: EdgeInsets.only(
+          bottom: viewPadding.bottom,
+          left: viewPadding.left + 8,
+          right: viewPadding.right + 8,
+        ),
+        child: SizedBox(
+          height: WordTheme.statusBarHeight,
+          child: Row(
+            children: [
+              Flexible(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      _StatusItem('Page ${controller.currentPage + 1} of ${controller.pageCount}'),
+                      _divider(),
+                      _StatusItem('${controller.wordCount} words'),
+                      _divider(),
+                      const Icon(Icons.check_circle_outline, size: 12, color: Color(0xFF555555)),
+                      _divider(),
+                      _StatusItem('English (India)'),
+                      _divider(),
+                      _StatusItem('Accessibility: Good to go'),
+                    ],
+                  ),
                 ),
               ),
-            ),
-            _ViewModeButton(icon: Icons.article_outlined, tooltip: 'Read Mode', onPressed: null),
-            _ViewModeButton(
-              icon: Icons.print_outlined,
-              tooltip: 'Print Layout',
-              selected: !controller.printPreview,
-              onPressed: () {
-                if (controller.printPreview) controller.togglePrintPreview();
-              },
-            ),
-            _ViewModeButton(
-              icon: Icons.preview_outlined,
-              tooltip: 'Print Preview',
-              selected: controller.printPreview,
-              onPressed: () {
-                if (!controller.printPreview) controller.togglePrintPreview();
-              },
-            ),
-            _ViewModeButton(icon: Icons.web, tooltip: 'Web Layout', onPressed: null),
-            _divider(),
-            IconButton(
-              icon: const Icon(Icons.remove, size: 14),
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 20, minHeight: 20),
-              onPressed: controller.zoomOut,
-              tooltip: 'Zoom out',
-            ),
-            SizedBox(
-              width: 100,
-              child: Slider(
-                value: controller.zoom,
-                min: 0.5,
-                max: 2.0,
-                onChanged: controller.setZoom,
+              _ViewModeButton(icon: Icons.article_outlined, tooltip: 'Read Mode', onPressed: null),
+              _ViewModeButton(
+                icon: Icons.print_outlined,
+                tooltip: 'Print Layout',
+                selected: !controller.printPreview,
+                onPressed: () {
+                  if (controller.printPreview) controller.togglePrintPreview();
+                },
               ),
-            ),
-            IconButton(
-              icon: const Icon(Icons.add, size: 14),
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 20, minHeight: 20),
-              onPressed: controller.zoomIn,
-              tooltip: 'Zoom in',
-            ),
-            _StatusItem('${(controller.zoom * 100).round()}%'),
-            const SizedBox(width: 4),
-          ],
+              _ViewModeButton(
+                icon: Icons.preview_outlined,
+                tooltip: 'Print Preview',
+                selected: controller.printPreview,
+                onPressed: () {
+                  if (!controller.printPreview) controller.togglePrintPreview();
+                },
+              ),
+              _ViewModeButton(icon: Icons.web, tooltip: 'Web Layout', onPressed: null),
+              _divider(),
+              IconButton(
+                icon: const Icon(Icons.remove, size: 14),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 20, minHeight: 20),
+                onPressed: controller.zoomOut,
+                tooltip: 'Zoom out',
+              ),
+              SizedBox(
+                width: 100,
+                child: Slider(
+                  value: controller.zoom,
+                  min: 0.5,
+                  max: 2.0,
+                  onChanged: controller.setZoom,
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.add, size: 14),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 20, minHeight: 20),
+                onPressed: controller.zoomIn,
+                tooltip: 'Zoom in',
+              ),
+              _StatusItem('${(controller.zoom * 100).round()}%'),
+              const SizedBox(width: 4),
+            ],
+          ),
         ),
       ),
     );

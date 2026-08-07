@@ -6,11 +6,8 @@ class MailingsTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
+    return RibbonTabScroller(
+      children: [
           RibbonGroup(
             label: 'Create',
             child: Row(
@@ -34,8 +31,7 @@ class MailingsTab extends StatelessWidget {
               ],
             ),
           ),
-        ],
-      ),
+      ],
     );
   }
 }

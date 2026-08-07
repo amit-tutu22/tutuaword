@@ -110,6 +110,8 @@ if [[ "$SKIP_WASM" -eq 0 ]]; then
   fi
   cargo build -p tw-wasm --target wasm32-unknown-unknown --release --features wasm-bindgen
   cargo check -p tw-wasm --target wasm32-unknown-unknown
+  step "WASM web bindings (app/web/wasm)"
+  bash scripts/build-web.sh
 
   if [[ "$WITH_SMOKE" -eq 1 ]]; then
     step "WASM smoke test"
@@ -128,6 +130,8 @@ if [[ "$WITH_FLUTTER" -eq 1 ]]; then
       Darwin)
         step "Flutter build macOS"
         (cd app && flutter build macos --no-pub)
+        step "Flutter build web"
+        (cd app && flutter build web --no-pub)
         if have_ios_tools; then
           step "Flutter build iOS (simulator, no codesign)"
           (cd app && flutter build ios --simulator --no-codesign --no-pub)

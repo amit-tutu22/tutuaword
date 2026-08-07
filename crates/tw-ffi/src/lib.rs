@@ -316,12 +316,18 @@ fn wait_for_request(
     }
 }
 
-fn wait_for_document_ready(session: &Session) -> i32 {
-    wait_for_request(session, STARTUP_REQUEST_ID, BLOCKING_WAIT, |event| match event {
+fn wait_for_startup(session: &Session, timeout: Duration) -> i32 {
+    let code = wait_for_request(session, STARTUP_REQUEST_ID, timeout, |event| match event {
         BridgeEvent::DocumentOpened { .. } | BridgeEvent::DisplayListReady { .. } => Some(0),
         BridgeEvent::Error { .. } => Some(-2),
         _ => None,
-    })
+    });
+  // The worker may still be publishing startup while the host attaches its pump.
+    if code == -3 {
+        0
+    } else {
+        code
+    }
 }
 
 fn wait_for_open(session: &Session, request_id: u64) -> i32 {
@@ -420,7 +426,21 @@ pub extern "C" fn tw_init(callback: EventCallback) -> i32 {
             ASYNC_RESULTS.lock().clear();
             EVENT_OUTBOX.lock().clear();
         }
-        with_session_then_flush(wait_for_document_ready)
+        // Startup layout runs on the worker thread; call [`tw_await_startup`] after
+        // registering fonts on mobile hosts.
+        0
+    })
+}
+
+/// Wait until the worker's startup document is laid out. Call after a
+/// non-blocking [`tw_init`]. `timeout_ms` is capped at 30s. Returns `0` when
+/// ready, `-1` without a session, `-2` on worker error. A timeout is treated as
+/// success so a slow first layout does not fail initialization.
+#[no_mangle]
+pub extern "C" fn tw_await_startup(timeout_ms: u32) -> i32 {
+    guard_ffi(|| {
+        let ms = timeout_ms.min(30000) as u64;
+        with_session_then_flush(|session| wait_for_startup(session, Duration::from_millis(ms)))
     })
 }
 

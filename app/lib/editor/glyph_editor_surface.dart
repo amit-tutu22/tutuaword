@@ -3,7 +3,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:tutuaword/bridge/native_engine.dart';
+import 'package:tutuaword/bridge/engine_types.dart';
 import 'package:tutuaword/editor/document_painter.dart';
 import 'package:tutuaword/editor/display_list.dart';
 import 'package:tutuaword/editor/editor_controller.dart';

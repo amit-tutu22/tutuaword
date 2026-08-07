@@ -4,7 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:tutuaword/bridge/document_engine.dart';
-import 'package:tutuaword/bridge/native_engine.dart';
+import 'package:tutuaword/bridge/engine_types.dart';
 import 'package:tutuaword/editor/controllers/engine_host.dart';
 import 'package:tutuaword/editor/doc_range.dart';
 
