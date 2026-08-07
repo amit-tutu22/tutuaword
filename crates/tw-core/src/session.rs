@@ -386,8 +386,7 @@ impl Session {
         self.layout_cache.read().first_line_width(page)
     }
 
-    /// Inject a font face for inline / wasm sessions. Threaded native sessions
-    /// return [`FontRegistrationError::RegistrationNotSupported`].
+    /// Inject a font face. Works on inline, wasm, and threaded (mobile) sessions.
     pub fn register_face(
         &self,
         spec: &tw_layout::FontFaceSpec,

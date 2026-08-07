@@ -90,6 +90,10 @@ jobs:
         run: |
           bash scripts/build-ffi.sh
           bash scripts/verify-ffi-artifact.sh
+      - name: R3.2 iOS libtw_ffi.a gate
+        run: |
+          bash scripts/build-ffi.sh ios
+          bash scripts/verify-ffi-artifact.sh ios
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -112,6 +116,29 @@ jobs:
         run: |
           bash scripts/build-ffi.sh
           bash scripts/verify-ffi-artifact.sh
+
+  # R3.2 Android: cross-compile libtw_ffi.so for JNI ABIs
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Android NDK
+        uses: nttld/setup-ndk@v3
+        id: setup-ndk
+        with:
+          ndk-version: r26d
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: Add Android Rust targets
+        run: |
+          rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+      - name: R3.2 Android libtw_ffi.so gate
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          bash scripts/build-ffi.sh android
+          bash scripts/verify-ffi-artifact.sh android
 
   # R3.2 WASM: wasm32 compile + inline executor + smoke test (R3.1 exit gate)
   wasm:

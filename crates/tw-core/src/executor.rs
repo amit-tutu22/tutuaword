@@ -58,10 +58,10 @@ pub trait EngineExecutor: Send + Sync {
     /// Stop the engine, joining the worker thread if there is one. Idempotent.
     fn shutdown(&self);
 
-    /// Inject a font face into an inline engine's layout shaper.
+    /// Inject a font face into the engine's layout shaper.
     ///
-    /// Threaded executors return `None`; only inline / wasm sessions support
-    /// host-provided font bytes (R3.1).
+    /// Inline executors apply immediately; threaded executors route through the
+    /// worker thread's font-registration channel.
     fn register_face(
         &self,
         spec: &FontFaceSpec,

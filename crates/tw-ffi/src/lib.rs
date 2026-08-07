@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::Duration;
 use tw_core::{BridgeEvent, Session, WaitOutcome, STARTUP_REQUEST_ID};
 use tw_edit::{command_from_json, Command, DocPosition, DocRange};
+use tw_layout::FontFaceSpec;
 use tw_model::{CharFormat, NodeId, ParaFormat};
 use uuid::Uuid;
 
@@ -64,6 +65,12 @@ const FFI_PANIC: i32 = -99;
 /// Distinct from `-2`, which means the page is current and nothing was under the
 /// point. Only applies to queries that read a page's line map.
 const HIT_PAGE_STALE: i32 = -4;
+
+fn record_last_error(message: String) {
+    if let Ok(mut guard) = LAST_ERROR.lock() {
+        *guard = Some(message);
+    }
+}
 
 fn record_internal_panic() {
     if let Ok(mut guard) = LAST_ERROR.lock() {
@@ -427,6 +434,43 @@ pub extern "C" fn tw_shutdown() {
         ASYNC_RESULTS.lock().clear();
         EVENT_OUTBOX.lock().clear();
     });
+}
+
+/// Register a font face from raw bytes before opening documents.
+///
+/// `family` is matched case-insensitively against document font requests.
+/// Returns `0` on success.
+#[no_mangle]
+pub extern "C" fn tw_register_font(
+    family_ptr: *const c_char,
+    bold: bool,
+    italic: bool,
+    data_ptr: *const u8,
+    data_len: usize,
+) -> i32 {
+    guard_ffi(|| {
+        let Some(family) = parse_cstr(family_ptr) else {
+            return -2;
+        };
+        if data_ptr.is_null() || data_len == 0 {
+            return -3;
+        }
+        let data = unsafe { slice::from_raw_parts(data_ptr, data_len) }.to_vec();
+        let mut spec = FontFaceSpec::new(family);
+        if bold {
+            spec = spec.bold();
+        }
+        if italic {
+            spec = spec.italic();
+        }
+        with_session(|session| match session.register_face(&spec, data) {
+            Ok(_) => 0,
+            Err(e) => {
+                record_last_error(e.to_string());
+                -4
+            }
+        })
+    })
 }
 
 #[no_mangle]

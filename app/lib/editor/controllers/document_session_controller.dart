@@ -252,18 +252,25 @@ class DocumentSessionController extends ChangeNotifier {
     _statusText = 'Opening…';
     notifyListeners();
     try {
+      final useInMemoryBytes = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
       final result = await FilePicker.platform.pickFiles(
         dialogTitle: 'Open document',
         type: FileType.custom,
         allowedExtensions: kSupportedOpenExtensions,
-        withData: false,
+        withData: useInMemoryBytes,
       );
       if (result == null || result.files.isEmpty) {
         _statusText = 'Open cancelled';
         notifyListeners();
         return;
       }
-      final path = result.files.single.path;
+      final file = result.files.single;
+      if (useInMemoryBytes && file.bytes != null) {
+        final path = file.path ?? file.name;
+        await _openDocumentBytes(file.bytes!, path: path);
+        return;
+      }
+      final path = file.path;
       if (path == null) {
         _statusText = 'Open failed: no file path (try again)';
         notifyListeners();
@@ -491,6 +498,11 @@ class DocumentSessionController extends ChangeNotifier {
             message.contains('Operation not permitted') ||
             message.contains('Permission denied'))) {
       return 'Open failed: use Open… to select the file again';
+    }
+    if ((Platform.isAndroid || Platform.isIOS) &&
+        (message.contains('Permission denied') ||
+            message.contains('Operation not permitted'))) {
+      return 'Open failed: grant storage access or use Open… to pick a file';
     }
     return 'Open failed: $error';
   }

@@ -17,6 +17,9 @@ typedef TwEventCallbackDart = void Function(int, int, Pointer<Uint8>, int);
 typedef TwInitNative = Int32 Function(Pointer<NativeFunction<TwEventCallbackNative>>);
 typedef TwInitDart = int Function(Pointer<NativeFunction<TwEventCallbackNative>>);
 
+typedef TwRegisterFontNative = Int32 Function(Pointer<Utf8>, Bool, Bool, Pointer<Uint8>, IntPtr);
+typedef TwRegisterFontDart = int Function(Pointer<Utf8>, bool, bool, Pointer<Uint8>, int);
+
 typedef TwDispatchNative = Int32 Function(Pointer<Uint8>, IntPtr);
 typedef TwDispatchDart = int Function(Pointer<Uint8>, int);
 
@@ -282,6 +285,7 @@ class NativeEngine {
   TwIsPageStaleDart? isPageStaleNative;
   TwPumpEventsDart? pumpEventsNative;
   TwGetAtlasGenerationDart? getAtlasGenerationNative;
+  TwRegisterFontDart? registerFontNative;
   late final TwGetTextRangeDart getTextRange;
   late final TwGetCaretFormatDart getCaretFormat;
   late final TwClearFormatDart clearFormatNative;
@@ -321,6 +325,12 @@ class NativeEngine {
       lib.lookupFunction<TwInitNative, TwInitDart>('tw_init')(
         _eventCallable!.nativeFunction,
       );
+      try {
+        engine.registerFontNative =
+            lib.lookupFunction<TwRegisterFontNative, TwRegisterFontDart>('tw_register_font');
+      } on ArgumentError {
+        engine.registerFontNative = null;
+      }
       engine.dispatch = lib.lookupFunction<TwDispatchNative, TwDispatchDart>('tw_dispatch');
       engine.applyPasteHtml =
           lib.lookupFunction<TwApplyPasteHtmlNative, TwApplyPasteHtmlDart>('tw_apply_paste_html');
@@ -447,6 +457,30 @@ class NativeEngine {
     // Keep _eventCallable alive until process exit — closing it races worker callbacks.
   }
 
+  /// Register a font face from raw bytes (mobile / injected-font hosts).
+  bool registerFont(
+    String family,
+    Uint8List data, {
+    bool bold = false,
+    bool italic = false,
+  }) {
+    final register = registerFontNative;
+    if (register == null || data.isEmpty) {
+      return false;
+    }
+    final familyPtr = family.toNativeUtf8();
+    final dataPtr = calloc<Uint8>(data.length);
+    try {
+      for (var i = 0; i < data.length; i++) {
+        dataPtr[i] = data[i];
+      }
+      return register(familyPtr, bold, italic, dataPtr, data.length) == 0;
+    } finally {
+      calloc.free(familyPtr);
+      calloc.free(dataPtr);
+    }
+  }
+
   static DynamicLibrary _openLibrary() {
     if (Platform.isMacOS) {
       final exeDir = p.dirname(Platform.resolvedExecutable);
@@ -469,6 +503,10 @@ class NativeEngine {
     }
     if (Platform.isAndroid) {
       return DynamicLibrary.open('libtw_ffi.so');
+    }
+    if (Platform.isIOS) {
+      // Static libtw_ffi.a is linked into the Runner binary at build time.
+      return DynamicLibrary.process();
     }
     if (Platform.isWindows) {
       return DynamicLibrary.open('tw_ffi.dll');

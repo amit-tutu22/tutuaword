@@ -1,0 +1,4 @@
+// Default tw-ffi link flags (simulator slice overridden by tw_ffi_generated.xcconfig).
+TW_FFI_SIM_SLICE=ios-arm64-simulator
+OTHER_LDFLAGS[sdk=iphoneos*]=$(inherited) -Wl,-force_load,$(PROJECT_DIR)/Frameworks/tw_ffi.xcframework/ios-arm64/libtw_ffi.a
+OTHER_LDFLAGS[sdk=iphonesimulator*]=$(inherited) -Wl,-force_load,$(PROJECT_DIR)/Frameworks/tw_ffi.xcframework/$(TW_FFI_SIM_SLICE)/libtw_ffi.a

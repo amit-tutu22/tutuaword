@@ -263,7 +263,12 @@ impl WorkerCore {
             format_ctx: FormatContext::new_document(),
             #[cfg(target_arch = "wasm32")]
             layout: LayoutEngine::with_injected_fonts(),
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(all(not(target_arch = "wasm32"), any(target_os = "android", target_os = "ios")))]
+            layout: LayoutEngine::with_injected_fonts(),
+            #[cfg(all(
+                not(target_arch = "wasm32"),
+                not(any(target_os = "android", target_os = "ios"))
+            ))]
             layout: LayoutEngine::new(),
             snapshot,
             layout_cache,

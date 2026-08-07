@@ -89,7 +89,7 @@ impl fmt::Display for FontRegistrationError {
                 "face index {index} is out of range for a collection of {face_count} faces"
             ),
             Self::RegistrationNotSupported => {
-                f.write_str("font registration requires an inline (driven) executor")
+                f.write_str("font registration is not supported by this executor")
             }
         }
     }

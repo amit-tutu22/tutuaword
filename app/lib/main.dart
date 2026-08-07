@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:tutuaword/bridge/mobile_font_bootstrap.dart';
 import 'package:tutuaword/editor/document_view.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
 import 'package:tutuaword/editor/editor_menu.dart';
@@ -9,8 +10,9 @@ import 'package:tutuaword/ui/status_bar.dart';
 import 'package:tutuaword/ui/title_bar.dart';
 import 'package:tutuaword/ui/word_theme.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await MobileFontBootstrap.registerBundledFonts();
   runApp(const TutuawordApp());
 }
 

@@ -9,6 +9,10 @@ use crate::worker::{
     BridgeCommand, BridgeEvent, Flow, QueuedCommand, WorkerCore, COMMAND_QUEUE_CAPACITY,
     EVENT_CHANNEL_CAPACITY, STARTUP_REQUEST_ID,
 };
+use tw_layout::{FontFaceSpec, FontId, FontRegistrationError};
+
+type FontRegisterReply = crossbeam_channel::Sender<Result<FontId, FontRegistrationError>>;
+type FontRegisterRequest = (FontFaceSpec, Vec<u8>, FontRegisterReply);
 
 /// How long the worker sleeps between retries while correlation acks are still
 /// queued behind a full event channel.
@@ -22,6 +26,7 @@ const EVENT_DRAIN_POLL: std::time::Duration = std::time::Duration::from_millis(2
 pub struct ThreadedExecutor {
     cmd_tx: Sender<QueuedCommand>,
     events: Receiver<BridgeEvent>,
+    font_tx: Sender<FontRegisterRequest>,
     join: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -29,14 +34,16 @@ impl ThreadedExecutor {
     pub fn spawn(snapshot: Arc<SnapshotBuffer>, layout_cache: crate::SharedLayoutCache) -> Self {
         let (cmd_tx, cmd_rx) = crossbeam_channel::bounded(COMMAND_QUEUE_CAPACITY);
         let (event_tx, events) = crossbeam_channel::bounded(EVENT_CHANNEL_CAPACITY);
+        let (font_tx, font_rx) = crossbeam_channel::unbounded();
 
         let join = thread::spawn(move || {
-            worker_loop(cmd_rx, event_tx, snapshot, layout_cache);
+            worker_loop(cmd_rx, event_tx, snapshot, layout_cache, font_rx);
         });
 
         Self {
             cmd_tx,
             events,
+            font_tx,
             join: Mutex::new(Some(join)),
         }
     }
@@ -70,6 +77,22 @@ impl EngineExecutor for ThreadedExecutor {
             let _ = join.join();
         }
     }
+
+    fn register_face(
+        &self,
+        spec: &FontFaceSpec,
+        data: Vec<u8>,
+    ) -> Option<Result<FontId, FontRegistrationError>> {
+        let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
+        if self
+            .font_tx
+            .send((spec.clone(), data, reply_tx))
+            .is_err()
+        {
+            return None;
+        }
+        reply_rx.recv().ok()
+    }
 }
 
 fn worker_loop(
@@ -77,10 +100,16 @@ fn worker_loop(
     event_tx: Sender<BridgeEvent>,
     snapshot: Arc<SnapshotBuffer>,
     layout_cache: crate::SharedLayoutCache,
+    font_rx: Receiver<FontRegisterRequest>,
 ) {
     let mut core = WorkerCore::new(event_tx, snapshot, layout_cache);
 
     loop {
+        while let Ok((spec, data, reply)) = font_rx.try_recv() {
+            let result = core.register_face(&spec, data);
+            let _ = reply.send(result);
+        }
+
         let queued = match core.take_pending() {
             Some(queued) => Some(queued),
             None => loop {
@@ -90,6 +119,10 @@ fn worker_loop(
                     Ok(queued) => break Some(queued),
                     Err(TryRecvError::Disconnected) => break None,
                     Err(TryRecvError::Empty) => {}
+                }
+                while let Ok((spec, data, reply)) = font_rx.try_recv() {
+                    let result = core.register_face(&spec, data);
+                    let _ = reply.send(result);
                 }
                 if core.flush_events() {
                     continue;

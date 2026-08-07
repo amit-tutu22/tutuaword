@@ -407,6 +407,8 @@ from injected bytes alone and asserts real advances and glyph ids. CI still need
 | Linux | Existing + `libtw_ffi.so` build |
 | macOS | Build + Flutter test job |
 | Windows | Cross-check or scheduled job |
+| Android | `scripts/build-ffi.sh android` + jniLibs verify |
+| iOS | `scripts/build-ffi.sh ios` + XCFramework verify |
 | WASM | `wasm32` check |
 
 ### R3.3 DOCX fidelity hardening

@@ -11,6 +11,7 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 [dependencies]
 tw-core = { path = "../tw-core" }
 tw-edit = { path = "../tw-edit" }
+tw-layout = { path = "../tw-layout" }
 tw-model = { path = "../tw-model" }
 uuid = { workspace = true }
 parking_lot = { workspace = true }

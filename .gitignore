@@ -26,3 +26,5 @@ app/.flutter-plugins-dependencies
 *.so
 *.dll
 libtw_ffi.*
+app/ios/Frameworks/
+app/ios/Flutter/tw_ffi_generated.xcconfig
