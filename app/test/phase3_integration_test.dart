@@ -65,7 +65,7 @@ void main() {
     late EditorController controller;
 
     setUp(() {
-      controller = EditorController();
+      controller = EditorController.forTest();
     });
 
     tearDown(() {

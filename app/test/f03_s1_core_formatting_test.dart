@@ -1,34 +1,26 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tutuaword/editor/document_view.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
 import 'package:tutuaword/editor/glyph_editor_surface.dart';
 import 'package:tutuaword/ui/ribbon_tabs/home_tab.dart';
 
+import 'editor_test_helpers.dart';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('F03.S1 Core ribbon', () {
     testWidgets('I-F03-S1-font-size-caret-end applies size to typed text', (tester) async {
-      final controller = EditorController(enableAutosave: false);
+      final controller = createTestEditorController();
       addTearDown(controller.dispose);
-      if (!controller.isEngineConnected) return;
+      controller.setDisplayListForTest(fakeGlyphDisplayList());
 
-      await tester.pumpWidget(
-        MaterialApp(home: Scaffold(body: DocumentView(controller: controller))),
-      );
-      await tester.pumpAndSettle();
-
-      controller.ensureGlyphCaret();
+      await pumpTestDocumentView(tester, controller);
       await tester.tap(find.byType(GlyphEditorSurface).first);
       await tester.pump();
 
-      for (final ch in 'Hi'.split('')) {
-        await tester.sendKeyEvent(LogicalKeyboardKey(ch.codeUnitAt(0)));
-        await tester.pump(const Duration(milliseconds: 20));
-      }
-      await tester.pumpAndSettle();
+      await typeText(tester, controller, 'Hi');
 
       controller.setFontSize(24);
       await tester.pump(const Duration(milliseconds: 100));
@@ -39,15 +31,12 @@ void main() {
     });
 
     testWidgets('I-F03-S1-strike-super-sub toggles from Home tab', (tester) async {
-      final controller = EditorController(enableAutosave: false);
+      final controller = createTestEditorController();
       addTearDown(controller.dispose);
 
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: SizedBox(height: 120, child: HomeTab(controller: controller)),
-          ),
-        ),
+      await pumpWideRibbon(
+        tester,
+        SizedBox(height: 120, child: HomeTab(controller: controller)),
       );
       await tester.pumpAndSettle();
 
@@ -66,13 +55,11 @@ void main() {
       expect(controller.subscript, isFalse);
     });
 
-    test('I-F03-S1-bold-toggle-roundtrip with engine caret', () {
-      final controller = EditorController(enableAutosave: false);
+    test('I-F03-S1-bold-toggle-roundtrip with engine caret', () async {
+      final controller = createTestEditorController();
       addTearDown(controller.dispose);
-      if (!controller.isEngineConnected) return;
 
-      controller.ensureGlyphCaret();
-      controller.insertGlyphCharacter('x');
+      await typeTextDirect(controller, 'x');
       controller.toggleBold();
       expect(controller.bold, isTrue);
       controller.toggleBold();

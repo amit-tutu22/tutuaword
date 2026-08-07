@@ -5,22 +5,12 @@ import 'package:tutuaword/editor/document_view.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
 import 'package:tutuaword/editor/glyph_editor_surface.dart';
 
+import 'editor_test_helpers.dart';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('F02.S4 drag-drop text', () {
-    Future<void> typeText(WidgetTester tester, String text) async {
-      for (final ch in text.split('')) {
-        if (ch == ' ') {
-          await tester.sendKeyEvent(LogicalKeyboardKey.space);
-        } else {
-          await tester.sendKeyEvent(LogicalKeyboardKey(ch.codeUnitAt(0)));
-        }
-        await tester.pump(const Duration(milliseconds: 20));
-      }
-      await tester.pumpAndSettle();
-    }
-
     Future<void> selectWordWithShiftArrows(WidgetTester tester, int charCount) async {
       await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
       for (var i = 0; i < charCount; i++) {
@@ -32,20 +22,15 @@ void main() {
     }
 
     testWidgets('I-F02-S4-drag-reorder moves selection to drop position', (tester) async {
-      final controller = EditorController(enableAutosave: false);
+      final controller = createTestEditorController();
       addTearDown(controller.dispose);
-      if (!controller.isEngineConnected) return;
+      controller.setDisplayListForTest(fakeGlyphDisplayList());
 
-      await tester.pumpWidget(
-        MaterialApp(home: Scaffold(body: DocumentView(controller: controller))),
-      );
-      await tester.pumpAndSettle();
-
-      controller.ensureGlyphCaret();
+      await pumpTestDocumentView(tester, controller);
       await tester.tap(find.byType(GlyphEditorSurface).first);
       await tester.pump();
 
-      await typeText(tester, 'alpha beta');
+      await typeText(tester, controller, 'alpha beta');
       expect(controller.documentText.toLowerCase(), contains('alpha beta'));
 
       for (var i = 0; i < 4; i++) {
@@ -64,6 +49,7 @@ void main() {
       final gesture = await tester.startGesture(start);
       await gesture.moveBy(const Offset(-260, 0));
       await gesture.up();
+      await controller.ensureLayoutReady();
       await tester.pump(const Duration(milliseconds: 100));
       await tester.pumpAndSettle();
 
@@ -73,22 +59,16 @@ void main() {
       expect(text, contains('alpha'));
     });
 
-    test('moveGlyphSelectionTo reorders without drag gesture', () {
-      final controller = EditorController(enableAutosave: false);
+    test('moveGlyphSelectionTo reorders without drag gesture', () async {
+      final controller = createTestEditorController();
       addTearDown(controller.dispose);
-      if (!controller.isEngineConnected) return;
 
-      controller.ensureGlyphCaret();
-      for (final ch in 'alpha beta'.split('')) {
-        controller.insertGlyphCharacter(ch == ' ' ? ' ' : ch);
-      }
+      await typeTextDirect(controller, 'alpha beta');
 
-      controller.beginGlyphSelection(0, controller.pageWidth - 72, 100);
-      controller.updateGlyphSelection(0, controller.pageWidth - 72, 100);
-      controller.endGlyphSelection(0, controller.pageWidth - 72, 100);
-      expect(controller.selectedText.toLowerCase(), isNotEmpty);
+      controller.selectGlyphWordAt(0, 106, 100);
+      expect(controller.selectedText.toLowerCase(), 'beta');
 
-      controller.moveGlyphSelectionTo(0, 72, 100);
+      await controller.moveGlyphSelectionTo(0, 72, 100);
       final text = controller.documentText.toLowerCase();
       expect(text.indexOf('beta'), lessThan(text.indexOf('alpha')));
     });

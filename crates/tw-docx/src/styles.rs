@@ -63,6 +63,8 @@ fn visit_block_runs(block: &mut tw_model::Block, substitute: &impl Fn(&mut CharF
             }
         }
         tw_model::Block::ImageBlock(_) => {}
+        tw_model::Block::ShapeBlock(_) => {}
+        _ => {}
     }
 }
 

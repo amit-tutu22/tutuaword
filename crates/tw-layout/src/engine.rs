@@ -13,15 +13,43 @@ use tw_shape::{GlyphAtlas, TextShaper};
 /// Maximum pages to synchronously reflow during incremental layout (R1.1).
 const MAX_INCREMENTAL_REFLOW_PAGES: usize = 3;
 
+/// Flow state at a block boundary. Everything downstream of a boundary is a pure
+/// function of this state, so two equal continuations imply an identical tail
+/// layout — that is the convergence test that bounds incremental reflow.
+///
+/// Completed pages are deliberately *not* stored here: the prefix is taken from
+/// `last_layout` at resume time, which keeps checkpoint memory O(1) per block and
+/// stops a resume from resurrecting pages that a later pass already replaced.
 #[derive(Debug, Clone)]
-struct LayoutCheckpoint {
-    pages: Vec<PageLayout>,
+struct Continuation {
     page_index: PageIndex,
     y: f32,
     format: SectionFormat,
     list_counters: HashMap<(u32, u32), u32>,
     current_boxes: Vec<LayoutBox>,
     current_lines: Vec<TextLine>,
+}
+
+fn page_geometry(format: &SectionFormat) -> [f32; 6] {
+    [
+        format.page_width,
+        format.page_height,
+        format.margin_top,
+        format.margin_bottom,
+        format.margin_left,
+        format.margin_right,
+    ]
+}
+
+impl PartialEq for Continuation {
+    fn eq(&self, other: &Self) -> bool {
+        self.page_index == other.page_index
+            && self.y == other.y
+            && page_geometry(&self.format) == page_geometry(&other.format)
+            && self.list_counters == other.list_counters
+            && self.current_boxes == other.current_boxes
+            && self.current_lines == other.current_lines
+    }
 }
 
 /// Shift remaining paragraph lines (and their glyphs/decorations) to a new page origin.
@@ -51,9 +79,19 @@ pub struct LayoutEngine {
     line_maps: HashMap<PageIndex, LineMap>,
     dirty_pages: Vec<PageIndex>,
     last_layout: DocumentLayout,
-    checkpoints: HashMap<(usize, usize), LayoutCheckpoint>,
+    continuations: HashMap<(usize, usize), Continuation>,
     block_first_page: HashMap<(usize, usize), PageIndex>,
     incremental_from: Option<(usize, usize)>,
+    /// Block the last capped pass stopped at; forward relayout resumes here.
+    resume_at: Option<(usize, usize)>,
+    /// First block whose stored continuation is stale because a capped pass never
+    /// reached it. Resuming at or before this block is safe; beyond it is not.
+    stale_from: Option<(usize, usize)>,
+    /// First page whose geometry predates the edit that opened the pending reflow.
+    /// Survives later converged passes, which rebuild a shorter prefix but leave
+    /// the pages an earlier capped pass already rebuilt correctly in place.
+    pending_reflow_page: Option<PageIndex>,
+    last_pass_incremental: bool,
     last_relayout_pages: usize,
     last_relayout_start_page: usize,
 }
@@ -73,9 +111,13 @@ impl LayoutEngine {
             line_maps: HashMap::new(),
             dirty_pages: vec![0],
             last_layout: DocumentLayout::default(),
-            checkpoints: HashMap::new(),
+            continuations: HashMap::new(),
             block_first_page: HashMap::new(),
             incremental_from: None,
+            resume_at: None,
+            stale_from: None,
+            pending_reflow_page: None,
+            last_pass_incremental: false,
             last_relayout_pages: 0,
             last_relayout_start_page: 0,
         }
@@ -86,9 +128,13 @@ impl LayoutEngine {
         self.page_cache.clear();
         self.line_maps.clear();
         self.last_layout = DocumentLayout::default();
-        self.checkpoints.clear();
+        self.continuations.clear();
         self.block_first_page.clear();
         self.incremental_from = None;
+        self.resume_at = None;
+        self.stale_from = None;
+        self.pending_reflow_page = None;
+        self.last_pass_incremental = false;
         self.last_relayout_pages = 0;
         self.last_relayout_start_page = 0;
     }
@@ -131,6 +177,35 @@ impl LayoutEngine {
         self.dirty_pages.first().copied().unwrap_or(0)
     }
 
+    /// Page indices rebuilt by the most recent layout pass.
+    pub fn dirty_pages(&self) -> &[PageIndex] {
+        &self.dirty_pages
+    }
+
+    pub fn last_pass_incremental(&self) -> bool {
+        self.last_pass_incremental
+    }
+
+    /// True while the page cap left downstream pages carrying pre-edit content.
+    pub fn has_pending_reflow(&self) -> bool {
+        self.resume_at.is_some()
+    }
+
+    /// First page still carrying pre-edit geometry, or `None` when the layout is
+    /// fully caught up. Pages before this index were rebuilt by some pass and are
+    /// safe to hit test even while a forward reflow is owed.
+    pub fn pending_reflow_page(&self) -> Option<PageIndex> {
+        self.resume_at.and(self.pending_reflow_page)
+    }
+
+    /// Reflow the next chunk of pages left behind by a capped incremental pass.
+    /// Returns `None` when nothing is pending.
+    pub fn continue_layout(&mut self, doc: &Document) -> Option<DocumentLayout> {
+        let resume = self.resume_at?;
+        self.incremental_from = Some(resume);
+        Some(self.layout_document(doc))
+    }
+
     pub fn layout_document(&mut self, doc: &Document) -> DocumentLayout {
         let minor_font = doc
             .styles
@@ -147,18 +222,18 @@ impl LayoutEngine {
             .map(|s| s.format.clone())
             .unwrap_or_default();
 
-        let old_pages = self.last_layout.pages.clone();
+        let old_pages = std::mem::take(&mut self.last_layout.pages);
         let resume = self.incremental_from.take();
-        let incremental_start = resume.and_then(|from| {
-            self.checkpoints.get(&from).cloned().map(|cp| (cp, from))
-        });
+        let incremental_start = resume
+            .filter(|from| self.can_resume_at(*from, old_pages.len()))
+            .and_then(|from| self.continuations.get(&from).cloned().map(|cp| (cp, from)));
         let incremental = incremental_start.is_some();
 
         let (mut format, mut pages, mut current_boxes, mut current_lines, mut page_index, mut y, mut list_counters, start_section, start_block) =
             if let Some((cp, start)) = incremental_start {
                 (
                     cp.format,
-                    cp.pages,
+                    old_pages[..cp.page_index as usize].to_vec(),
                     cp.current_boxes,
                     cp.current_lines,
                     cp.page_index,
@@ -168,10 +243,8 @@ impl LayoutEngine {
                     start.1,
                 )
             } else {
-                if resume.is_none() {
-                    self.checkpoints.clear();
-                    self.block_first_page.clear();
-                }
+                self.continuations.clear();
+                self.block_first_page.clear();
                 (
                     default_format.clone(),
                     Vec::new(),
@@ -186,9 +259,15 @@ impl LayoutEngine {
             };
 
         let relayout_base = pages.len();
-        let mut stop_incremental = false;
+        // Convergence is only trustworthy against continuations a previous pass
+        // actually reached; beyond `stale_from` the stored values are pre-edit.
+        let convergence_limit = if incremental { self.stale_from } else { None };
+        let mut converged_at: Option<PageIndex> = None;
+        let mut resume_at: Option<(usize, usize)> = None;
+        let mut current_section = doc.sections.first();
 
-        for (section_idx, section) in doc.sections.iter().enumerate() {
+        'sections: for (section_idx, section) in doc.sections.iter().enumerate() {
+            current_section = Some(section);
             if section_idx < start_section {
                 continue;
             }
@@ -199,7 +278,7 @@ impl LayoutEngine {
                         &mut current_boxes,
                         &mut current_lines,
                         page_index,
-                        &format,
+                        section,
                         tab_interval,
                         doc,
                         &mut self.shaper,
@@ -218,26 +297,30 @@ impl LayoutEngine {
                 if section_idx == start_section && block_idx < start_block {
                     continue;
                 }
-                if stop_incremental {
-                    break;
-                }
 
-                if !incremental {
-                    self.checkpoints.insert(
-                        (section_idx, block_idx),
-                        LayoutCheckpoint {
-                            pages: pages.clone(),
-                            page_index,
-                            y,
-                            format: format.clone(),
-                            list_counters: list_counters.clone(),
-                            current_boxes: current_boxes.clone(),
-                            current_lines: current_lines.clone(),
-                        },
-                    );
-                    self.block_first_page
-                        .entry((section_idx, block_idx))
-                        .or_insert(page_index);
+                let key = (section_idx, block_idx);
+                let continuation = Continuation {
+                    page_index,
+                    y,
+                    format: format.clone(),
+                    list_counters: list_counters.clone(),
+                    current_boxes: current_boxes.clone(),
+                    current_lines: current_lines.clone(),
+                };
+                let previous = self.continuations.insert(key, continuation.clone());
+                self.block_first_page.entry(key).or_insert(page_index);
+
+                if incremental && key != (start_section, start_block) {
+                    let comparable = convergence_limit.is_none_or(|limit| key < limit)
+                        && pages.len() == page_index as usize;
+                    if comparable && previous.as_ref() == Some(&continuation) {
+                        converged_at = Some(page_index);
+                        break 'sections;
+                    }
+                    if pages.len().saturating_sub(relayout_base) >= MAX_INCREMENTAL_REFLOW_PAGES {
+                        resume_at = Some(key);
+                        break 'sections;
+                    }
                 }
 
                 let pages_before_block = pages.len();
@@ -250,7 +333,7 @@ impl LayoutEngine {
                                     &mut current_boxes,
                                     &mut current_lines,
                                     page_index,
-                                    &format,
+                                    section,
                                     tab_interval,
                                     doc,
                                     &mut self.shaper,
@@ -332,7 +415,7 @@ impl LayoutEngine {
                                         &mut current_boxes,
                                         &mut current_lines,
                                         page_index,
-                                        &format,
+                                        section,
                                         tab_interval,
                                         doc,
                                         &mut self.shaper,
@@ -390,7 +473,7 @@ impl LayoutEngine {
                                         &mut current_boxes,
                                         &mut current_lines,
                                         page_index,
-                                        &format,
+                                        section,
                                         tab_interval,
                                         doc,
                                         &mut self.shaper,
@@ -422,7 +505,7 @@ impl LayoutEngine {
                                             &mut current_boxes,
                                             &mut current_lines,
                                             page_index,
-                                            &format,
+                                            section,
                                             tab_interval,
                                             doc,
                                             &mut self.shaper,
@@ -453,7 +536,7 @@ impl LayoutEngine {
                                             &mut current_boxes,
                                             &mut current_lines,
                                             page_index,
-                                            &format,
+                                            section,
                                             tab_interval,
                                             doc,
                                             &mut self.shaper,
@@ -480,7 +563,7 @@ impl LayoutEngine {
                                             &mut current_boxes,
                                             &mut current_lines,
                                             page_index,
-                                            &format,
+                                            section,
                                             tab_interval,
                                             doc,
                                             &mut self.shaper,
@@ -511,7 +594,7 @@ impl LayoutEngine {
                                         &mut current_boxes,
                                         &mut current_lines,
                                         page_index,
-                                        &format,
+                                        section,
                                         tab_interval,
                                         doc,
                                         &mut self.shaper,
@@ -542,7 +625,7 @@ impl LayoutEngine {
                                     &mut current_boxes,
                                     &mut current_lines,
                                     page_index,
-                                    &format,
+                                    section,
                                     tab_interval,
                                     doc,
                                     &mut self.shaper,
@@ -577,7 +660,7 @@ impl LayoutEngine {
                                     &mut current_boxes,
                                     &mut current_lines,
                                     page_index,
-                                    &format,
+                                    section,
                                     tab_interval,
                                     doc,
                                     &mut self.shaper,
@@ -603,7 +686,7 @@ impl LayoutEngine {
                                     &mut current_boxes,
                                     &mut current_lines,
                                     page_index,
-                                    &format,
+                                    section,
                                     tab_interval,
                                     doc,
                                     &mut self.shaper,
@@ -641,7 +724,7 @@ impl LayoutEngine {
                                 &mut current_boxes,
                                 &mut current_lines,
                                 page_index,
-                                &format,
+                                section,
                                 tab_interval,
                                 doc,
                                 &mut self.shaper,
@@ -663,85 +746,149 @@ impl LayoutEngine {
                         y += img.height + 8.0;
                         current_boxes.push(LayoutBox::Image(img));
                     }
+                    Block::ShapeBlock(shape) => {
+                        let height = shape.shape.height;
+                        if y + height > content_bottom && !current_boxes.is_empty() {
+                            flush_page(
+                                &mut pages,
+                                &mut current_boxes,
+                                &mut current_lines,
+                                page_index,
+                                section,
+                                tab_interval,
+                                doc,
+                                &mut self.shaper,
+                                &mut self.atlas,
+                            );
+                            page_index += 1;
+                            y = format.margin_top;
+                        }
+                        y += height + 8.0;
+                    }
+                    _ => {}
                 }
 
-                if incremental {
-                    if pages.len().saturating_sub(relayout_base) >= MAX_INCREMENTAL_REFLOW_PAGES {
-                        stop_incremental = true;
-                    } else if section_idx == start_section && block_idx == start_block {
-                        // Single-block edit: reflow this block only unless capped above.
-                        stop_incremental = true;
-                    }
-                }
                 let _ = pages_before_block;
             }
-            if stop_incremental {
-                break;
-            }
         }
 
-        if !current_boxes.is_empty() || pages.is_empty() {
-            flush_page(
-                &mut pages,
-                &mut current_boxes,
-                &mut current_lines,
-                page_index,
-                &format,
-    tab_interval,
-    doc,
-    &mut self.shaper,
-                &mut self.atlas,
-            );
-        }
-
-        if incremental && pages.len() < old_pages.len() {
-            pages.extend(old_pages[pages.len()..].iter().cloned());
-            for (idx, page) in pages.iter_mut().enumerate() {
-                page.page_index = idx as PageIndex;
+        let built_end = if let Some(page_from) = converged_at {
+            // The tail is provably identical to the previous pass; take it verbatim.
+            let from = (page_from as usize).min(old_pages.len());
+            let built_end = pages.len();
+            pages.extend(old_pages[from..].iter().cloned());
+            built_end
+        } else {
+            if !current_boxes.is_empty() || pages.is_empty() {
+                if let Some(section) = current_section {
+                    flush_page(
+                        &mut pages,
+                        &mut current_boxes,
+                        &mut current_lines,
+                        page_index,
+                        section,
+                        tab_interval,
+                        doc,
+                        &mut self.shaper,
+                        &mut self.atlas,
+                    );
+                }
             }
+            let built_end = pages.len();
+            // Only a capped pass leaves a tail behind; a pass that ran to the end of
+            // the document is authoritative about the final page count.
+            if resume_at.is_some() && pages.len() < old_pages.len() {
+                pages.extend(old_pages[pages.len()..].iter().cloned());
+            }
+            built_end
+        };
+        for (idx, page) in pages.iter_mut().enumerate() {
+            page.page_index = idx as PageIndex;
         }
 
         self.last_relayout_pages = if incremental {
-            pages.len()
-                .saturating_sub(relayout_base)
-                .min(MAX_INCREMENTAL_REFLOW_PAGES)
-                .max(1)
+            built_end.saturating_sub(relayout_base)
         } else {
             pages.len().max(1)
         };
         self.last_relayout_start_page = if incremental { relayout_base } else { 0 };
 
         self.dirty_pages = if incremental {
-            (relayout_base..relayout_base + self.last_relayout_pages)
-                .map(|i| i as PageIndex)
-                .collect()
+            (relayout_base..built_end).map(|i| i as PageIndex).collect()
         } else {
             (0..pages.len()).map(|i| i as PageIndex).collect()
         };
 
-        self.page_cache.clear();
-        self.line_maps.clear();
-        for page in &pages {
-            self.page_cache.insert(page.page_index, page.clone());
-            let mut lines = Vec::new();
-            for b in &page.boxes {
-                match b {
-                    LayoutBox::TextLine(l) => lines.push(l.clone()),
-                    LayoutBox::Table(t) => {
-                        for cell in &t.cells {
-                            lines.extend(cell.lines.clone());
-                        }
-                    }
-                    _ => {}
+        if incremental {
+            self.page_cache.retain(|idx, _| (*idx as usize) < pages.len());
+            self.line_maps.retain(|idx, _| (*idx as usize) < pages.len());
+            for idx in relayout_base..built_end {
+                if let Some(page) = pages.get(idx) {
+                    self.cache_page(page);
                 }
             }
-            self.line_maps.insert(page.page_index, LineMap { lines });
+        } else {
+            self.page_cache.clear();
+            self.line_maps.clear();
+            for page in &pages {
+                self.cache_page(page);
+            }
         }
 
-        self.last_layout = DocumentLayout {
-            pages: pages.clone(),
-        };
+        self.last_pass_incremental = incremental;
+        if !incremental {
+            self.resume_at = None;
+            self.stale_from = None;
+            self.pending_reflow_page = None;
+        } else if resume_at.is_some() {
+            self.resume_at = resume_at;
+            self.stale_from = resume_at;
+            // Pages up to `built_end` were just rebuilt, so they are current; past
+            // it the tail is pre-edit. `can_resume_at` refuses to start beyond the
+            // previous stale floor, so this window can never skip over a page that
+            // no pass has rebuilt.
+            self.pending_reflow_page = Some(built_end as PageIndex);
+        } else if converged_at.is_none() {
+            // Reached the end of the document: every continuation is current again.
+            self.resume_at = None;
+            self.stale_from = None;
+            self.pending_reflow_page = None;
+        }
+        // A converged pass leaves `pending_reflow_page` alone: it proved the tail is
+        // identical to the previous pass, so whatever was stale before still is and
+        // whatever was valid before still is.
+
+        self.last_layout = DocumentLayout { pages };
         self.last_layout.clone()
+    }
+
+    /// A resume is only sound when the stored continuation was produced by a pass
+    /// that actually reached this block, and the prefix it refers to still exists.
+    fn can_resume_at(&self, key: (usize, usize), available_pages: usize) -> bool {
+        let Some(continuation) = self.continuations.get(&key) else {
+            return false;
+        };
+        if continuation.page_index as usize > available_pages {
+            return false;
+        }
+        self.stale_from.is_none_or(|stale| key <= stale)
+    }
+
+    fn cache_page(&mut self, page: &PageLayout) {
+        let mut lines = Vec::new();
+        for b in &page.boxes {
+            match b {
+                LayoutBox::TextLine(l) => lines.push(l.clone()),
+                LayoutBox::Table(t) => {
+                    for cell in &t.cells {
+                        lines.extend(cell.lines.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.line_maps.insert(page.page_index, LineMap { lines });
+        self.page_cache.insert(page.page_index, page.clone());
     }
 
     pub fn page_count(&self) -> usize {
@@ -777,12 +924,13 @@ fn flush_page(
     boxes: &mut Vec<LayoutBox>,
     lines: &mut Vec<TextLine>,
     page_index: PageIndex,
-    format: &SectionFormat,
+    section: &tw_model::Section,
     tab_interval: f32,
     doc: &Document,
     shaper: &mut TextShaper,
     atlas: &mut GlyphAtlas,
 ) {
+    let format = &section.format;
     let content_width = format.page_width - format.margin_left - format.margin_right;
     let mut page_boxes = std::mem::take(boxes);
     let margin_color = tw_model::Color {
@@ -793,7 +941,44 @@ fn flush_page(
     }
     .to_argb();
 
-    if !format.header_blocks.is_empty() {
+    let default_header = section
+        .headers
+        .get(&tw_model::HeaderFooterType::Default);
+    if let Some(hf) = default_header {
+        if !hf.blocks.is_empty() {
+            let header_boxes = layout_margin_blocks(
+                doc,
+                &hf.blocks,
+                shaper,
+                atlas,
+                format.margin_left,
+                format.margin_top * 0.25,
+                content_width,
+                tab_interval,
+                margin_color,
+            );
+            for item in header_boxes.into_iter().rev() {
+                page_boxes.insert(0, item);
+            }
+        } else if let Some(ref header) = hf.plain_text {
+            let header_para = tw_model::Paragraph::with_text(header.clone());
+            let (header_lines, _) = layout_paragraph(
+                shaper,
+                atlas,
+                &header_para,
+                ParagraphFrame::new(
+                    format.margin_left,
+                    format.margin_top * 0.25,
+                    content_width,
+                )
+                .with_tab_interval(tab_interval),
+                margin_color,
+            );
+            for line in header_lines {
+                page_boxes.insert(0, LayoutBox::TextLine(line));
+            }
+        }
+    } else if !format.header_blocks.is_empty() {
         let header_boxes = layout_margin_blocks(
             doc,
             &format.header_blocks,
@@ -827,7 +1012,38 @@ fn flush_page(
         }
     }
 
-    if !format.footer_blocks.is_empty() {
+    let default_footer = section
+        .footers
+        .get(&tw_model::HeaderFooterType::Default);
+    if let Some(hf) = default_footer {
+        let footer_y = format.page_height - format.margin_bottom * 0.75;
+        if !hf.blocks.is_empty() {
+            page_boxes.extend(layout_margin_blocks(
+                doc,
+                &hf.blocks,
+                shaper,
+                atlas,
+                format.margin_left,
+                footer_y,
+                content_width,
+                tab_interval,
+                margin_color,
+            ));
+        } else if let Some(ref footer) = hf.plain_text {
+            let footer_para = tw_model::Paragraph::with_text(footer.clone());
+            let (footer_lines, _) = layout_paragraph(
+                shaper,
+                atlas,
+                &footer_para,
+                ParagraphFrame::new(format.margin_left, footer_y, content_width)
+                    .with_tab_interval(tab_interval),
+                margin_color,
+            );
+            for line in footer_lines {
+                page_boxes.push(LayoutBox::TextLine(line));
+            }
+        }
+    } else if !format.footer_blocks.is_empty() {
         let footer_y = format.page_height - format.margin_bottom * 0.75;
         page_boxes.extend(layout_margin_blocks(
             doc,
@@ -925,6 +1141,10 @@ fn layout_margin_blocks(
                 y += image.display_height;
             }
             Block::Table(_) => {}
+            Block::ShapeBlock(shape) => {
+                y += shape.shape.height + 8.0;
+            }
+            _ => {}
         }
     }
     out
@@ -1021,6 +1241,34 @@ fn split_paragraph_at_page_breaks(para: &tw_model::Paragraph) -> Vec<ParagraphSe
                     content: RunContent::Text("\t".into()),
                     revision: run.revision.clone(),
                 });
+            }
+            RunContent::Hyperlink { text, target } => {
+                current.runs.push(Run {
+                    id: run.id,
+                    format: run.format.clone(),
+                    content: RunContent::Hyperlink {
+                        target: target.clone(),
+                        text: text.clone(),
+                    },
+                    revision: run.revision.clone(),
+                });
+            }
+            RunContent::Field(field) => {
+                current.runs.push(Run {
+                    id: run.id,
+                    format: run.format.clone(),
+                    content: RunContent::Field(field.clone()),
+                    revision: run.revision.clone(),
+                });
+            }
+            RunContent::InlineImage(_)
+            | RunContent::FootnoteRef(_)
+            | RunContent::CommentRef(_)
+            | RunContent::Bookmark(_) => {
+                current.runs.push(run.clone());
+            }
+            _ => {
+                current.runs.push(run.clone());
             }
         }
     }

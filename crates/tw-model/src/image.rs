@@ -1,6 +1,7 @@
 use crate::ids::NodeId;
 use serde::{Deserialize, Serialize};
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum TextWrap {
     #[default]

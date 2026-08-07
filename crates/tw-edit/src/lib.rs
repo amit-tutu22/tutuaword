@@ -1,51 +1,57 @@
+mod undo;
 mod access;
+pub mod run_text;
 mod block_ops;
 mod command;
+pub mod command_json;
+pub mod command_builders;
 mod normalize;
 pub mod paste;
 pub mod range;
 mod session;
 
 pub use command::*;
+pub use command_json::*;
+pub use command_builders::*;
 pub use session::*;
+pub use undo::{TransactionGuard, UndoEntry};
 pub use range::paragraph_id_for_run;
+pub use run_text::{run_char_len, run_char_len_by_id, run_slice, run_slice_by_id, run_with_id};
 
 use access::{with_paragraph_mut, with_run_mut};
 use tw_model::{Document, NodeId, NumberingRef, Revision, RevisionType, Run, StyleId};
-use tw_text::TextBuffer;
 
 pub fn apply(
     doc: &mut Document,
-    buffer: &mut TextBuffer,
     command: Command,
 ) -> Result<EditResult, EditError> {
     let result = match &command {
         Command::InsertText { run_id, offset, text } => {
-            insert_text(doc, buffer, *run_id, *offset, text)?
+            insert_text(doc, *run_id, *offset, text)?
         }
         Command::DeleteRange {
             run_id,
             start,
             end,
-        } => delete_range(doc, buffer, *run_id, *start, *end)?,
-        Command::DeleteDocRange { range } => delete_doc_range(doc, buffer, range)?,
+        } => delete_range(doc, *run_id, *start, *end)?,
+        Command::DeleteDocRange { range } => delete_doc_range(doc, range)?,
         Command::SetCharFormat {
             run_id,
             start,
             end,
             format,
             merge,
-        } => set_char_format(doc, buffer, *run_id, *start, *end, format.clone(), *merge)?,
+        } => set_char_format(doc, *run_id, *start, *end, format.clone(), *merge)?,
         Command::SetCharFormatRange {
             range,
             format,
             merge,
-        } => set_char_format_range(doc, buffer, range, format.clone(), *merge)?,
+        } => set_char_format_range(doc, range, format.clone(), *merge)?,
         Command::ClearCharFormatFields {
             range,
             clear_color,
             clear_highlight,
-        } => clear_char_format_fields(doc, buffer, range, *clear_color, *clear_highlight)?,
+        } => clear_char_format_fields(doc, range, *clear_color, *clear_highlight)?,
         Command::SetParaFormat {
             paragraph_id,
             format,
@@ -58,12 +64,12 @@ pub fn apply(
         } => set_para_format_range(doc, range, format.clone(), *merge)?,
         Command::RestoreRunFormats { formats } => restore_run_formats(doc, formats)?,
         Command::RestoreParaFormats { formats } => restore_para_formats(doc, formats)?,
-        Command::InsertParagraph { after_id } => insert_paragraph(doc, buffer, *after_id)?,
+        Command::InsertParagraph { after_id } => insert_paragraph(doc, *after_id)?,
         Command::SplitParagraphAt { run_id, offset } => {
-            split_paragraph_at(doc, buffer, *run_id, *offset)?
+            split_paragraph_at(doc, *run_id, *offset)?
         }
-        Command::DeleteParagraph { id } => delete_paragraph(doc, buffer, *id)?,
-        Command::MergeSplitParagraph { id } => merge_split_paragraph(doc, buffer, *id)?,
+        Command::DeleteParagraph { id } => delete_paragraph(doc, *id)?,
+        Command::MergeSplitParagraph { id } => merge_split_paragraph(doc, *id)?,
         Command::InsertTable {
             after_block_id,
             rows,
@@ -120,27 +126,27 @@ pub fn apply(
             find,
             replace,
             match_case,
-        } => find_replace(doc, buffer, range, find, replace, *match_case)?,
-        Command::RestoreFindReplace { segments } => restore_find_replace(doc, buffer, segments)?,
-        Command::DeleteBlock { id } => block_ops::delete_block(doc, buffer, *id)?,
+        } => find_replace(doc, range, find, replace, *match_case)?,
+        Command::RestoreFindReplace { segments } => restore_find_replace(doc, segments)?,
+        Command::DeleteBlock { id } => block_ops::delete_block(doc, *id)?,
         Command::InsertBlock {
             after_block_id,
             block,
-        } => block_ops::insert_block(doc, buffer, *after_block_id, block.clone())?,
+        } => block_ops::insert_block(doc, *after_block_id, block.clone())?,
         Command::AcceptRevision { run_id } => {
-            resolve_revision(doc, buffer, *run_id, RevisionResolution::Accept)?
+            resolve_revision(doc, *run_id, RevisionResolution::Accept)?
         }
         Command::RejectRevision { run_id } => {
-            resolve_revision(doc, buffer, *run_id, RevisionResolution::Reject)?
+            resolve_revision(doc, *run_id, RevisionResolution::Reject)?
         }
-        Command::AcceptAllRevisions => resolve_all_revisions(doc, buffer, RevisionResolution::Accept)?,
-        Command::RejectAllRevisions => resolve_all_revisions(doc, buffer, RevisionResolution::Reject)?,
+        Command::AcceptAllRevisions => resolve_all_revisions(doc, RevisionResolution::Accept)?,
+        Command::RejectAllRevisions => resolve_all_revisions(doc, RevisionResolution::Reject)?,
         Command::RestoreRevisionRuns { snapshots } => {
-            restore_revision_runs(doc, buffer, snapshots)?
+            restore_revision_runs(doc, snapshots)?
         }
     };
 
-    normalize::normalize_runs(doc, buffer);
+    normalize::normalize_runs(doc);
     Ok(result)
 }
 
@@ -152,7 +158,6 @@ enum RevisionResolution {
 
 fn resolve_revision(
     doc: &mut Document,
-    buffer: &mut TextBuffer,
     run_id: NodeId,
     resolution: RevisionResolution,
 ) -> Result<EditResult, EditError> {
@@ -166,7 +171,7 @@ fn resolve_revision(
             text: text.clone(),
             revision: Some(rev.clone()),
         };
-        apply_resolution(run, buffer, run_id, &rev, resolution);
+        apply_resolution(run, run_id, &rev, resolution);
         Some(snap)
     })
     .ok_or(EditError::RunNotFound(run_id))?
@@ -181,7 +186,6 @@ fn resolve_revision(
 
 fn resolve_all_revisions(
     doc: &mut Document,
-    buffer: &mut TextBuffer,
     resolution: RevisionResolution,
 ) -> Result<EditResult, EditError> {
     let mut targets = Vec::new();
@@ -209,7 +213,7 @@ fn resolve_all_revisions(
                 text: text.clone(),
                 revision: Some(rev.clone()),
             };
-            apply_resolution(run, buffer, run_id, &rev, resolution);
+            apply_resolution(run, run_id, &rev, resolution);
             Some(snap)
         })
         .flatten();
@@ -228,8 +232,7 @@ fn resolve_all_revisions(
 
 fn apply_resolution(
     run: &mut Run,
-    buffer: &mut TextBuffer,
-    run_id: NodeId,
+    _run_id: NodeId,
     rev: &Revision,
     resolution: RevisionResolution,
 ) {
@@ -241,11 +244,7 @@ fn apply_resolution(
     };
     if drop_text {
         if let Some(t) = run.text_mut() {
-            let len = t.chars().count();
             t.clear();
-            if len > 0 {
-                buffer.delete(run_id, 0..len);
-            }
         }
     }
     run.revision = None;
@@ -253,21 +252,13 @@ fn apply_resolution(
 
 fn restore_revision_runs(
     doc: &mut Document,
-    buffer: &mut TextBuffer,
     snapshots: &[RevisionRunSnapshot],
 ) -> Result<EditResult, EditError> {
     let mut affected = Vec::new();
     for snap in snapshots {
         with_run_mut(doc, snap.run_id, |run| {
             if let Some(t) = run.text_mut() {
-                let old_len = t.chars().count();
-                if old_len > 0 {
-                    buffer.delete(snap.run_id, 0..old_len);
-                }
                 *t = snap.text.clone();
-                if !snap.text.is_empty() {
-                    buffer.insert(snap.run_id, 0, &snap.text);
-                }
             }
             run.revision = snap.revision.clone();
         })
@@ -282,7 +273,6 @@ fn restore_revision_runs(
 
 fn insert_text(
     doc: &mut Document,
-    buffer: &mut TextBuffer,
     run_id: NodeId,
     offset: usize,
     text: &str,
@@ -297,7 +287,6 @@ fn insert_text(
             }
             let byte_offset = t.char_indices().nth(offset).map(|(i, _)| i).unwrap_or(t.len());
             t.insert_str(byte_offset, text);
-            buffer.insert(run_id, offset, text);
             if track {
                 run.revision = Some(Revision::insert(author));
             }
@@ -312,7 +301,6 @@ fn insert_text(
 
 fn delete_range(
     doc: &mut Document,
-    buffer: &mut TextBuffer,
     run_id: NodeId,
     start: usize,
     end: usize,
@@ -321,10 +309,10 @@ fn delete_range(
         return Err(EditError::InvalidRange);
     }
     if doc.settings.track_changes_enabled {
-        return track_delete_range(doc, buffer, run_id, start, end);
+        return track_delete_range(doc, run_id, start, end);
     }
 
-    let deleted = buffer.slice(run_id, start..end).into_owned();
+    let deleted = run_slice_by_id(doc, run_id, start..end);
 
     with_run_mut(doc, run_id, |run| {
         if let Some(t) = run.text_mut() {
@@ -339,7 +327,6 @@ fn delete_range(
                 t.len()
             };
             t.replace_range(byte_start..byte_end, "");
-            buffer.delete(run_id, start..end);
         }
         Ok(EditResult {
             affected_nodes: vec![run_id],
@@ -352,7 +339,6 @@ fn delete_range(
 
 fn delete_doc_range(
     doc: &mut Document,
-    buffer: &mut TextBuffer,
     range: &DocRange,
 ) -> Result<EditResult, EditError> {
     let range = crate::range::normalize_range(doc, range)?;
@@ -362,7 +348,6 @@ fn delete_doc_range(
     if range.start.run_id == range.end.run_id {
         return delete_range(
             doc,
-            buffer,
             range.start.run_id,
             range.start.char_offset,
             range.end.char_offset,
@@ -397,7 +382,7 @@ fn delete_doc_range(
                 let run_end = if run.id == range.end.run_id {
                     range.end.char_offset
                 } else {
-                    buffer.len(run.id)
+                    run_char_len_by_id(doc, run.id)
                 };
                 if run_start < run_end {
                     segments.push((run.id, run_start, run_end));
@@ -409,9 +394,9 @@ fn delete_doc_range(
     let mut undo_segments = Vec::new();
     let mut affected = Vec::new();
     for (run_id, start, end) in segments.into_iter().rev() {
-        let deleted = buffer.slice(run_id, start..end).into_owned();
+        let deleted = run_slice_by_id(doc, run_id, start..end);
         undo_segments.push((run_id, start, deleted, String::new()));
-        delete_range(doc, buffer, run_id, start, end)?;
+        delete_range(doc, run_id, start, end)?;
         affected.push(run_id);
     }
 
@@ -424,7 +409,6 @@ fn delete_doc_range(
 
 fn track_delete_range(
     doc: &mut Document,
-    buffer: &mut TextBuffer,
     run_id: NodeId,
     start: usize,
     end: usize,
@@ -436,11 +420,11 @@ fn track_delete_range(
 
     let mut target = run_id;
     if start > 0 {
-        target = split_run_at(doc, buffer, si, bi, target, start)?;
+        target = split_run_at(doc, si, bi, target, start)?;
     }
     let delete_len = end - start;
-    if delete_len < buffer.len(target) {
-        split_run_at(doc, buffer, si, bi, target, delete_len)?;
+    if delete_len < run_char_len_by_id(doc, target) {
+        split_run_at(doc, si, bi, target, delete_len)?;
     }
 
     with_run_mut(doc, target, |run| {
@@ -455,14 +439,13 @@ fn track_delete_range(
 
 fn set_char_format(
     doc: &mut Document,
-    buffer: &mut TextBuffer,
     run_id: NodeId,
     start: usize,
     end: usize,
     format: tw_model::CharFormat,
     merge: bool,
 ) -> Result<EditResult, EditError> {
-    let run_len = buffer.len(run_id);
+    let run_len = run_char_len_by_id(doc, run_id);
     let mut start = start;
     let mut end = end.min(run_len);
     if start > end {
@@ -491,7 +474,7 @@ fn set_char_format(
         }
         // Collapsed caret (often at run end via FFI `usize::MAX`) — apply to the
         // whole run so ribbon font/size changes affect visible text.
-        return set_char_format(doc, buffer, run_id, 0, run_len, format, merge);
+        return set_char_format(doc, run_id, 0, run_len, format, merge);
     }
 
     // Whole-run fast path.
@@ -521,12 +504,12 @@ fn set_char_format(
     // First split off the prefix; the returned id is the suffix starting at `start`.
     let mut target = run_id;
     if start > 0 {
-        target = split_run_at(doc, buffer, si, bi, run_id, start)?;
+        target = split_run_at(doc, si, bi, run_id, start)?;
     }
     // Then split off the tail beyond `end - start`.
     let slice_len = end - start;
-    if slice_len < buffer.len(target) {
-        let _ = split_run_at(doc, buffer, si, bi, target, slice_len)?;
+    if slice_len < run_char_len_by_id(doc, target) {
+        let _ = split_run_at(doc, si, bi, target, slice_len)?;
     }
 
     with_run_mut(doc, target, |run| {
@@ -548,7 +531,6 @@ fn set_char_format(
 
 fn clear_char_format_fields(
     doc: &mut Document,
-    _buffer: &mut TextBuffer,
     range: &DocRange,
     clear_color: bool,
     clear_highlight: bool,
@@ -611,7 +593,6 @@ fn clear_char_format_fields(
 
 fn set_char_format_range(
     doc: &mut Document,
-    buffer: &mut TextBuffer,
     range: &DocRange,
     format: tw_model::CharFormat,
     merge: bool,
@@ -620,7 +601,6 @@ fn set_char_format_range(
     if range::positions_equal(&range.start, &range.end) {
         return set_char_format(
             doc,
-            buffer,
             range.start.run_id,
             range.start.char_offset,
             usize::MAX,
@@ -640,7 +620,6 @@ fn set_char_format_range(
     if start_loc.0 == end_loc.0 && start_loc.1 == end_loc.1 {
         return format_runs_in_paragraph(
             doc,
-            buffer,
             start_loc.0,
             start_loc.1,
             &range.start,
@@ -671,7 +650,7 @@ fn set_char_format_range(
                 let last = para.runs.last().ok_or(EditError::InvalidRange)?;
                 first_end = DocPosition {
                     run_id: last.id,
-                    char_offset: buffer.len(last.id),
+                    char_offset: run_char_len_by_id(doc, last.id),
                 };
             } else if (si, bi) == (end_loc.0, end_loc.1) {
                 let first = para.runs.first().ok_or(EditError::InvalidRange)?;
@@ -691,7 +670,6 @@ fn set_char_format_range(
 
     let partial = format_runs_in_paragraph(
         doc,
-        buffer,
         start_loc.0,
         start_loc.1,
         &range.start,
@@ -721,13 +699,12 @@ fn set_char_format_range(
                 },
                 DocPosition {
                     run_id: last.id,
-                    char_offset: buffer.len(last.id),
+                    char_offset: run_char_len_by_id(doc, last.id),
                 },
             )
         };
         let partial = format_runs_in_paragraph(
             doc,
-            buffer,
             si,
             bi,
             &mid_start,
@@ -741,7 +718,6 @@ fn set_char_format_range(
 
     let partial = format_runs_in_paragraph(
         doc,
-        buffer,
         end_loc.0,
         end_loc.1,
         &last_start,
@@ -761,7 +737,6 @@ fn set_char_format_range(
 
 fn format_runs_in_paragraph(
     doc: &mut Document,
-    buffer: &mut TextBuffer,
     si: usize,
     bi: usize,
     start: &DocPosition,
@@ -772,7 +747,6 @@ fn format_runs_in_paragraph(
     if start.run_id == end.run_id {
         return set_char_format(
             doc,
-            buffer,
             start.run_id,
             start.char_offset,
             end.char_offset,
@@ -797,15 +771,15 @@ fn format_runs_in_paragraph(
             return Ok(EditResult::default());
         }
         last_id = para.runs[idx - 1].id;
-    } else if end.char_offset < buffer.len(end.run_id) {
-        let _ = split_run_at(doc, buffer, si, bi, end.run_id, end.char_offset)?;
+    } else if end.char_offset < run_char_len_by_id(doc, end.run_id) {
+        let _ = split_run_at(doc, si, bi, end.run_id, end.char_offset)?;
         // Prefix keeps end.run_id and is exactly what we want.
         last_id = end.run_id;
     }
 
     let mut first_id = start.run_id;
     if start.char_offset > 0 {
-        first_id = split_run_at(doc, buffer, si, bi, start.run_id, start.char_offset)?;
+        first_id = split_run_at(doc, si, bi, start.run_id, start.char_offset)?;
     } else if start.char_offset == 0 {
         first_id = start.run_id;
     }
@@ -849,7 +823,6 @@ fn format_runs_in_paragraph(
 
 fn split_run_at(
     doc: &mut Document,
-    buffer: &mut TextBuffer,
     si: usize,
     bi: usize,
     run_id: NodeId,
@@ -864,7 +837,7 @@ fn split_run_at(
         .position(|r| r.id == run_id)
         .ok_or(EditError::RunNotFound(run_id))?;
 
-    let text = buffer.to_string(run_id);
+    let text = para.runs[idx].text().to_string();
     let char_len = text.chars().count();
     if offset == 0 || offset >= char_len {
         return Ok(run_id);
@@ -876,7 +849,6 @@ fn split_run_at(
     if let Some(t) = para.runs[idx].text_mut() {
         *t = prefix.clone();
     }
-    buffer.sync_from_run(run_id, &prefix);
 
     let new_run = Run {
         id: NodeId::new(),
@@ -884,7 +856,6 @@ fn split_run_at(
         content: tw_model::RunContent::Text(suffix),
         revision: None,
     };
-    buffer.register(new_run.id, new_run.text());
     let new_id = new_run.id;
     para.runs.insert(idx + 1, new_run);
     Ok(new_id)
@@ -980,7 +951,6 @@ fn restore_para_formats(
 
 fn insert_paragraph(
     doc: &mut Document,
-    buffer: &mut TextBuffer,
     after_id: NodeId,
 ) -> Result<EditResult, EditError> {
     let (si, bi) = doc
@@ -989,9 +959,6 @@ fn insert_paragraph(
 
     let new_para = tw_model::Paragraph::new();
     let new_id = new_para.id;
-    for run in &new_para.runs {
-        buffer.register(run.id, run.text());
-    }
 
     doc.sections[si]
         .blocks
@@ -1010,7 +977,6 @@ fn insert_paragraph(
 /// first run id in `affected_nodes[0]` so the caret can land there.
 fn split_paragraph_at(
     doc: &mut Document,
-    buffer: &mut TextBuffer,
     run_id: NodeId,
     offset: usize,
 ) -> Result<EditResult, EditError> {
@@ -1018,7 +984,7 @@ fn split_paragraph_at(
         .find_run_location(run_id)
         .ok_or(EditError::RunNotFound(run_id))?;
 
-    let run_len = buffer.len(run_id);
+    let run_len = run_char_len_by_id(doc, run_id);
     if offset > run_len {
         return Err(EditError::InvalidRange);
     }
@@ -1026,7 +992,7 @@ fn split_paragraph_at(
     // Mid-run: split so the caret boundary is a run start.
     let mut first_moved_run = run_id;
     if offset > 0 && offset < run_len {
-        first_moved_run = split_run_at(doc, buffer, si, bi, run_id, offset)?;
+        first_moved_run = split_run_at(doc, si, bi, run_id, offset)?;
     } else if offset == run_len {
         // Caret at end of this run — move subsequent runs (or insert empty para).
         let para = doc
@@ -1042,7 +1008,7 @@ fn split_paragraph_at(
         } else {
             // End of paragraph → empty new paragraph after this one.
             let after_id = para.id;
-            let result = insert_paragraph(doc, buffer, after_id)?;
+            let result = insert_paragraph(doc, after_id)?;
             let new_para_id = result.created_node_id.unwrap();
             let new_run_id = doc
                 .paragraph_at(si, bi + 1)
@@ -1074,13 +1040,11 @@ fn split_paragraph_at(
 
     if para.runs.is_empty() {
         let empty = Run::new_text("");
-        buffer.register(empty.id, "");
         para.runs.push(empty);
     }
 
     let new_first_run = if moved.is_empty() {
         let empty = Run::new_text("");
-        buffer.register(empty.id, "");
         let id = empty.id;
         (id, vec![empty])
     } else {
@@ -1112,7 +1076,6 @@ fn split_paragraph_at(
 /// Merge a paragraph created by [`split_paragraph_at`] back into its predecessor.
 fn merge_split_paragraph(
     doc: &mut Document,
-    buffer: &mut TextBuffer,
     id: NodeId,
 ) -> Result<EditResult, EditError> {
     let (si, bi) = doc
@@ -1136,19 +1099,19 @@ fn merge_split_paragraph(
         .last()
         .map(|r| r.id)
         .ok_or(EditError::InvalidRange)?;
-    let boundary_offset = buffer.len(boundary_run);
+    let boundary_offset = prev
+        .runs
+        .last()
+        .map(|r| r.text().chars().count())
+        .unwrap_or(0);
 
     for run in new_para.runs {
         if let Some(last) = prev.runs.last_mut() {
             if last.format.equals(&run.format) && last.revision == run.revision {
-                let suffix = buffer.to_string(run.id);
-                let last_id = last.id;
+                let suffix = run.text().to_string();
                 if let Some(text) = last.text_mut() {
                     text.push_str(&suffix);
-                    let merged = text.clone();
-                    buffer.sync_from_run(last_id, &merged);
                 }
-                buffer.unregister(run.id);
                 continue;
             }
         }
@@ -1157,7 +1120,6 @@ fn merge_split_paragraph(
 
     if prev.runs.is_empty() {
         let empty = Run::new_text("");
-        buffer.register(empty.id, "");
         prev.runs.push(empty);
     }
 
@@ -1170,7 +1132,6 @@ fn merge_split_paragraph(
 
 fn delete_paragraph(
     doc: &mut Document,
-    buffer: &mut TextBuffer,
     id: NodeId,
 ) -> Result<EditResult, EditError> {
     let (si, bi) = doc
@@ -1186,9 +1147,6 @@ fn delete_paragraph(
     let tw_model::Block::Paragraph(p) = doc.sections[si].blocks.remove(bi) else {
         return Err(EditError::ParagraphNotFound(id));
     };
-    for run in &p.runs {
-        buffer.unregister(run.id);
-    }
     Ok(EditResult {
         affected_nodes: vec![id],
         previous_paragraph_id: Some(after_id),
@@ -1260,7 +1218,6 @@ fn find_in(haystack: &str, needle: &str, match_case: bool) -> Option<usize> {
 
 fn find_replace(
     doc: &mut Document,
-    buffer: &mut TextBuffer,
     range: &DocRange,
     find: &str,
     replace: &str,
@@ -1302,13 +1259,13 @@ fn find_replace(
                 let run_end = if run.id == range.end.run_id {
                     range.end.char_offset
                 } else {
-                    buffer.len(run.id)
+                    run_char_len_by_id(doc, run.id)
                 };
                 if run_start >= run_end {
                     continue;
                 }
 
-                let slice = buffer.slice(run.id, run_start..run_end);
+                let slice = run_slice_by_id(doc, run.id, run_start..run_end);
                 let mut matches = Vec::new();
                 let mut search_from = 0usize;
                 let slice_len = slice.chars().count();
@@ -1333,8 +1290,8 @@ fn find_replace(
     for (run_id, abs_start) in pending {
         let abs_end = abs_start + find_len;
         undo_segments.push((run_id, abs_start, find.to_string(), replace.to_string()));
-        delete_range(doc, buffer, run_id, abs_start, abs_end)?;
-        insert_text(doc, buffer, run_id, abs_start, replace)?;
+        delete_range(doc, run_id, abs_start, abs_end)?;
+        insert_text(doc, run_id, abs_start, replace)?;
         affected.push(run_id);
     }
 
@@ -1358,7 +1315,6 @@ fn run_in_doc_range(
 /// Read plain text for a document-order range without mutating the model.
 pub fn text_in_range(
     doc: &Document,
-    buffer: &TextBuffer,
     range: &DocRange,
 ) -> Result<String, EditError> {
     let range = crate::range::normalize_range(doc, range)?;
@@ -1366,10 +1322,10 @@ pub fn text_in_range(
         return Ok(String::new());
     }
     if range.start.run_id == range.end.run_id {
-        let len = buffer.len(range.start.run_id);
+        let len = run_char_len_by_id(doc, range.start.run_id);
         let start = range.start.char_offset.min(len);
         let end = range.end.char_offset.min(len);
-        return Ok(buffer.slice(range.start.run_id, start..end).into_owned());
+        return Ok(run_slice_by_id(doc, range.start.run_id, start..end));
     }
 
     let start_loc = doc
@@ -1400,13 +1356,13 @@ pub fn text_in_range(
                 let run_end = if run.id == range.end.run_id {
                     range.end.char_offset
                 } else {
-                    buffer.len(run.id)
+                    run_char_len_by_id(doc, run.id)
                 };
-                let run_len = buffer.len(run.id);
+                let run_len = run_char_len_by_id(doc, run.id);
                 let run_start = run_start.min(run_len);
                 let run_end = run_end.min(run_len);
                 if run_start < run_end {
-                    out.push_str(&buffer.slice(run.id, run_start..run_end));
+                    out.push_str(&run_slice_by_id(doc, run.id, run_start..run_end));
                 }
             }
         }
@@ -1416,17 +1372,16 @@ pub fn text_in_range(
 
 fn restore_find_replace(
     doc: &mut Document,
-    buffer: &mut TextBuffer,
     segments: &[(NodeId, usize, String, String)],
 ) -> Result<EditResult, EditError> {
     let mut affected = Vec::new();
     for (run_id, offset, find, replace) in segments.iter().rev() {
         if !replace.is_empty() {
             let replace_len = replace.chars().count();
-            delete_range(doc, buffer, *run_id, *offset, *offset + replace_len)?;
+            delete_range(doc, *run_id, *offset, *offset + replace_len)?;
         }
         if !find.is_empty() {
-            insert_text(doc, buffer, *run_id, *offset, find)?;
+            insert_text(doc, *run_id, *offset, find)?;
         }
         affected.push(*run_id);
     }
@@ -1495,7 +1450,6 @@ mod phase2_tests {
 
         let text = text_in_range(
             &session.document,
-            &session.buffer,
             &DocRange {
                 start: DocPosition {
                     run_id,

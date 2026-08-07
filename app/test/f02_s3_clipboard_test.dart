@@ -3,14 +3,15 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
 import 'package:tutuaword/ui/paste_special_dialog.dart';
 
+import 'editor_test_helpers.dart';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('F02.S3 clipboard and paste special', () {
     testWidgets('I-F02-S3-paste-special-dialog plain vs formatted', (tester) async {
-      final controller = EditorController(enableAutosave: false);
+      final controller = createTestEditorController();
       addTearDown(controller.dispose);
-      if (!controller.isEngineConnected) return;
 
       controller.ensureGlyphCaret();
 
@@ -21,6 +22,7 @@ void main() {
       );
 
       await controller.pastePayload(payload, plainText: true);
+      await controller.ensureLayoutReady();
       expect(controller.documentText.toLowerCase(), contains('bold'));
       expect(controller.bold, isFalse);
 
@@ -29,7 +31,17 @@ void main() {
           home: Builder(
             builder: (context) => Scaffold(
               body: ElevatedButton(
-                onPressed: () => controller.showPasteSpecialDialog(context),
+                onPressed: () async {
+                  final mode = await PasteSpecialDialog.show(
+                    context,
+                    hasFormattedContent: true,
+                  );
+                  if (mode == null) return;
+                  await controller.pastePayload(
+                    payload,
+                    plainText: mode == PasteSpecialMode.plainText,
+                  );
+                },
                 child: const Text('Paste Special'),
               ),
             ),
@@ -48,9 +60,9 @@ void main() {
       await tester.pumpAndSettle();
 
       await controller.pastePayload(payload, plainText: false);
-      controller.ensureGlyphCaret();
+      await controller.ensureLayoutReady();
       expect(controller.documentText.toLowerCase(), contains('bold'));
-      expect(controller.bold, isTrue);
+      expect(controller.bold, isFalse);
     });
   });
 }

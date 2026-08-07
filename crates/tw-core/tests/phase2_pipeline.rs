@@ -128,11 +128,13 @@ fn snapshot_buffer_stores_multiple_pages_and_switches_index() {
     let buffer = SnapshotBuffer::new();
     let pages = vec![
         SinglePageSnapshot {
+            version: 10,
             bytes: Arc::new(vec![1, 2, 3]),
             page_width: 612.0,
             page_height: 792.0,
         },
         SinglePageSnapshot {
+            version: 10,
             bytes: Arc::new(vec![4, 5, 6]),
             page_width: 612.0,
             page_height: 792.0,
@@ -155,12 +157,12 @@ fn snapshot_buffer_stores_multiple_pages_and_switches_index() {
     let snap0 = buffer.read();
     assert_eq!(snap0.page_count, 2);
     assert_eq!(snap0.page_index, 0);
-    assert_eq!(snap0.bytes, vec![1, 2, 3]);
+    assert_eq!(snap0.bytes.as_ref(), &[1, 2, 3]);
 
     buffer.set_current_page(1);
     let snap1 = buffer.read();
     assert_eq!(snap1.page_index, 1);
-    assert_eq!(snap1.bytes, vec![4, 5, 6]);
+    assert_eq!(snap1.bytes.as_ref(), &[4, 5, 6]);
 }
 
 #[test]

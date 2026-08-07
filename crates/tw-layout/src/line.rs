@@ -287,6 +287,7 @@ fn line_height_for(para: &Paragraph, size: f32) -> f32 {
         Some(LineSpacing::Exactly(pt)) => pt.max(1.0),
         Some(LineSpacing::AtLeast(pt)) => single.max(pt),
         Some(LineSpacing::Single) | None => single,
+        Some(_) => single,
     }
 }
 
@@ -730,6 +731,7 @@ fn apply_alignment(lines: &mut [super::types::TextLine], max_width: f32, alignme
                 0.0
             }
             Alignment::Justify => 0.0,
+            _ => 0.0,
         };
         if offset.abs() < f32::EPSILON {
             continue;

@@ -10,15 +10,14 @@ void main() {
 
   group('F02.S1 core input', () {
     test('I-F02-S1-typing-latency glyph inserts stay responsive', () async {
-      final controller = EditorController(enableAutosave: false);
+      final controller = EditorController.forTest();
       addTearDown(controller.dispose);
-      if (!controller.isEngineConnected) return;
 
       controller.ensureGlyphCaret();
       final samples = <int>[];
       for (var i = 0; i < 50; i++) {
         final sw = Stopwatch()..start();
-        controller.insertGlyphCharacter('a');
+        await controller.insertGlyphCharacter('a');
         samples.add(sw.elapsedMicroseconds);
       }
 
@@ -32,9 +31,8 @@ void main() {
     });
 
     testWidgets('tab key inserts via glyph keyboard path', (tester) async {
-      final controller = EditorController(enableAutosave: false);
+      final controller = EditorController.forTest();
       addTearDown(controller.dispose);
-      if (!controller.isEngineConnected) return;
 
       await tester.pumpWidget(
         MaterialApp(home: Scaffold(body: DocumentView(controller: controller))),

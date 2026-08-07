@@ -14,12 +14,14 @@ mod numbering;
 mod opc;
 mod paragraph;
 mod properties;
+pub mod retention;
 mod styles;
 mod table;
 mod xml_util;
 
 pub use export::export_docx;
 pub use import::import_docx;
+pub use retention::ImportRetentionReport;
 
 /// Original OPC package retained for passthrough export (ADR-0008).
 #[derive(Debug, Clone, Default)]
@@ -90,6 +92,7 @@ pub enum DocxError {
 pub struct ImportResult {
     pub document: Document,
     pub package: DocxPackage,
+    pub retention: ImportRetentionReport,
 }
 
 pub fn import(source: &[u8]) -> Result<ImportResult, DocxError> {

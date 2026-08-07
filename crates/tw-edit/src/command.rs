@@ -1,18 +1,21 @@
+use serde::{Deserialize, Serialize};
+use std::time::{Duration, Instant};
 use tw_model::{CharFormat, NodeId, NumberingRef, ParaFormat, Revision, StyleId};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DocPosition {
     pub run_id: NodeId,
     pub char_offset: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DocRange {
     pub start: DocPosition,
     pub end: DocPosition,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "PascalCase")]
 pub enum Command {
     InsertText {
         run_id: NodeId,
@@ -166,42 +169,99 @@ pub enum Command {
 }
 
 /// Snapshot of a run before accept/reject so undo can restore text + revision.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RevisionRunSnapshot {
     pub run_id: NodeId,
     pub text: String,
     pub revision: Option<Revision>,
 }
 
+/// Whether `next` can merge into the previous coalesced `InsertText` undo entry.
+pub fn can_coalesce_insert(
+    prev_cmd: &Command,
+    prev_result: &EditResult,
+    next_cmd: &Command,
+    now: Instant,
+    prev_timestamp: Instant,
+    coalesce_window: Duration,
+) -> bool {
+    let _ = prev_result;
+    let Command::InsertText {
+        run_id: prev_run,
+        offset: prev_offset,
+        text: prev_text,
+    } = prev_cmd
+    else {
+        return false;
+    };
+    let Command::InsertText {
+        run_id: next_run,
+        offset: next_offset,
+        text: next_text,
+    } = next_cmd
+    else {
+        return false;
+    };
+    if prev_run != next_run {
+        return false;
+    }
+    if now.duration_since(prev_timestamp) > coalesce_window {
+        return false;
+    }
+    if next_text.chars().any(char::is_whitespace) {
+        return false;
+    }
+    let prev_end = *prev_offset + prev_text.chars().count();
+    *next_offset == prev_end
+}
+
 impl Command {
-    pub fn inverse(&self, result: &EditResult) -> Option<Command> {
+    pub fn inverse(&self, result: &EditResult) -> Result<Command, EditError> {
         match self {
-            Command::InsertText { run_id, offset, text } => Some(Command::DeleteRange {
+            Command::InsertText { run_id, offset, text } => Ok(Command::DeleteRange {
                 run_id: *run_id,
                 start: *offset,
                 end: offset + text.chars().count(),
             }),
             Command::DeleteRange { run_id, start, end: _ } => {
-                let deleted = result.deleted_text.clone()?;
-                Some(Command::InsertText {
+                let deleted = result
+                    .deleted_text
+                    .clone()
+                    .ok_or(EditError::InverseNotSupported {
+                        command: "DeleteRange",
+                    })?;
+                Ok(Command::InsertText {
                     run_id: *run_id,
                     offset: *start,
                     text: deleted,
                 })
             }
             Command::DeleteDocRange { .. } => {
-                let segments = result.find_replace_undo.clone()?;
-                Some(Command::RestoreFindReplace { segments })
+                let segments = result
+                    .find_replace_undo
+                    .clone()
+                    .ok_or(EditError::InverseNotSupported {
+                        command: "DeleteDocRange",
+                    })?;
+                Ok(Command::RestoreFindReplace { segments })
             }
             Command::SetCharFormat { .. } => {
                 if !result.old_run_formats.is_empty() {
-                    Some(Command::RestoreRunFormats {
+                    Ok(Command::RestoreRunFormats {
                         formats: result.old_run_formats.clone(),
                     })
                 } else {
-                    let old = result.old_char_format.clone()?;
-                    let run_id = result.affected_nodes.first().copied()?;
-                    Some(Command::SetCharFormat {
+                    let old = result.old_char_format.clone().ok_or(
+                        EditError::InverseNotSupported {
+                            command: "SetCharFormat",
+                        },
+                    )?;
+                    let run_id = result.affected_nodes.first().copied().ok_or(
+                        EditError::InverseNotSupported {
+                            command: "SetCharFormat",
+                        },
+                    )?;
+                    Ok(Command::SetCharFormat {
                         run_id,
                         start: 0,
                         end: usize::MAX,
@@ -212,18 +272,22 @@ impl Command {
             }
             Command::SetCharFormatRange { .. } => {
                 if result.old_run_formats.is_empty() {
-                    None
+                    Err(EditError::InverseNotSupported {
+                        command: "SetCharFormatRange",
+                    })
                 } else {
-                    Some(Command::RestoreRunFormats {
+                    Ok(Command::RestoreRunFormats {
                         formats: result.old_run_formats.clone(),
                     })
                 }
             }
             Command::ClearCharFormatFields { .. } => {
                 if result.old_run_formats.is_empty() {
-                    None
+                    Err(EditError::InverseNotSupported {
+                        command: "ClearCharFormatFields",
+                    })
                 } else {
-                    Some(Command::RestoreRunFormats {
+                    Ok(Command::RestoreRunFormats {
                         formats: result.old_run_formats.clone(),
                     })
                 }
@@ -232,8 +296,13 @@ impl Command {
                 paragraph_id,
                 ..
             } => {
-                let old = result.old_para_format.clone()?;
-                Some(Command::SetParaFormat {
+                let old = result
+                    .old_para_format
+                    .clone()
+                    .ok_or(EditError::InverseNotSupported {
+                        command: "SetParaFormat",
+                    })?;
+                Ok(Command::SetParaFormat {
                     paragraph_id: *paragraph_id,
                     format: old,
                     merge: false,
@@ -241,54 +310,99 @@ impl Command {
             }
             Command::SetParaFormatRange { .. } => {
                 if result.old_para_formats.is_empty() {
-                    None
+                    Err(EditError::InverseNotSupported {
+                        command: "SetParaFormatRange",
+                    })
                 } else {
-                    Some(Command::RestoreParaFormats {
+                    Ok(Command::RestoreParaFormats {
                         formats: result.old_para_formats.clone(),
                     })
                 }
             }
-            Command::RestoreRunFormats { .. } | Command::RestoreParaFormats { .. } => None,
+            Command::RestoreRunFormats { .. } => Err(EditError::InverseNotSupported {
+                command: "RestoreRunFormats",
+            }),
+            Command::RestoreParaFormats { .. } => Err(EditError::InverseNotSupported {
+                command: "RestoreParaFormats",
+            }),
             Command::InsertParagraph { .. } => {
-                let new_id = result.created_node_id?;
-                Some(Command::DeleteParagraph { id: new_id })
+                let new_id = result
+                    .created_node_id
+                    .ok_or(EditError::InverseNotSupported {
+                        command: "InsertParagraph",
+                    })?;
+                Ok(Command::DeleteParagraph { id: new_id })
             }
-            // Undo Enter by merging the new paragraph back into its predecessor.
             Command::SplitParagraphAt { .. } => {
-                let new_id = result.created_node_id?;
-                Some(Command::MergeSplitParagraph { id: new_id })
+                let new_id = result
+                    .created_node_id
+                    .ok_or(EditError::InverseNotSupported {
+                        command: "SplitParagraphAt",
+                    })?;
+                Ok(Command::MergeSplitParagraph { id: new_id })
             }
             Command::MergeSplitParagraph { .. } => {
-                let (run_id, offset) = result.split_boundary?;
-                Some(Command::SplitParagraphAt {
+                let (run_id, offset) = result
+                    .split_boundary
+                    .ok_or(EditError::InverseNotSupported {
+                        command: "MergeSplitParagraph",
+                    })?;
+                Ok(Command::SplitParagraphAt {
                     run_id,
                     offset,
                 })
             }
             Command::DeleteParagraph { .. } => {
-                let after_id = result.previous_paragraph_id?;
-                Some(Command::InsertParagraph { after_id })
+                let after_id = result
+                    .previous_paragraph_id
+                    .ok_or(EditError::InverseNotSupported {
+                        command: "DeleteParagraph",
+                    })?;
+                Ok(Command::InsertParagraph { after_id })
             }
             Command::InsertTable { .. }
             | Command::InsertImage { .. }
             | Command::InsertPageBreak { .. } => {
-                let new_id = result.created_node_id?;
-                Some(Command::DeleteBlock { id: new_id })
+                let new_id = result
+                    .created_node_id
+                    .ok_or(EditError::InverseNotSupported {
+                        command: "InsertBlock",
+                    })?;
+                Ok(Command::DeleteBlock { id: new_id })
             }
             Command::ApplyParagraphStyle { paragraph_id, .. } => {
-                let old = result.old_style_id?;
-                Some(Command::ApplyParagraphStyleById {
+                let old = result
+                    .old_style_id
+                    .ok_or(EditError::InverseNotSupported {
+                        command: "ApplyParagraphStyle",
+                    })?;
+                Ok(Command::ApplyParagraphStyleById {
                     paragraph_id: *paragraph_id,
                     style_id: old,
                 })
             }
-            Command::ApplyParagraphStyleById { .. } => None,
+            Command::ApplyParagraphStyleById { paragraph_id, .. } => {
+                let old = result
+                    .old_style_id
+                    .ok_or(EditError::InverseNotSupported {
+                        command: "ApplyParagraphStyleById",
+                    })?;
+                Ok(Command::ApplyParagraphStyleById {
+                    paragraph_id: *paragraph_id,
+                    style_id: old,
+                })
+            }
             Command::SetNumbering {
                 paragraph_id,
                 ..
             } => {
-                let old = result.old_numbering.clone()?;
-                Some(Command::SetNumbering {
+                let old = result
+                    .old_numbering
+                    .clone()
+                    .ok_or(EditError::InverseNotSupported {
+                        command: "SetNumbering",
+                    })?;
+                Ok(Command::SetNumbering {
                     paragraph_id: *paragraph_id,
                     numbering: old,
                 })
@@ -299,8 +413,12 @@ impl Command {
                 start_col,
                 ..
             } => {
-                let (colspan, rowspan) = result.old_cell_span?;
-                Some(Command::SetTableCellSpan {
+                let (colspan, rowspan) = result
+                    .old_cell_span
+                    .ok_or(EditError::InverseNotSupported {
+                        command: "MergeTableCells",
+                    })?;
+                Ok(Command::SetTableCellSpan {
                     table_id: *table_id,
                     row: *start_row,
                     col: *start_col,
@@ -314,8 +432,12 @@ impl Command {
                 col,
                 ..
             } => {
-                let (colspan, rowspan) = result.old_cell_span?;
-                Some(Command::SetTableCellSpan {
+                let (colspan, rowspan) = result
+                    .old_cell_span
+                    .ok_or(EditError::InverseNotSupported {
+                        command: "SetTableCellSpan",
+                    })?;
+                Ok(Command::SetTableCellSpan {
                     table_id: *table_id,
                     row: *row,
                     col: *col,
@@ -328,36 +450,69 @@ impl Command {
                 column,
                 ..
             } => {
-                let width = result.old_column_width?;
-                Some(Command::ResizeTableColumn {
+                let width = result
+                    .old_column_width
+                    .ok_or(EditError::InverseNotSupported {
+                        command: "ResizeTableColumn",
+                    })?;
+                Ok(Command::ResizeTableColumn {
                     table_id: *table_id,
                     column: *column,
                     width,
                 })
             }
-            Command::FindReplace { .. } => result.find_replace_undo.as_ref().map(|segments| {
-                Command::RestoreFindReplace {
+            Command::FindReplace { .. } => result
+                .find_replace_undo
+                .as_ref()
+                .map(|segments| Command::RestoreFindReplace {
                     segments: segments.clone(),
-                }
+                })
+                .ok_or(EditError::InverseNotSupported {
+                    command: "FindReplace",
+                }),
+            Command::RestoreFindReplace { .. } => Err(EditError::InverseNotSupported {
+                command: "RestoreFindReplace",
             }),
-            Command::RestoreFindReplace { .. } => None,
             Command::DeleteBlock { .. } => {
-                let after_id = result.previous_block_id?;
-                let block = result.deleted_block.clone()?;
-                Some(Command::InsertBlock {
+                let after_id = result
+                    .previous_block_id
+                    .ok_or(EditError::InverseNotSupported {
+                        command: "DeleteBlock",
+                    })?;
+                let block = result
+                    .deleted_block
+                    .clone()
+                    .ok_or(EditError::InverseNotSupported {
+                        command: "DeleteBlock",
+                    })?;
+                Ok(Command::InsertBlock {
                     after_block_id: after_id,
                     block,
                 })
             }
-            Command::InsertBlock { .. } => None,
+            Command::InsertBlock { .. } => {
+                let new_id = result
+                    .created_node_id
+                    .ok_or(EditError::InverseNotSupported {
+                        command: "InsertBlock",
+                    })?;
+                Ok(Command::DeleteBlock { id: new_id })
+            }
             Command::AcceptRevision { .. }
             | Command::RejectRevision { .. }
             | Command::AcceptAllRevisions
             | Command::RejectAllRevisions => {
-                let snapshots = result.revision_snapshots.clone()?;
-                Some(Command::RestoreRevisionRuns { snapshots })
+                let snapshots = result
+                    .revision_snapshots
+                    .clone()
+                    .ok_or(EditError::InverseNotSupported {
+                        command: "RevisionResolution",
+                    })?;
+                Ok(Command::RestoreRevisionRuns { snapshots })
             }
-            Command::RestoreRevisionRuns { .. } => None,
+            Command::RestoreRevisionRuns { .. } => Err(EditError::InverseNotSupported {
+                command: "RestoreRevisionRuns",
+            }),
         }
     }
 }
@@ -402,4 +557,6 @@ pub enum EditError {
     StyleNotFound(String),
     #[error("invalid range")]
     InvalidRange,
+    #[error("inverse not supported for command: {command}")]
+    InverseNotSupported { command: &'static str },
 }

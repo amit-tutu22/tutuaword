@@ -225,7 +225,6 @@ mod tests {
             .id;
         apply(
             &mut session.document,
-            &mut session.buffer,
             Command::InsertTable {
                 after_block_id: block_id,
                 rows: 3,

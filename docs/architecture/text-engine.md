@@ -17,27 +17,23 @@ Flutter Input Events
         ▼
   tw-edit::apply(command)
         │
-        ├── tw-text::TextBuffer (rope operations)
-        └── tw-model (structural changes)
+        └── tw-model::RunContent::Text(String) — sole text store (R2.2)
 ```
 
 The text engine does not handle input directly. Flutter captures events, translates them to `Command` enums, and sends them to `tw-edit`. The text engine provides the low-level text manipulation primitives that commands use.
 
-## Text Buffer
+## Text storage (R2.2)
 
-Each run's text content is backed by a `ropey::Rope` for O(log n) insert/delete at arbitrary positions.
+Each text run stores content in `RunContent::Text(String)` inside the document tree. Character-index helpers live in `tw-text` (`char_len`, `slice_chars`) and `tw-edit::run_text` (`run_char_len`, `run_slice`, etc.). There is no separate rope-backed mirror buffer.
+
+## Text Buffer (removed)
+
+~~Each run's text content was backed by a `ropey::Rope`.~~ Removed in R2.2 — see **Text storage** above.
 
 ```rust
+// Historical — do not use
 pub struct TextBuffer {
     ropes: HashMap<NodeId, Rope>,
-}
-
-impl TextBuffer {
-    pub fn insert(&mut self, run_id: NodeId, char_offset: usize, text: &str);
-    pub fn delete(&mut self, run_id: NodeId, char_range: Range<usize>);
-    pub fn slice(&self, run_id: NodeId, char_range: Range<usize>) -> Cow<str>;
-    pub fn len(&self, run_id: NodeId) -> usize;
-    pub fn char_at(&self, run_id: NodeId, char_offset: usize) -> Option<char>;
 }
 ```
 

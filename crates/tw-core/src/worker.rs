@@ -10,12 +10,20 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use tw_edit::{paste, Command, EditSession};
 use tw_layout::LayoutEngine;
-use tw_model::{Block, NodeId, NumberingRef};
+use tw_model::NodeId;
 use tw_pdf::PdfExporter;
 use tw_render::DisplayListBuilder;
 
 /// Reserved for the worker's initial document-ready event (not tied to a caller command).
 pub const STARTUP_REQUEST_ID: u64 = 0;
+
+/// Stamped on repaints produced by background forward relayout. Never issued to a
+/// caller, so it can never satisfy (or steal) a pending edit correlation.
+pub const BACKGROUND_REQUEST_ID: u64 = u64::MAX;
+
+/// How long the worker sleeps between retries while correlation acks are still
+/// queued behind a full event channel.
+const EVENT_DRAIN_POLL: std::time::Duration = std::time::Duration::from_millis(2);
 
 /// Bounded command queue depth (session blocks on `send` when full).
 pub const COMMAND_QUEUE_CAPACITY: usize = 512;
@@ -23,10 +31,20 @@ pub const COMMAND_QUEUE_CAPACITY: usize = 512;
 /// Bounded worker → session event channel; overflow uses drop-oldest backpressure.
 pub const EVENT_CHANNEL_CAPACITY: usize = 256;
 
-/// Outbound event queue with per-page `DisplayListReady` coalescing and drop-oldest.
+/// Outbound event queue with per-page `DisplayListReady` coalescing.
+///
+/// Coalescing collapses redundant repaints, but the correlation id of every
+/// superseded request is retained in `acks` (8 bytes each) instead of being
+/// dropped with the event, so a caller awaiting an edit always gets a
+/// completion even when the consumer falls far behind.
 struct EventPublisher {
     tx: Sender<BridgeEvent>,
     buffer: VecDeque<BridgeEvent>,
+    acks: VecDeque<u64>,
+    /// Page/version stamped onto ack-only completions (latest published layout).
+    ack_page: u32,
+    ack_version: u64,
+    disconnected: bool,
 }
 
 impl EventPublisher {
@@ -34,42 +52,90 @@ impl EventPublisher {
         Self {
             tx,
             buffer: VecDeque::new(),
+            acks: VecDeque::new(),
+            ack_page: 0,
+            ack_version: 0,
+            disconnected: false,
         }
     }
 
     fn send(&mut self, event: BridgeEvent) {
-        if let BridgeEvent::DisplayListReady { page, .. } = &event {
+        if let BridgeEvent::DisplayListReady { page, version, .. } = &event {
+            self.ack_page = *page;
+            self.ack_version = *version;
             self.coalesce_display_ready(*page);
-        }
-        while self.buffer.len() >= EVENT_CHANNEL_CAPACITY {
-            self.buffer.pop_front();
         }
         self.buffer.push_back(event);
         self.flush();
     }
 
+    /// True while events or correlation acks are still waiting for channel space.
+    fn has_backlog(&self) -> bool {
+        !self.disconnected && (!self.buffer.is_empty() || !self.acks.is_empty())
+    }
+
+    /// Move superseded same-page layout events out of the buffer, keeping their
+    /// request ids so callers can still correlate the completed edit.
     fn coalesce_display_ready(&mut self, page: u32) {
+        let acks = &mut self.acks;
         self.buffer.retain(|event| {
-            !matches!(
-                event,
-                BridgeEvent::DisplayListReady { page: p, .. } if *p == page
-            )
+            if let BridgeEvent::DisplayListReady {
+                request_id,
+                page: p,
+                ..
+            } = event
+            {
+                if *p == page {
+                    acks.push_back(*request_id);
+                    return false;
+                }
+            }
+            true
         });
     }
 
-    fn flush(&mut self) {
+    /// Push as much of the backlog as the channel will accept. Returns whether any
+    /// progress was made, so the worker's idle loop cannot spin without draining.
+    fn flush(&mut self) -> bool {
+        let mut progressed = false;
         while let Some(event) = self.buffer.front() {
             match self.tx.try_send(event.clone()) {
                 Ok(()) => {
                     self.buffer.pop_front();
+                    progressed = true;
                 }
-                Err(TrySendError::Full(_)) => break,
+                Err(TrySendError::Full(_)) => return progressed,
                 Err(TrySendError::Disconnected(_)) => {
-                    self.buffer.clear();
-                    break;
+                    self.drop_backlog();
+                    return progressed;
                 }
             }
         }
+        while let Some(&request_id) = self.acks.front() {
+            let ack = BridgeEvent::DisplayListReady {
+                request_id,
+                page: self.ack_page,
+                version: self.ack_version,
+            };
+            match self.tx.try_send(ack) {
+                Ok(()) => {
+                    self.acks.pop_front();
+                    progressed = true;
+                }
+                Err(TrySendError::Full(_)) => return progressed,
+                Err(TrySendError::Disconnected(_)) => {
+                    self.drop_backlog();
+                    return progressed;
+                }
+            }
+        }
+        progressed
+    }
+
+    fn drop_backlog(&mut self) {
+        self.buffer.clear();
+        self.acks.clear();
+        self.disconnected = true;
     }
 }
 
@@ -86,28 +152,9 @@ pub enum BridgeCommand {
     ToggleTrackChanges { enabled: bool },
     ApplyEdit { command: Command },
     SetCurrentPage { page: u32 },
-    ApplyHeading1 {
-        caret_run_id: Option<NodeId>,
-    },
-    ApplyNormalStyle {
-        caret_run_id: Option<NodeId>,
-    },
-    ApplyBulletList {
-        caret_run_id: Option<NodeId>,
-    },
-    ApplyNumberedList {
-        caret_run_id: Option<NodeId>,
-    },
-    InsertTable { rows: u32, cols: u32 },
-    InsertImage { width: f32, height: f32 },
-    InsertPageBreak {
-        caret_run_id: Option<NodeId>,
-    },
     Undo,
     Redo,
     ExportPdf,
-    AcceptAllRevisions,
-    RejectAllRevisions,
     PasteHtml {
         run_id: NodeId,
         offset: usize,
@@ -198,6 +245,14 @@ impl WorkerHandle {
     }
 }
 
+/// What the next layout pass should do.
+enum Relayout<'a> {
+    Full,
+    Nodes(&'a [NodeId]),
+    /// Continue the reflow a page-capped incremental pass left unfinished.
+    Forward,
+}
+
 fn worker_loop(
     cmd_rx: Receiver<QueuedCommand>,
     event_tx: Sender<BridgeEvent>,
@@ -210,67 +265,97 @@ fn worker_loop(
     let mut layout = LayoutEngine::new();
     let mut version: u64 = 0;
     let mut current_page: u32 = 0;
-    let mut cached_pages: Vec<SinglePageSnapshot> = Vec::new();
+    let mut cached_pages: Vec<Arc<SinglePageSnapshot>> = Vec::new();
+
+    struct RebuildOutcome {
+        version: u64,
+        rebuilt_pages: Vec<u32>,
+        ready_page: u32,
+    }
 
     let rebuild = |session: &EditSession,
                    layout: &mut LayoutEngine,
                    version: &mut u64,
                    current_page: u32,
-                   affected_nodes: Option<&[NodeId]>,
-                   cached_pages: &mut Vec<SinglePageSnapshot>| {
-        match affected_nodes {
-            Some(nodes) if !nodes.is_empty() => {
+                   relayout: Relayout<'_>,
+                   cached_pages: &mut Vec<Arc<SinglePageSnapshot>>|
+     -> Option<RebuildOutcome> {
+        let doc_layout = match relayout {
+            Relayout::Nodes(nodes) if !nodes.is_empty() => {
                 layout.invalidate_nodes(&session.document, nodes);
+                layout.layout_document(&session.document)
             }
-            _ => layout.invalidate_all(),
-        }
-        let doc_layout = layout.layout_document(&session.document);
+            Relayout::Forward => layout.continue_layout(&session.document)?,
+            _ => {
+                layout.invalidate_all();
+                layout.layout_document(&session.document)
+            }
+        };
         *version += 1;
         let text = document_plain_text(&session.document);
         let read_only = session.document.settings.read_only;
         let relayout_start = layout.relayout_start_page() as usize;
-        let relayout_count = layout.last_relayout_pages();
-        let is_incremental = matches!(affected_nodes, Some(nodes) if !nodes.is_empty())
-            && relayout_count < doc_layout.pages.len();
+        let is_incremental = layout.last_pass_incremental();
 
-        let pages: Vec<SinglePageSnapshot> = if is_incremental
-            && cached_pages.len() == doc_layout.pages.len()
-        {
-            let mut display_targets: Vec<usize> = (relayout_start
-                ..relayout_start + relayout_count)
-                .filter(|&idx| idx == current_page as usize)
+        let mut rebuilt_pages = Vec::new();
+        let new_len = doc_layout.pages.len();
+
+        // An incremental pass leaves page indices stable, so only the pages the
+        // engine reported dirty (plus any pages the document grew by) can differ.
+        if is_incremental && !cached_pages.is_empty() {
+            cached_pages.truncate(new_len);
+            let carried_over = cached_pages.len();
+            let mut targets: Vec<usize> = layout
+                .dirty_pages()
+                .iter()
+                .map(|&page| page as usize)
+                .filter(|&idx| idx < new_len)
                 .collect();
-            if display_targets.is_empty() {
-                display_targets.push(relayout_start);
-            }
-            for idx in display_targets {
+            targets.extend(carried_over..new_len);
+            targets.sort_unstable();
+            targets.dedup();
+
+            for idx in targets {
                 let page = &doc_layout.pages[idx];
-                let list =
-                    DisplayListBuilder::from_page_without_atlas(page, *version);
-                cached_pages[idx] = SinglePageSnapshot {
+                let list = DisplayListBuilder::from_page_without_atlas(page, *version);
+                let bytes = DisplayListBuilder::to_page_bytes(&list);
+                if idx < carried_over
+                    && DisplayListBuilder::page_bytes_match_content(
+                        &cached_pages[idx].bytes,
+                        &bytes,
+                    )
+                {
+                    // Reflowed to an identical result: keep the shared Arc so
+                    // downstream readers see no churn on untouched pages.
+                    continue;
+                }
+                let snapshot = Arc::new(SinglePageSnapshot {
+                    version: *version,
+                    bytes: Arc::new(bytes),
+                    page_width: page.width,
+                    page_height: page.height,
+                });
+                if idx < cached_pages.len() {
+                    cached_pages[idx] = snapshot;
+                } else {
+                    cached_pages.push(snapshot);
+                }
+                rebuilt_pages.push(idx as u32);
+            }
+        } else {
+            cached_pages.clear();
+            cached_pages.reserve(new_len);
+            for (idx, page) in doc_layout.pages.iter().enumerate() {
+                let list = DisplayListBuilder::from_page_without_atlas(page, *version);
+                cached_pages.push(Arc::new(SinglePageSnapshot {
+                    version: *version,
                     bytes: Arc::new(DisplayListBuilder::to_page_bytes(&list)),
                     page_width: page.width,
                     page_height: page.height,
-                };
+                }));
+                rebuilt_pages.push(idx as u32);
             }
-            cached_pages.clone()
-        } else {
-            doc_layout
-                .pages
-                .iter()
-                .map(|page| {
-                    let list =
-                        DisplayListBuilder::from_page_without_atlas(page, *version);
-                    SinglePageSnapshot {
-                        bytes: Arc::new(DisplayListBuilder::to_page_bytes(&list)),
-                        page_width: page.width,
-                        page_height: page.height,
-                    }
-                })
-                .collect()
-        };
-
-        *cached_pages = pages.clone();
+        }
 
         let atlas = layout.atlas();
         let atlas_generation = atlas.generation;
@@ -278,38 +363,93 @@ fn worker_loop(
         let atlas_height = atlas.height;
         let atlas_bytes = Arc::new(DisplayListBuilder::atlas_to_bytes(atlas, atlas_generation));
 
-        let page_count = pages.len().max(1) as u32;
+        let page_count = cached_pages.len().max(1) as u32;
         let props_json = document_properties_json(&session.document, page_count);
         let page_index = current_page.min(page_count.saturating_sub(1));
-        snapshot.publish(snapshot_from_pages(
-            pages,
-            page_index,
-            *version,
-            atlas_generation,
-            atlas_width,
-            atlas_height,
-            atlas_bytes,
-            text,
-            props_json,
-            read_only,
-        ));
-        let mut cache = layout_cache.write();
-        if is_incremental {
-            cache.update_from_session_incremental(
-                layout,
-                &session.document,
-                &session.buffer,
+
+        if is_incremental && !cached_pages.is_empty() {
+            let updated: Vec<Arc<SinglePageSnapshot>> =
+                rebuilt_pages.iter().map(|&i| cached_pages[i as usize].clone()).collect();
+            snapshot.publish_incremental(
                 *version,
-                relayout_start as u32,
+                page_index,
                 page_count,
+                &rebuilt_pages,
+                &updated,
+                atlas_generation,
+                atlas_width,
+                atlas_height,
+                atlas_bytes,
+                text,
+                props_json,
+                read_only,
             );
         } else {
-            cache.update_from_session(layout, &session.document, &session.buffer);
+            let pages: Vec<SinglePageSnapshot> = cached_pages
+                .iter()
+                .map(|p| (**p).clone())
+                .collect();
+            snapshot.publish(snapshot_from_pages(
+                pages,
+                page_index,
+                *version,
+                atlas_generation,
+                atlas_width,
+                atlas_height,
+                atlas_bytes,
+                text,
+                props_json,
+                read_only,
+            ));
         }
-        *version
+
+        // A forward pass only moves layout, never the document, so the cache can
+        // keep the Arc it already holds instead of paying for a deep clone per chunk.
+        let doc_arc = match relayout {
+            Relayout::Forward => layout_cache.read().document_snapshot(),
+            _ => Arc::new(session.document.clone()),
+        };
+        {
+            let mut cache = layout_cache.write();
+            if is_incremental {
+                cache.update_from_session_incremental(
+                    layout,
+                    Arc::clone(&doc_arc),
+                    *version,
+                    page_count,
+                    layout.has_pending_reflow(),
+                );
+            } else {
+                cache.update_from_session(layout, doc_arc);
+            }
+        }
+        // Prefer the visible page when it was part of this pass so the caller's
+        // completion event names the page it is actually waiting to repaint.
+        let ready_page = if rebuilt_pages.contains(&current_page) {
+            current_page
+        } else {
+            rebuilt_pages
+                .first()
+                .copied()
+                .unwrap_or_else(|| relayout_start.min(page_count.saturating_sub(1) as usize) as u32)
+        };
+        Some(RebuildOutcome {
+            version: *version,
+            rebuilt_pages,
+            ready_page,
+        })
     };
 
-    version = rebuild(&session, &mut layout, &mut version, current_page, None, &mut cached_pages);
+    version = rebuild(
+        &session,
+        &mut layout,
+        &mut version,
+        current_page,
+        Relayout::Full,
+        &mut cached_pages,
+    )
+    .expect("full rebuild always produces a layout")
+    .version;
     let page_count = layout.page_count() as u32;
     events.send(BridgeEvent::DocumentOpened {
         request_id: STARTUP_REQUEST_ID,
@@ -318,16 +458,61 @@ fn worker_loop(
 
     let mut pending: Option<QueuedCommand> = None;
 
-    loop {
-        let QueuedCommand {
+    'commands: loop {
+        let queued = match pending.take() {
+            Some(queued) => Some(queued),
+            None => loop {
+                // Anything the caller sent preempts background work, so the queue
+                // is drained first and re-checked after every unit of idle work.
+                match cmd_rx.try_recv() {
+                    Ok(queued) => break Some(queued),
+                    Err(crossbeam_channel::TryRecvError::Disconnected) => break None,
+                    Err(crossbeam_channel::TryRecvError::Empty) => {}
+                }
+                if events.flush() {
+                    continue;
+                }
+                if layout.has_pending_reflow() {
+                    if let Some(outcome) = rebuild(
+                        &session,
+                        &mut layout,
+                        &mut version,
+                        current_page,
+                        Relayout::Forward,
+                        &mut cached_pages,
+                    ) {
+                        version = outcome.version;
+                        if !outcome.rebuilt_pages.is_empty() {
+                            events.send(BridgeEvent::DisplayListReady {
+                                request_id: BACKGROUND_REQUEST_ID,
+                                page: outcome.ready_page,
+                                version,
+                            });
+                        }
+                    }
+                    continue;
+                }
+                if events.has_backlog() {
+                    // Correlation acks are still queued behind a full channel; wake
+                    // periodically to retry instead of sleeping until the next command.
+                    match cmd_rx.recv_timeout(EVENT_DRAIN_POLL) {
+                        Ok(queued) => break Some(queued),
+                        Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+                        Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break None,
+                    }
+                }
+                match cmd_rx.recv() {
+                    Ok(queued) => break Some(queued),
+                    Err(_) => break None,
+                }
+            },
+        };
+        let Some(QueuedCommand {
             request_id: req_id,
             inner: cmd,
-        } = match pending.take() {
-            Some(queued) => queued,
-            None => match cmd_rx.recv() {
-                Ok(queued) => queued,
-                Err(_) => break,
-            },
+        }) = queued
+        else {
+            break 'commands;
         };
 
         match cmd {
@@ -335,7 +520,16 @@ fn worker_loop(
                 session = EditSession::new();
                 format_ctx = FormatContext::new_document();
                 current_page = 0;
-                version = rebuild(&session, &mut layout, &mut version, current_page, None, &mut cached_pages);
+                version = rebuild(
+                    &session,
+                    &mut layout,
+                    &mut version,
+                    current_page,
+                    Relayout::Full,
+                    &mut cached_pages,
+                )
+                .expect("full rebuild always produces a layout")
+                .version;
                 let page_count = layout.page_count() as u32;
                 events.send(BridgeEvent::DocumentOpened { request_id: req_id, page_count });
             }
@@ -345,7 +539,16 @@ fn worker_loop(
                         format_ctx = FormatContext::from_bundle(bundle.clone(), path_hint);
                         session = EditSession::from_document(bundle.document);
                         current_page = 0;
-                        version = rebuild(&session, &mut layout, &mut version, current_page, None, &mut cached_pages);
+                        version = rebuild(
+                    &session,
+                    &mut layout,
+                    &mut version,
+                    current_page,
+                    Relayout::Full,
+                    &mut cached_pages,
+                )
+                .expect("full rebuild always produces a layout")
+                .version;
                         let page_count = layout.page_count() as u32;
                         events.send(BridgeEvent::DocumentOpened { request_id: req_id, page_count });
                     }
@@ -395,44 +598,6 @@ fn worker_loop(
             BridgeCommand::ToggleTrackChanges { enabled } => {
                 session.document.settings.track_changes_enabled = enabled;
             }
-            BridgeCommand::AcceptAllRevisions => {
-                match session.apply(Command::AcceptAllRevisions) {
-                    Ok(_) => {
-                        format_ctx.mark_document_modified();
-                        version = rebuild(&session, &mut layout, &mut version, current_page, None, &mut cached_pages);
-                        events.send(BridgeEvent::DisplayListReady {
-                            request_id: req_id,
-                            page: current_page,
-                            version,
-                        });
-                    }
-                    Err(err) => {
-                        events.send(BridgeEvent::Error {
-                            request_id: req_id,
-                            message: err.to_string(),
-                        });
-                    }
-                }
-            }
-            BridgeCommand::RejectAllRevisions => {
-                match session.apply(Command::RejectAllRevisions) {
-                    Ok(_) => {
-                        format_ctx.mark_document_modified();
-                        version = rebuild(&session, &mut layout, &mut version, current_page, None, &mut cached_pages);
-                        events.send(BridgeEvent::DisplayListReady {
-                            request_id: req_id,
-                            page: current_page,
-                            version,
-                        });
-                    }
-                    Err(err) => {
-                        events.send(BridgeEvent::Error {
-                            request_id: req_id,
-                            message: err.to_string(),
-                        });
-                    }
-                }
-            }
             BridgeCommand::PasteHtml {
                 run_id,
                 offset,
@@ -441,7 +606,16 @@ fn worker_loop(
                 Ok(doc) => {
                     if paste::paste_fragment_at(&mut session, run_id, offset, &doc).is_ok() {
                         format_ctx.mark_document_modified();
-                        version = rebuild(&session, &mut layout, &mut version, current_page, None, &mut cached_pages);
+                        version = rebuild(
+                    &session,
+                    &mut layout,
+                    &mut version,
+                    current_page,
+                    Relayout::Full,
+                    &mut cached_pages,
+                )
+                .expect("full rebuild always produces a layout")
+                .version;
                         events.send(BridgeEvent::DisplayListReady {
                             request_id: req_id,
                             page: current_page,
@@ -470,7 +644,16 @@ fn worker_loop(
                     if paste::paste_fragment_at(&mut session, run_id, offset, &result.document).is_ok()
                     {
                         format_ctx.mark_document_modified();
-                        version = rebuild(&session, &mut layout, &mut version, current_page, None, &mut cached_pages);
+                        version = rebuild(
+                    &session,
+                    &mut layout,
+                    &mut version,
+                    current_page,
+                    Relayout::Full,
+                    &mut cached_pages,
+                )
+                .expect("full rebuild always produces a layout")
+                .version;
                         events.send(BridgeEvent::DisplayListReady {
                             request_id: req_id,
                             page: current_page,
@@ -510,18 +693,14 @@ fn worker_loop(
                 }
 
                 let mut apply_error = None;
-                let mut applied = 0usize;
                 let mut affected_nodes: Vec<NodeId> = Vec::new();
+                let mut tx = session.begin_transaction(None);
                 for command in commands {
-                    match session.apply(command) {
+                    match tx.apply(command) {
                         Ok(result) => {
                             affected_nodes.extend(result.affected_nodes);
-                            applied += 1;
                         }
                         Err(e) => {
-                            for _ in 0..applied {
-                                let _ = session.undo();
-                            }
                             apply_error = Some(e);
                             break;
                         }
@@ -529,19 +708,29 @@ fn worker_loop(
                 }
 
                 if let Some(e) = apply_error {
+                    if let Err(abort_err) = tx.abort() {
+                        events.send(BridgeEvent::Error {
+                            request_id: req_id,
+                            message: abort_err.to_string(),
+                        });
+                        continue;
+                    }
                     format_ctx.mark_document_modified();
-                    version = rebuild(
+                    let outcome = rebuild(
                         &session,
                         &mut layout,
                         &mut version,
                         current_page,
                         if affected_nodes.is_empty() {
-                            None
+                            Relayout::Full
                         } else {
-                            Some(affected_nodes.as_slice())
+                            Relayout::Nodes(affected_nodes.as_slice())
                         },
                         &mut cached_pages,
-                    );
+                    )
+                    .expect("edit rebuild always produces a layout");
+                    version = outcome.version;
+                    let ready_page = outcome.ready_page;
                     for batch_id in &request_ids {
                         events.send(BridgeEvent::Error {
                             request_id: *batch_id,
@@ -549,121 +738,35 @@ fn worker_loop(
                         });
                         events.send(BridgeEvent::DisplayListReady {
                             request_id: *batch_id,
-                            page: current_page,
+                            page: ready_page,
                             version,
                         });
                     }
                 } else {
+                    tx.commit();
                     format_ctx.mark_document_modified();
-                    version = rebuild(
+                    let outcome = rebuild(
                         &session,
                         &mut layout,
                         &mut version,
                         current_page,
                         if affected_nodes.is_empty() {
-                            None
+                            Relayout::Full
                         } else {
-                            Some(affected_nodes.as_slice())
+                            Relayout::Nodes(affected_nodes.as_slice())
                         },
                         &mut cached_pages,
-                    );
+                    )
+                    .expect("edit rebuild always produces a layout");
+                    version = outcome.version;
+                    let ready_page = outcome.ready_page;
                     for batch_id in request_ids {
                         events.send(BridgeEvent::DisplayListReady {
                             request_id: batch_id,
-                            page: current_page,
+                            page: ready_page,
                             version,
                         });
                     }
-                }
-            }
-            BridgeCommand::ApplyHeading1 { caret_run_id } => {
-                let para_id = paragraph_id_from_caret(&session.document, caret_run_id);
-                if let Some(para_id) = para_id {
-                    if let Some(cmd) = heading1_command_for(para_id) {
-                        let _ = session.apply(cmd);
-                        version = rebuild(&session, &mut layout, &mut version, current_page, None, &mut cached_pages);
-                        events.send(BridgeEvent::DisplayListReady {
-                            request_id: req_id,
-                            page: current_page,
-                            version,
-                        });
-                    }
-                }
-            }
-            BridgeCommand::ApplyNormalStyle { caret_run_id } => {
-                let para_id = paragraph_id_from_caret(&session.document, caret_run_id);
-                if let Some(para_id) = para_id {
-                    if let Some(cmd) = normal_style_command_for(para_id) {
-                        let _ = session.apply(cmd);
-                        version = rebuild(&session, &mut layout, &mut version, current_page, None, &mut cached_pages);
-                        events.send(BridgeEvent::DisplayListReady {
-                            request_id: req_id,
-                            page: current_page,
-                            version,
-                        });
-                    }
-                }
-            }
-            BridgeCommand::ApplyBulletList { caret_run_id } => {
-                let para_id = paragraph_id_from_caret(&session.document, caret_run_id);
-                if let Some(para_id) = para_id {
-                    if let Some(cmd) = bullet_list_command_for(para_id) {
-                        let _ = session.apply(cmd);
-                        version = rebuild(&session, &mut layout, &mut version, current_page, None, &mut cached_pages);
-                        events.send(BridgeEvent::DisplayListReady {
-                            request_id: req_id,
-                            page: current_page,
-                            version,
-                        });
-                    }
-                }
-            }
-            BridgeCommand::ApplyNumberedList { caret_run_id } => {
-                let para_id = paragraph_id_from_caret(&session.document, caret_run_id);
-                if let Some(para_id) = para_id {
-                    if let Some(cmd) = numbered_list_command_for(para_id) {
-                        let _ = session.apply(cmd);
-                        version = rebuild(&session, &mut layout, &mut version, current_page, None, &mut cached_pages);
-                        events.send(BridgeEvent::DisplayListReady {
-                            request_id: req_id,
-                            page: current_page,
-                            version,
-                        });
-                    }
-                }
-            }
-            BridgeCommand::InsertTable { rows, cols } => {
-                if let Some(cmd) = insert_table_command(&session.document, rows, cols) {
-                    let _ = session.apply(cmd);
-                    version = rebuild(&session, &mut layout, &mut version, current_page, None, &mut cached_pages);
-                    events.send(BridgeEvent::DisplayListReady {
-                        request_id: req_id,
-                        page: current_page,
-                        version,
-                    });
-                }
-            }
-            BridgeCommand::InsertImage { width, height } => {
-                if let Some(cmd) = insert_image_command(&session.document, width, height) {
-                    let _ = session.apply(cmd);
-                    version = rebuild(&session, &mut layout, &mut version, current_page, None, &mut cached_pages);
-                    events.send(BridgeEvent::DisplayListReady {
-                        request_id: req_id,
-                        page: current_page,
-                        version,
-                    });
-                }
-            }
-            BridgeCommand::InsertPageBreak { caret_run_id } => {
-                if let Some(cmd) = insert_page_break_command_for(&session.document, caret_run_id)
-                {
-                    let _ = session.apply(cmd);
-                    version = rebuild(&session, &mut layout, &mut version, current_page, None, &mut cached_pages);
-                    events.send(BridgeEvent::DisplayListReady {
-                        request_id: req_id,
-                        page: current_page,
-                        version,
-                    });
                 }
             }
             BridgeCommand::ExportPdf => {
@@ -692,7 +795,16 @@ fn worker_loop(
             }
             BridgeCommand::Undo => match session.undo() {
                 Ok(Some(_)) => {
-                    version = rebuild(&session, &mut layout, &mut version, current_page, None, &mut cached_pages);
+                    version = rebuild(
+                    &session,
+                    &mut layout,
+                    &mut version,
+                    current_page,
+                    Relayout::Full,
+                    &mut cached_pages,
+                )
+                .expect("full rebuild always produces a layout")
+                .version;
                     events.send(BridgeEvent::DisplayListReady {
                         request_id: req_id,
                         page: current_page,
@@ -714,7 +826,16 @@ fn worker_loop(
             },
             BridgeCommand::Redo => match session.redo() {
                 Ok(Some(_)) => {
-                    version = rebuild(&session, &mut layout, &mut version, current_page, None, &mut cached_pages);
+                    version = rebuild(
+                    &session,
+                    &mut layout,
+                    &mut version,
+                    current_page,
+                    Relayout::Full,
+                    &mut cached_pages,
+                )
+                .expect("full rebuild always produces a layout")
+                .version;
                     events.send(BridgeEvent::DisplayListReady {
                         request_id: req_id,
                         page: current_page,
@@ -737,105 +858,4 @@ fn worker_loop(
             BridgeCommand::Shutdown => break,
         }
     }
-}
-
-fn paragraph_id_from_caret(
-    doc: &tw_model::Document,
-    caret_run_id: Option<NodeId>,
-) -> Option<NodeId> {
-    caret_run_id
-        .and_then(|run_id| tw_edit::paragraph_id_for_run(doc, run_id).ok())
-        .or_else(|| first_paragraph_id(doc))
-}
-
-pub fn first_paragraph_id(doc: &tw_model::Document) -> Option<NodeId> {
-    doc.sections.first()?.blocks.iter().find_map(|b| match b {
-        Block::Paragraph(p) => Some(p.id),
-        _ => None,
-    })
-}
-
-pub fn last_block_id(doc: &tw_model::Document) -> Option<NodeId> {
-    doc.sections.first()?.blocks.last().map(|b| match b {
-        Block::Paragraph(p) => p.id,
-        Block::Table(t) => t.id,
-        Block::ImageBlock(i) => i.id,
-    })
-}
-
-pub fn numbered_list_command_for(paragraph_id: NodeId) -> Option<Command> {
-    Some(Command::SetNumbering {
-        paragraph_id,
-        numbering: Some(NumberingRef {
-            numbering_id: 2,
-            level: 0,
-        }),
-    })
-}
-
-pub fn bullet_list_command_for(paragraph_id: NodeId) -> Option<Command> {
-    Some(Command::SetNumbering {
-        paragraph_id,
-        numbering: Some(NumberingRef {
-            numbering_id: 1,
-            level: 0,
-        }),
-    })
-}
-
-pub fn heading1_command_for(paragraph_id: NodeId) -> Option<Command> {
-    Some(Command::ApplyParagraphStyle {
-        paragraph_id,
-        style_name: "Heading 1".into(),
-    })
-}
-
-pub fn normal_style_command_for(paragraph_id: NodeId) -> Option<Command> {
-    Some(Command::ApplyParagraphStyle {
-        paragraph_id,
-        style_name: "Normal".into(),
-    })
-}
-
-pub fn numbered_list_command(doc: &tw_model::Document) -> Option<Command> {
-    let para_id = first_paragraph_id(doc)?;
-    numbered_list_command_for(para_id)
-}
-
-pub fn bullet_list_command(doc: &tw_model::Document) -> Option<Command> {
-    let para_id = first_paragraph_id(doc)?;
-    bullet_list_command_for(para_id)
-}
-
-pub fn heading1_command(doc: &tw_model::Document) -> Option<Command> {
-    let para_id = first_paragraph_id(doc)?;
-    heading1_command_for(para_id)
-}
-
-pub fn insert_table_command(doc: &tw_model::Document, rows: u32, cols: u32) -> Option<Command> {
-    let after = last_block_id(doc)?;
-    Some(Command::InsertTable {
-        after_block_id: after,
-        rows,
-        cols,
-    })
-}
-
-pub fn insert_image_command(doc: &tw_model::Document, width: f32, height: f32) -> Option<Command> {
-    let after = last_block_id(doc)?;
-    Some(Command::InsertImage {
-        after_block_id: after,
-        width,
-        height,
-    })
-}
-
-pub fn insert_page_break_command_for(
-    doc: &tw_model::Document,
-    caret_run_id: Option<NodeId>,
-) -> Option<Command> {
-    let after = paragraph_id_from_caret(doc, caret_run_id)?;
-    Some(Command::InsertPageBreak {
-        after_block_id: after,
-    })
 }

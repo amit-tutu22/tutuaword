@@ -1,8 +1,14 @@
+use std::collections::HashMap;
+
 use crate::format::{BreakType, CharFormat, ParaFormat, SectionFormat};
 use crate::ids::{NodeId, StyleId};
 use crate::image::ImageBlock;
 use crate::revision::Revision;
 use crate::table::Table;
+use crate::vocabulary::{
+    BookmarkAnchor, CommentRef, FieldData, FootnoteRef, HeaderFooter, HeaderFooterType,
+    HyperlinkTarget, InlineImageRef, ShapeBlock,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,11 +29,9 @@ impl Run {
         }
     }
 
+    /// Display text for layout, export plaintext, and search.
     pub fn text(&self) -> &str {
-        match &self.content {
-            RunContent::Text(t) => t,
-            _ => "",
-        }
+        self.content.display_text()
     }
 
     pub fn text_mut(&mut self) -> Option<&mut String> {
@@ -38,11 +42,60 @@ impl Run {
     }
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RunContent {
     Text(String),
     Tab,
     Break(BreakType),
+    Hyperlink {
+        target: HyperlinkTarget,
+        text: String,
+    },
+    Field(FieldData),
+    InlineImage(InlineImageRef),
+    FootnoteRef(FootnoteRef),
+    CommentRef(CommentRef),
+    Bookmark(BookmarkAnchor),
+}
+
+impl RunContent {
+    /// Placeholder-friendly display string for layout and plaintext export.
+    pub fn display_text(&self) -> &str {
+        match self {
+            RunContent::Text(t) => t,
+            RunContent::Tab => "\t",
+            RunContent::Break(BreakType::Line) => "\n",
+            RunContent::Break(BreakType::Page) | RunContent::Break(BreakType::Column) => "",
+            RunContent::Hyperlink { text, .. } => text,
+            RunContent::Field(field) => field
+                .display_text
+                .as_deref()
+                .unwrap_or("[field]"),
+            RunContent::InlineImage(_) => "[image]",
+            RunContent::FootnoteRef(note) => {
+                // Stable placeholder; layout may substitute superscript number later.
+                if note.display_number.is_some() {
+                    // Leak is not acceptable; use a thread-local or return owned.
+                    // For &str return we use static placeholders per number bucket — keep simple:
+                    "[fn]"
+                } else {
+                    "[fn]"
+                }
+            }
+            RunContent::CommentRef(_) => "[comment]",
+            RunContent::Bookmark(b) => {
+                // Bookmark names vary; use generic placeholder for &str API.
+                let _ = b;
+                "[bookmark]"
+            }
+        }
+    }
+
+    /// Whether adjacent runs with the same format may merge.
+    pub fn is_mergeable_text(&self) -> bool {
+        matches!(self, RunContent::Text(_))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,11 +150,13 @@ impl Default for Paragraph {
     }
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Block {
     Paragraph(Paragraph),
     Table(Table),
     ImageBlock(ImageBlock),
+    ShapeBlock(ShapeBlock),
 }
 
 impl Block {
@@ -146,12 +201,30 @@ impl Block {
             _ => None,
         }
     }
+
+    pub fn shape(&self) -> Option<&ShapeBlock> {
+        match self {
+            Block::ShapeBlock(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn shape_mut(&mut self) -> Option<&mut ShapeBlock> {
+        match self {
+            Block::ShapeBlock(s) => Some(s),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Section {
     pub id: NodeId,
     pub format: SectionFormat,
+    #[serde(default)]
+    pub headers: HashMap<HeaderFooterType, HeaderFooter>,
+    #[serde(default)]
+    pub footers: HashMap<HeaderFooterType, HeaderFooter>,
     pub blocks: Vec<Block>,
 }
 
@@ -160,8 +233,56 @@ impl Section {
         Self {
             id: NodeId::new(),
             format: SectionFormat::default(),
+            headers: HashMap::new(),
+            footers: HashMap::new(),
             blocks: vec![Block::Paragraph(Paragraph::new())],
         }
+    }
+
+    /// Migrate legacy `SectionFormat` header/footer fields into typed maps.
+    pub fn migrate_legacy_headers_footers(&mut self) {
+        if self.headers.is_empty() {
+            if !self.format.header_blocks.is_empty() || self.format.header_text.is_some() {
+                self.headers.insert(
+                    HeaderFooterType::Default,
+                    HeaderFooter {
+                        blocks: std::mem::take(&mut self.format.header_blocks),
+                        plain_text: self.format.header_text.take(),
+                    },
+                );
+            }
+        }
+        if self.footers.is_empty() {
+            if !self.format.footer_blocks.is_empty() || self.format.footer_text.is_some() {
+                self.footers.insert(
+                    HeaderFooterType::Default,
+                    HeaderFooter {
+                        blocks: std::mem::take(&mut self.format.footer_blocks),
+                        plain_text: self.format.footer_text.take(),
+                    },
+                );
+            }
+        }
+    }
+
+    /// Header blocks for layout: typed map first, then legacy format fields.
+    pub fn header_for_layout(&self, kind: HeaderFooterType) -> Option<&HeaderFooter> {
+        self.headers
+            .get(&kind)
+            .or_else(|| {
+                if kind == HeaderFooterType::Default
+                    && (!self.format.header_blocks.is_empty() || self.format.header_text.is_some())
+                {
+                    None
+                } else {
+                    None
+                }
+            })
+    }
+
+    /// Footer blocks for layout: typed map first, then legacy format fields.
+    pub fn footer_for_layout(&self, kind: HeaderFooterType) -> Option<&HeaderFooter> {
+        self.footers.get(&kind)
     }
 }
 

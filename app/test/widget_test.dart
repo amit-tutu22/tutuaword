@@ -6,6 +6,8 @@ import 'package:tutuaword/ui/ribbon_tabs/home_tab.dart';
 import 'package:tutuaword/ui/ribbon_tabs/insert_tab.dart';
 import 'package:tutuaword/ui/ribbon_tabs/review_tab.dart';
 import 'package:tutuaword/ui/ribbon_tabs/view_tab.dart';
+
+import 'editor_test_helpers.dart';
 import 'package:tutuaword/ui/status_bar.dart';
 import 'package:tutuaword/ui/title_bar.dart';
 
@@ -16,7 +18,7 @@ void main() {
     late EditorController controller;
 
     setUp(() {
-      controller = EditorController();
+      controller = EditorController.forTest();
     });
 
     tearDown(() {
@@ -24,13 +26,7 @@ void main() {
     });
 
     testWidgets('Home ribbon renders Clipboard, Font, Paragraph, and Styles groups', (tester) async {
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: HomeTab(controller: controller),
-          ),
-        ),
-      );
+      await pumpWideRibbon(tester, HomeTab(controller: controller));
 
       expect(find.text('Clipboard'), findsOneWidget);
       expect(find.text('Font'), findsOneWidget);
@@ -43,16 +39,11 @@ void main() {
     testWidgets('Tapping Bold button flips controller.bold', (tester) async {
       expect(controller.bold, isFalse);
 
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: HomeTab(controller: controller),
-          ),
-        ),
-      );
+      await pumpWideRibbon(tester, HomeTab(controller: controller));
 
-      await tester.tap(find.byIcon(Icons.format_bold));
+      await tester.tap(find.byTooltip('Bold'));
       await tester.pump();
+      await controller.ensureLayoutReady();
 
       expect(controller.bold, isTrue);
     });
@@ -162,16 +153,11 @@ void main() {
     });
 
     testWidgets('Italic toggle in Home tab updates controller', (tester) async {
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: HomeTab(controller: controller),
-          ),
-        ),
-      );
+      await pumpWideRibbon(tester, HomeTab(controller: controller));
 
-      await tester.tap(find.byIcon(Icons.format_italic));
+      await tester.tap(find.byTooltip('Italic'));
       await tester.pump();
+      await controller.ensureLayoutReady();
       expect(controller.italic, isTrue);
     });
   });

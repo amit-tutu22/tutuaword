@@ -48,7 +48,6 @@ fn export_document_with_header_footer_and_table() {
         .id;
     apply(
         &mut session.document,
-        &mut session.buffer,
         Command::InsertTable {
             after_block_id: block_id,
             rows: 2,

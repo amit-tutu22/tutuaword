@@ -49,6 +49,15 @@ Invalidation: page-granular — a keystroke re-layouts only the affected page.
 | **Shared mutable state (Arc<Mutex<Document>>)** | Data races between UI reads and worker writes; complex locking |
 | **MessagePack/Protobuf serialization for FFI** | Serialization overhead on every frame; flat bytes are faster |
 
+## Implementation status (R1.4)
+
+| Invariant | Status | Notes |
+|-----------|--------|-------|
+| UI thread never blocks on edit FFI | **Implemented** | Edit exports enqueue and return; Dart correlates via `tw_last_request_id` + `NativeEventRouter` |
+| Worker → UI event callback | **Implemented** | `NativeCallable.listener` dispatches from worker thread to Dart isolate |
+| Open/save blocking | Implemented | Open/save/spell check have non-blocking `tw_*_async` enqueues plus `tw_take_*` getters keyed by `request_id`; the 30 s blocking exports remain only as wrappers for callers that have not migrated |
+| `tw_wait_for_layout` | Test-only | Gated behind `#[cfg(test)]` in `tw-ffi` |
+
 ## WASM Exception
 
 Web platform (Phase 1): no `SharedArrayBuffer` requirement. Layout runs synchronously after each command. Acceptable because web is not the primary target and WASM threading is available in Phase 2.

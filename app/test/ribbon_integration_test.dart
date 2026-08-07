@@ -26,7 +26,8 @@ void main() {
     late EditorController controller;
 
     setUp(() {
-      controller = EditorController(enableAutosave: false);
+      controller = EditorController.forTest();
+      controller.ensureGlyphCaret();
     });
 
     tearDown(() {
@@ -34,7 +35,7 @@ void main() {
     });
 
     testWidgets('EditorScreen renders title bar, ribbon, canvas, and status bar', (tester) async {
-      await pumpWide(tester, const EditorScreen());
+      await pumpWide(tester, EditorScreen(controller: controller));
 
       expect(find.byType(WordTitleBar), findsOneWidget);
       expect(find.byType(WordRibbon), findsOneWidget);
@@ -67,7 +68,8 @@ void main() {
     late EditorController controller;
 
     setUp(() {
-      controller = EditorController(enableAutosave: false);
+      controller = EditorController.forTest();
+      controller.ensureGlyphCaret();
     });
 
     tearDown(() {
@@ -135,6 +137,7 @@ void main() {
 
       await tester.tap(find.text('Arial').last);
       await tester.pumpAndSettle();
+      await controller.ensureLayoutReady();
 
       expect(controller.fontFamily, 'Arial');
     });
@@ -150,6 +153,7 @@ void main() {
 
       await tester.tap(find.text('14').last);
       await tester.pumpAndSettle();
+      await controller.ensureLayoutReady();
 
       expect(controller.fontSize, 14);
     });
@@ -161,6 +165,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('14').last);
       await tester.pumpAndSettle();
+      await controller.ensureLayoutReady();
 
       expect(controller.fontSize, 14);
       expect(find.text('14'), findsOneWidget);
@@ -177,10 +182,12 @@ void main() {
 
       await tester.tap(find.byTooltip('All Caps'));
       await tester.pump();
+      await controller.ensureLayoutReady();
       expect(controller.allCaps, isTrue);
 
       await tester.tap(find.byTooltip('Hidden'));
       await tester.pump();
+      await controller.ensureLayoutReady();
       expect(controller.hidden, isTrue);
     });
 
@@ -189,10 +196,12 @@ void main() {
 
       await tester.tap(find.byIcon(Icons.format_italic));
       await tester.pump();
+      await controller.ensureLayoutReady();
       expect(controller.italic, isTrue);
 
       await tester.tap(find.byIcon(Icons.format_underline));
       await tester.pump();
+      await controller.ensureLayoutReady();
       expect(controller.underline, isTrue);
     });
 

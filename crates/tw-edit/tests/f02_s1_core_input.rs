@@ -26,22 +26,13 @@ fn u_f02_s1_insert_undo_redo() {
         session.document.paragraph_at(0, 0).unwrap().full_text(),
         "x".repeat(100)
     );
+    assert_eq!(session.undo_stack_len(), 1);
 
-    for _ in 0..100 {
-        assert!(session.can_undo());
-        session.undo().unwrap();
-    }
+    session.undo().unwrap();
     assert_eq!(session.document.paragraph_at(0, 0).unwrap().full_text(), "");
     assert!(!session.can_undo());
 
-    for i in 0..100 {
-        assert!(session.can_redo());
-        session.redo().unwrap();
-        assert_eq!(
-            session.document.paragraph_at(0, 0).unwrap().full_text(),
-            "x".repeat(i + 1)
-        );
-    }
+    session.redo().unwrap();
     assert_eq!(
         session.document.paragraph_at(0, 0).unwrap().full_text(),
         "x".repeat(100)

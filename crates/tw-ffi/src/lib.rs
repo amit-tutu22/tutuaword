@@ -1,18 +1,38 @@
 use parking_lot::Mutex;
 use serde::Deserialize;
+use std::collections::VecDeque;
 use std::ffi::{c_char, CStr};
 use std::slice;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::Duration;
 use tw_core::{BridgeEvent, Session, WaitOutcome, STARTUP_REQUEST_ID};
-use tw_edit::{Command, DocPosition, DocRange};
+use tw_edit::{command_from_json, Command, DocPosition, DocRange};
 use tw_model::{CharFormat, NodeId, ParaFormat};
 use uuid::Uuid;
 
 static SESSION: Mutex<Option<Session>> = Mutex::new(None);
 static LAST_ERROR: StdMutex<Option<String>> = StdMutex::new(None);
 
-type EventCallback = extern "C" fn(event_type: u32, data: *const u8, len: usize);
+/// Host event callback.
+///
+/// `event_type` and `request_id` are passed **by value** and are the authoritative
+/// copy: a host must never have to read the payload to correlate a request. This
+/// is deliberate. A host that defers the callback to a later turn of its own event
+/// loop (Dart's `NativeCallable.listener`, for instance) will find `payload`
+/// dangling, because it points at a stack buffer belonging to the frame that made
+/// the call.
+///
+/// `payload` is valid only for the duration of the call and must be copied before
+/// returning if it is needed afterwards. It currently holds the same two scalars
+/// in the 12-byte wire encoding (LE `u32` type, LE `u64` request id) and exists so
+/// future events can carry inline data without another ABI break.
+type EventCallback = extern "C" fn(
+    event_type: u32,
+    request_id: u64,
+    payload: *const u8,
+    payload_len: usize,
+);
 
 #[derive(Default, Deserialize)]
 struct CharFormatPatch {
@@ -25,6 +45,7 @@ struct CharFormatPatch {
 }
 
 static EVENT_CALLBACK: OnceLock<EventCallback> = OnceLock::new();
+static LAST_REQUEST_ID: AtomicU64 = AtomicU64::new(0);
 
 /// Minimal wire format event types (LE u32 in callback payload bytes 0..4).
 pub const TW_EVENT_DISPLAY_LIST_READY: u32 = 1;
@@ -35,10 +56,14 @@ pub const TW_EVENT_ERROR: u32 = 5;
 
 const EVENT_WIRE_BYTES: usize = 12;
 
-const EDIT_WAIT: Duration = Duration::from_millis(100);
 const BLOCKING_WAIT: Duration = Duration::from_secs(30);
 /// Returned when an exported function panics across the FFI boundary.
 const FFI_PANIC: i32 = -99;
+
+/// `tw_hit_test` refused because the page still carries pre-edit geometry.
+/// Distinct from `-2`, which means the page is current and nothing was under the
+/// point. Only applies to queries that read a page's line map.
+const HIT_PAGE_STALE: i32 = -4;
 
 fn record_internal_panic() {
     if let Ok(mut guard) = LAST_ERROR.lock() {
@@ -79,17 +104,167 @@ fn encode_event_wire(event: &BridgeEvent) -> [u8; EVENT_WIRE_BYTES] {
     wire
 }
 
-fn forward_event_to_dart(event: BridgeEvent) {
+fn forward_event_to_host(event: &BridgeEvent) {
     let Some(callback) = EVENT_CALLBACK.get() else {
         return;
     };
-    let event_type = bridge_event_type(&event);
-    let wire = encode_event_wire(&event);
-    callback(event_type, wire.as_ptr(), wire.len());
+    let event_type = bridge_event_type(event);
+    let wire = encode_event_wire(event);
+    callback(event_type, event.request_id(), wire.as_ptr(), wire.len());
 }
 
+/// Events collected under the engine locks, waiting to be handed to the host.
+///
+/// The host callback must never run while `SESSION` is held. A host calling back
+/// into any export from its event callback is entirely reasonable, and `SESSION`
+/// is a non-reentrant `parking_lot` mutex, so doing that under the lock would
+/// deadlock the caller. Everything the observer sees therefore lands here and is
+/// drained by [`flush_event_outbox`] once the lock is released.
+static EVENT_OUTBOX: Mutex<VecDeque<BridgeEvent>> = Mutex::new(VecDeque::new());
+
+/// Cap on undelivered events, matching the session's own correlation buffer. Only
+/// reachable if the host stops flushing entirely, in which case it is not
+/// listening anyway; async results are already recorded and survive the drop.
+const MAX_OUTBOX_EVENTS: usize = 1024;
+
 fn install_event_observer(session: &Session) {
-    session.set_event_observer(Arc::new(forward_event_to_dart));
+    // Runs with `SESSION` held: bookkeeping only, no host code, no re-entry.
+    session.set_event_observer(Arc::new(|event| {
+        ASYNC_RESULTS.lock().record(&event);
+        let mut outbox = EVENT_OUTBOX.lock();
+        outbox.push_back(event);
+        while outbox.len() > MAX_OUTBOX_EVENTS {
+            outbox.pop_front();
+        }
+    }));
+}
+
+/// Hand collected events to the host. Callers **must** have released `SESSION`
+/// first. Returns the number delivered.
+fn flush_event_outbox() -> usize {
+    let events = {
+        let mut outbox = EVENT_OUTBOX.lock();
+        std::mem::take(&mut *outbox)
+    };
+    for event in &events {
+        forward_event_to_host(event);
+    }
+    events.len()
+}
+
+/// Run `f` under the session lock, then deliver whatever it produced. The two
+/// steps are separate so the host callback never sees a held lock.
+fn with_session_then_flush<F: FnOnce(&Session) -> i32>(f: F) -> i32 {
+    let code = with_session(f);
+    flush_event_outbox();
+    code
+}
+
+/// Async result slots kept alive between an enqueue and its getter (P1-7).
+///
+/// Dart enqueues on the UI isolate, learns the outcome from the event callback,
+/// and only then fetches the payload, so the worker's completion has to survive
+/// until the getter runs. Slots are bounded and evicted oldest-first: an
+/// abandoned request costs at most one saved document until it ages out.
+const MAX_ASYNC_RESULTS: usize = 16;
+
+enum AsyncResult {
+    Pending,
+    Done(Vec<u8>),
+    Failed,
+}
+
+struct AsyncResultStore {
+    slots: VecDeque<(u64, AsyncResult)>,
+}
+
+impl AsyncResultStore {
+    fn slot(&mut self, request_id: u64) -> Option<&mut AsyncResult> {
+        self.slots
+            .iter_mut()
+            .find(|(id, _)| *id == request_id)
+            .map(|(_, result)| result)
+    }
+
+    fn clear(&mut self) {
+        self.slots.clear();
+    }
+
+    fn track(&mut self, request_id: u64) {
+        self.slots.retain(|(id, _)| *id != request_id);
+        while self.slots.len() >= MAX_ASYNC_RESULTS {
+            self.slots.pop_front();
+        }
+        self.slots.push_back((request_id, AsyncResult::Pending));
+    }
+
+    /// Fill the slot for a tracked request; untracked ids (edits, background
+    /// reflow) are ignored so they cannot evict a result Dart is waiting on.
+    fn record(&mut self, event: &BridgeEvent) {
+        let result = match event {
+            BridgeEvent::DocumentOpened { .. } => AsyncResult::Done(Vec::new()),
+            BridgeEvent::DocumentSaved { data, .. } => AsyncResult::Done(data.clone()),
+            BridgeEvent::SpellCheckResult { misspellings, .. } => {
+                AsyncResult::Done(misspellings.join("\n").into_bytes())
+            }
+            BridgeEvent::Error { .. } => AsyncResult::Failed,
+            BridgeEvent::DisplayListReady { .. } => return,
+        };
+        if let Some(slot) = self.slot(event.request_id()) {
+            if matches!(slot, AsyncResult::Pending) {
+                *slot = result;
+            }
+        }
+    }
+
+    /// `None` = never enqueued or already taken; a settled slot is removed.
+    fn take(&mut self, request_id: u64) -> Option<AsyncResult> {
+        let index = self.slots.iter().position(|(id, _)| *id == request_id)?;
+        if matches!(self.slots[index].1, AsyncResult::Pending) {
+            return Some(AsyncResult::Pending);
+        }
+        self.slots.remove(index).map(|(_, result)| result)
+    }
+}
+
+static ASYNC_RESULTS: Mutex<AsyncResultStore> = Mutex::new(AsyncResultStore {
+    slots: VecDeque::new(),
+});
+
+/// Enqueue `command` and hand the correlation id straight back to Dart.
+fn enqueue_async(out_request_id: *mut u64, enqueue: impl FnOnce(&Session) -> Option<u64>) -> i32 {
+    if out_request_id.is_null() {
+        return -2;
+    }
+    with_session(|session| {
+        let Some(request_id) = enqueue(session) else {
+            return -4;
+        };
+        ASYNC_RESULTS.lock().track(request_id);
+        unsafe {
+            *out_request_id = request_id;
+        }
+        0
+    })
+}
+
+/// Shared getter body: 0 = ready, 1 = still pending, -2 = failed, -3 = unknown id.
+fn take_async_result(
+    request_id: u64,
+    deliver: impl FnOnce(Vec<u8>),
+) -> i32 {
+    with_session_then_flush(|session| {
+        session.pump_events();
+        match ASYNC_RESULTS.lock().take(request_id) {
+            None => -3,
+            Some(AsyncResult::Pending) => 1,
+            Some(AsyncResult::Failed) => -2,
+            Some(AsyncResult::Done(bytes)) => {
+                deliver(bytes);
+                0
+            }
+        }
+    })
 }
 
 /// Transfer buffer ownership to the Dart caller. Must be released with `tw_free_buffer`.
@@ -150,15 +325,27 @@ fn wait_for_open(session: &Session, request_id: u64) -> i32 {
     })
 }
 
-/// Brief wait on edit hot paths; return success if the worker is still catching up.
-fn wait_for_document_edit(session: &Session, request_id: u64) -> i32 {
-    match wait_for_request(session, request_id, EDIT_WAIT, |event| match event {
-        BridgeEvent::DisplayListReady { .. } => Some(0),
-        BridgeEvent::Error { .. } => Some(-2),
-        _ => None,
-    }) {
-        -3 => 0,
-        code => code,
+/// Fire-and-forget edit enqueue (R1.4): record [request_id] for Dart correlation.
+fn finish_edit_enqueue(request_id: u64) -> i32 {
+    LAST_REQUEST_ID.store(request_id, Ordering::Relaxed);
+    0
+}
+
+/// Apply a deserialized [`Command`] on the worker thread (R2.5 single edit path).
+fn apply_command(command: Command) -> i32 {
+    with_session(|session| {
+        let Some(request_id) = session.apply(command) else {
+            return -4;
+        };
+        finish_edit_enqueue(request_id)
+    })
+}
+
+/// Deserialize JSON command bytes and enqueue (R2.5 consolidated edit dispatch).
+fn dispatch_command_bytes(bytes: &[u8]) -> i32 {
+    match command_from_json(bytes) {
+        Ok(command) => apply_command(command),
+        Err(_) => -3,
     }
 }
 
@@ -194,6 +381,26 @@ fn wait_for_spell_check(
     })
 }
 
+/// Create the session and register the event callback.
+///
+/// # The host must pump
+///
+/// **Registering `callback` here is not enough to receive events.** `callback`
+/// fires only while the FFI layer drains the worker's event channel, and nothing
+/// drains it spontaneously: `tw_dispatch` and the other edit exports enqueue a
+/// command and return, and the worker pushes its completion into a channel that
+/// sits there until somebody reads it.
+///
+/// A host that never calls [`tw_pump_events`] therefore sees no events at all,
+/// and every correlated wait runs to its full 30 s timeout. The failure looks
+/// like a hang in an unrelated feature -- select-all timing out, say -- because
+/// the only thing that used to drain the channel was whichever blocking export
+/// happened to be on the stack.
+///
+/// Call `tw_pump_events` on a timer or frame callback for the lifetime of the
+/// session. Something in the low milliseconds while a correlated request is
+/// outstanding and ~16 ms when idle keeps background reflow repaints flowing
+/// without spinning.
 #[no_mangle]
 pub extern "C" fn tw_init(callback: EventCallback) -> i32 {
     guard_ffi(|| {
@@ -203,8 +410,10 @@ pub extern "C" fn tw_init(callback: EventCallback) -> i32 {
             let session = Session::new();
             install_event_observer(&session);
             *guard = Some(session);
+            ASYNC_RESULTS.lock().clear();
+            EVENT_OUTBOX.lock().clear();
         }
-        with_session(|session| wait_for_document_ready(session))
+        with_session_then_flush(wait_for_document_ready)
     })
 }
 
@@ -213,18 +422,37 @@ pub extern "C" fn tw_shutdown() {
     guard_ffi_void(|| {
         let mut guard = SESSION.lock();
         *guard = None;
+        // Request ids restart with the next session, so results left over from
+        // this one would otherwise collide with fresh ids.
+        ASYNC_RESULTS.lock().clear();
+        EVENT_OUTBOX.lock().clear();
     });
 }
 
 #[no_mangle]
 pub extern "C" fn tw_new_document() -> i32 {
     guard_ffi(|| {
-        with_session(|session| {
+        with_session_then_flush(|session| {
             let Some(request_id) = session.new_document() else {
                 return -4;
             };
             wait_for_open(session, request_id)
         })
+    })
+}
+
+/// JSON command dispatch for all document edits (R2.5).
+///
+/// `command_ptr`/`command_len` must contain a serialized [`Command`] JSON object.
+/// Returns `0` on enqueue success; use `tw_last_request_id()` for async correlation.
+#[no_mangle]
+pub extern "C" fn tw_dispatch(command_ptr: *const u8, command_len: usize) -> i32 {
+    guard_ffi(|| {
+        if command_ptr.is_null() || command_len == 0 {
+            return -3;
+        }
+        let bytes = unsafe { slice::from_raw_parts(command_ptr, command_len) };
+        dispatch_command_bytes(bytes)
     })
 }
 
@@ -235,21 +463,16 @@ pub extern "C" fn tw_apply_insert_text(
     text_ptr: *const c_char,
 ) -> i32 {
     guard_ffi(|| {
-        with_session(|session| {
-            let Some(run_id) = parse_node_id(run_id_ptr) else {
-                return -2;
-            };
-            let Some(text) = parse_cstr(text_ptr) else {
-                return -3;
-            };
-            let Some(request_id) = session.apply(Command::InsertText {
-                run_id,
-                offset: offset as usize,
-                text,
-            }) else {
-                return -4;
-            };
-            wait_for_document_edit(session, request_id)
+        let Some(run_id) = parse_node_id(run_id_ptr) else {
+            return -2;
+        };
+        let Some(text) = parse_cstr(text_ptr) else {
+            return -3;
+        };
+        apply_command(Command::InsertText {
+            run_id,
+            offset: offset as usize,
+            text,
         })
     })
 }
@@ -270,7 +493,7 @@ pub extern "C" fn tw_get_display_list(
         };
 
         let snapshot = session.get_display_list_bytes();
-        transfer_bytes_to_caller(snapshot.bytes.clone(), out_ptr, out_len);
+        transfer_bytes_to_caller(snapshot.bytes.as_ref().clone(), out_ptr, out_len);
         unsafe {
             *out_version = snapshot.version;
             *out_width = snapshot.page_width;
@@ -290,6 +513,7 @@ pub extern "C" fn tw_get_page_display_list(
     page: u32,
     out_ptr: *mut *const u8,
     out_len: *mut usize,
+    out_version: *mut u64,
     out_width: *mut f32,
     out_height: *mut f32,
 ) -> i32 {
@@ -305,10 +529,32 @@ pub extern "C" fn tw_get_page_display_list(
 
         transfer_bytes_to_caller(snapshot.bytes.as_ref().clone(), out_ptr, out_len);
         unsafe {
+            if !out_version.is_null() {
+                *out_version = snapshot.version;
+            }
             *out_width = snapshot.page_width;
             *out_height = snapshot.page_height;
         }
         0
+    })
+}
+
+/// Current atlas generation without cloning the pixel buffer, so a caller can
+/// decide whether `tw_get_atlas` is worth paying for.
+///
+/// 0 = generation written, -1 = no session, -2 = null out pointer.
+#[no_mangle]
+pub extern "C" fn tw_get_atlas_generation(out_generation: *mut u64) -> i32 {
+    guard_ffi(|| {
+        if out_generation.is_null() {
+            return -2;
+        }
+        with_session(|session| {
+            unsafe {
+                *out_generation = session.atlas_generation();
+            }
+            0
+        })
     })
 }
 
@@ -364,7 +610,7 @@ pub extern "C" fn tw_get_document_properties_json(
             return -1;
         };
 
-        let json = session.get_display_list_bytes().document_properties_json;
+        let json = session.get_display_list_bytes().document_properties_json.clone();
         transfer_bytes_to_caller(json.into_bytes(), out_ptr, out_len);
         0
     })
@@ -393,7 +639,7 @@ pub extern "C" fn tw_get_document_text(out_ptr: *mut *const u8, out_len: *mut us
             return -1;
         };
 
-        let text = session.get_display_list_bytes().document_text;
+        let text = session.get_display_list_bytes().document_text.clone();
         transfer_bytes_to_caller(text.into_bytes(), out_ptr, out_len);
         0
     })
@@ -432,14 +678,66 @@ pub extern "C" fn tw_get_text_range(
     })
 }
 
+/// Blocking wrapper over [`tw_save_document_async`] + [`tw_take_saved_document`].
 #[no_mangle]
 pub extern "C" fn tw_save_document(out_ptr: *mut *const u8, out_len: *mut usize) -> i32 {
     guard_ffi(|| {
-        with_session(|session| {
+        with_session_then_flush(|session| {
             let Some(request_id) = session.save() else {
                 return -4;
             };
             wait_for_document_saved(session, request_id, out_ptr, out_len)
+        })
+    })
+}
+
+/// Enqueue a save and return immediately with the correlation id. The bytes are
+/// held until [`tw_take_saved_document`] collects them.
+///
+/// 0 = enqueued, -1 = no session, -2 = null out pointer, -4 = worker unavailable.
+#[no_mangle]
+pub extern "C" fn tw_save_document_async(out_request_id: *mut u64) -> i32 {
+    guard_ffi(|| enqueue_async(out_request_id, |session| session.save()))
+}
+
+/// Enqueue a save in `format` and return the correlation id. Collected with
+/// [`tw_take_saved_document`].
+#[no_mangle]
+pub extern "C" fn tw_save_document_as_async(
+    format_ptr: *const c_char,
+    out_request_id: *mut u64,
+) -> i32 {
+    guard_ffi(|| {
+        if format_ptr.is_null() {
+            return -2;
+        }
+        let format_str = unsafe { CStr::from_ptr(format_ptr) }.to_string_lossy().into_owned();
+        enqueue_async(out_request_id, |session| {
+            session.save_as(format_from_extension_str(&format_str))
+        })
+    })
+}
+
+/// Collect the bytes produced by a save enqueued with `tw_save_document_async`
+/// or `tw_save_document_as_async`. The buffer must be released with
+/// `tw_free_buffer`.
+///
+/// 0 = ready (out params written), 1 = not ready yet (call again after the
+/// `DocumentSaved` event), -1 = no session, -2 = the save failed (details via
+/// `tw_get_last_error`), -3 = unknown request id: never enqueued, already
+/// collected, or evicted after too many outstanding requests.
+#[no_mangle]
+pub extern "C" fn tw_take_saved_document(
+    request_id: u64,
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    guard_ffi(|| {
+        if out_ptr.is_null() || out_len.is_null() {
+            return -2;
+        }
+        take_async_result(request_id, |bytes| {
+            transfer_bytes_to_caller(bytes, out_ptr, out_len)
         })
     })
 }
@@ -449,6 +747,7 @@ pub extern "C" fn tw_open_document(data: *const u8, len: usize) -> i32 {
     guard_ffi(|| tw_open_document_with_path(data, len, std::ptr::null()))
 }
 
+/// Blocking wrapper over [`tw_open_document_async`] + [`tw_take_open_result`].
 #[no_mangle]
 pub extern "C" fn tw_open_document_with_path(
     data: *const u8,
@@ -456,26 +755,64 @@ pub extern "C" fn tw_open_document_with_path(
     path_ptr: *const c_char,
 ) -> i32 {
     guard_ffi(|| {
-        with_session(|session| {
-            let bytes = unsafe { slice::from_raw_parts(data, len) }.to_vec();
-            let path_hint = if path_ptr.is_null() {
-                None
-            } else {
-                Some(
-                    unsafe { CStr::from_ptr(path_ptr) }
-                        .to_string_lossy()
-                        .into_owned(),
-                )
-            };
-            let Some(request_id) = session.open_bytes_with_path(bytes, path_hint) else {
+        with_session_then_flush(|session| {
+            let Some(request_id) = enqueue_open(session, data, len, path_ptr) else {
                 return -4;
             };
-            if let Ok(mut guard) = LAST_ERROR.lock() {
-                *guard = None;
-            }
             wait_for_open(session, request_id)
         })
     })
+}
+
+/// Enqueue an open and return the correlation id. Completion is reported by the
+/// `DocumentOpened` event and confirmed with [`tw_take_open_result`].
+///
+/// 0 = enqueued, -1 = no session, -2 = null out pointer, -4 = worker unavailable.
+#[no_mangle]
+pub extern "C" fn tw_open_document_async(
+    data: *const u8,
+    len: usize,
+    path_ptr: *const c_char,
+    out_request_id: *mut u64,
+) -> i32 {
+    guard_ffi(|| {
+        enqueue_async(out_request_id, |session| {
+            enqueue_open(session, data, len, path_ptr)
+        })
+    })
+}
+
+/// Outcome of an open enqueued with `tw_open_document_async`. There is no
+/// payload; the document is read through the usual snapshot exports.
+///
+/// 0 = opened, 1 = not ready yet, -1 = no session, -2 = the open failed
+/// (details via `tw_get_last_error`), -3 = unknown request id.
+#[no_mangle]
+pub extern "C" fn tw_take_open_result(request_id: u64) -> i32 {
+    guard_ffi(|| take_async_result(request_id, |_| {}))
+}
+
+fn enqueue_open(
+    session: &Session,
+    data: *const u8,
+    len: usize,
+    path_ptr: *const c_char,
+) -> Option<u64> {
+    let bytes = unsafe { slice::from_raw_parts(data, len) }.to_vec();
+    let path_hint = if path_ptr.is_null() {
+        None
+    } else {
+        Some(
+            unsafe { CStr::from_ptr(path_ptr) }
+                .to_string_lossy()
+                .into_owned(),
+        )
+    };
+    let request_id = session.open_bytes_with_path(bytes, path_hint)?;
+    if let Ok(mut guard) = LAST_ERROR.lock() {
+        *guard = None;
+    }
+    Some(request_id)
 }
 
 #[no_mangle]
@@ -498,7 +835,7 @@ pub extern "C" fn tw_set_current_page(page: u32) -> i32 {
             let Some(request_id) = session.set_current_page(page) else {
                 return -4;
             };
-            wait_for_document_edit(session, request_id)
+            finish_edit_enqueue(request_id)
         })
     })
 }
@@ -511,7 +848,7 @@ pub extern "C" fn tw_apply_heading1(caret_run_id_ptr: *const c_char) -> i32 {
             let Some(request_id) = session.apply_heading1_at(caret_run_id) else {
                 return -4;
             };
-            wait_for_document_edit(session, request_id)
+            finish_edit_enqueue(request_id)
         })
     })
 }
@@ -524,7 +861,7 @@ pub extern "C" fn tw_apply_normal_style(caret_run_id_ptr: *const c_char) -> i32 
             let Some(request_id) = session.apply_normal_style_at(caret_run_id) else {
                 return -4;
             };
-            wait_for_document_edit(session, request_id)
+            finish_edit_enqueue(request_id)
         })
     })
 }
@@ -537,7 +874,7 @@ pub extern "C" fn tw_apply_numbered_list(caret_run_id_ptr: *const c_char) -> i32
             let Some(request_id) = session.apply_numbered_list_at(caret_run_id) else {
                 return -4;
             };
-            wait_for_document_edit(session, request_id)
+            finish_edit_enqueue(request_id)
         })
     })
 }
@@ -550,7 +887,7 @@ pub extern "C" fn tw_apply_bullet_list(caret_run_id_ptr: *const c_char) -> i32 {
             let Some(request_id) = session.apply_bullet_list_at(caret_run_id) else {
                 return -4;
             };
-            wait_for_document_edit(session, request_id)
+            finish_edit_enqueue(request_id)
         })
     })
 }
@@ -635,7 +972,7 @@ pub extern "C" fn tw_apply_char_format(
                 });
             if !has_format_fields {
                 return match last_request_id {
-                    Some(request_id) => wait_for_document_edit(session, request_id),
+                    Some(request_id) => finish_edit_enqueue(request_id),
                     None => 0,
                 };
             }
@@ -676,7 +1013,7 @@ pub extern "C" fn tw_apply_char_format(
             let Some(request_id) = session.apply(command) else {
                 return -4;
             };
-            wait_for_document_edit(session, request_id)
+            finish_edit_enqueue(request_id)
         })
     })
 }
@@ -722,7 +1059,7 @@ pub extern "C" fn tw_apply_para_format(
             }) else {
                 return -4;
             };
-            wait_for_document_edit(session, request_id)
+            finish_edit_enqueue(request_id)
         })
     })
 }
@@ -812,7 +1149,7 @@ pub extern "C" fn tw_clear_format(
             }) else {
                 return -4;
             };
-            wait_for_document_edit(session, request_id)
+            finish_edit_enqueue(request_id)
         })
     })
 }
@@ -825,7 +1162,7 @@ pub extern "C" fn tw_insert_page_break(caret_run_id_ptr: *const c_char) -> i32 {
             let Some(request_id) = session.insert_page_break_at(caret_run_id) else {
                 return -4;
             };
-            wait_for_document_edit(session, request_id)
+            finish_edit_enqueue(request_id)
         })
     })
 }
@@ -849,7 +1186,7 @@ pub extern "C" fn tw_apply_paste_html(
             else {
                 return -4;
             };
-            wait_for_document_edit(session, request_id)
+            finish_edit_enqueue(request_id)
         })
     })
 }
@@ -874,7 +1211,7 @@ pub extern "C" fn tw_apply_paste_docx(
             let Some(request_id) = session.paste_docx_at(run_id, offset as usize, bytes) else {
                 return -4;
             };
-            wait_for_document_edit(session, request_id)
+            finish_edit_enqueue(request_id)
         })
     })
 }
@@ -887,21 +1224,16 @@ pub extern "C" fn tw_apply_delete_range(
     end: u32,
 ) -> i32 {
     guard_ffi(|| {
-        with_session(|session| {
-            let Some(run_id) = parse_node_id(run_id_ptr) else {
-                return -2;
-            };
-            if start >= end {
-                return -3;
-            }
-            let Some(request_id) = session.apply(Command::DeleteRange {
-                run_id,
-                start: start as usize,
-                end: end as usize,
-            }) else {
-                return -4;
-            };
-            wait_for_document_edit(session, request_id)
+        let Some(run_id) = parse_node_id(run_id_ptr) else {
+            return -2;
+        };
+        if start >= end {
+            return -3;
+        }
+        apply_command(Command::DeleteRange {
+            run_id,
+            start: start as usize,
+            end: end as usize,
         })
     })
 }
@@ -915,28 +1247,23 @@ pub extern "C" fn tw_apply_delete_doc_range(
     end_offset: u32,
 ) -> i32 {
     guard_ffi(|| {
-        with_session(|session| {
-            let Some(start_run_id) = parse_node_id(start_run_id_ptr) else {
-                return -2;
-            };
-            let Some(end_run_id) = parse_node_id(end_run_id_ptr) else {
-                return -2;
-            };
-            let Some(request_id) = session.apply(Command::DeleteDocRange {
-                range: DocRange {
-                    start: DocPosition {
-                        run_id: start_run_id,
-                        char_offset: start_offset as usize,
-                    },
-                    end: DocPosition {
-                        run_id: end_run_id,
-                        char_offset: end_offset as usize,
-                    },
+        let Some(start_run_id) = parse_node_id(start_run_id_ptr) else {
+            return -2;
+        };
+        let Some(end_run_id) = parse_node_id(end_run_id_ptr) else {
+            return -2;
+        };
+        apply_command(Command::DeleteDocRange {
+            range: DocRange {
+                start: DocPosition {
+                    run_id: start_run_id,
+                    char_offset: start_offset as usize,
                 },
-            }) else {
-                return -4;
-            };
-            wait_for_document_edit(session, request_id)
+                end: DocPosition {
+                    run_id: end_run_id,
+                    char_offset: end_offset as usize,
+                },
+            },
         })
     })
 }
@@ -945,17 +1272,12 @@ pub extern "C" fn tw_apply_delete_doc_range(
 #[no_mangle]
 pub extern "C" fn tw_apply_split_paragraph(run_id_ptr: *const c_char, offset: u32) -> i32 {
     guard_ffi(|| {
-        with_session(|session| {
-            let Some(run_id) = parse_node_id(run_id_ptr) else {
-                return -2;
-            };
-            let Some(request_id) = session.apply(Command::SplitParagraphAt {
-                run_id,
-                offset: offset as usize,
-            }) else {
-                return -4;
-            };
-            wait_for_document_edit(session, request_id)
+        let Some(run_id) = parse_node_id(run_id_ptr) else {
+            return -2;
+        };
+        apply_command(Command::SplitParagraphAt {
+            run_id,
+            offset: offset as usize,
         })
     })
 }
@@ -967,7 +1289,7 @@ pub extern "C" fn tw_insert_table(rows: u32, cols: u32) -> i32 {
             let Some(request_id) = session.insert_table(rows, cols) else {
                 return -4;
             };
-            wait_for_document_edit(session, request_id)
+            finish_edit_enqueue(request_id)
         })
     })
 }
@@ -979,7 +1301,7 @@ pub extern "C" fn tw_insert_image(width: f32, height: f32) -> i32 {
             let Some(request_id) = session.insert_image(width, height) else {
                 return -4;
             };
-            wait_for_document_edit(session, request_id)
+            finish_edit_enqueue(request_id)
         })
     })
 }
@@ -991,7 +1313,7 @@ pub extern "C" fn tw_undo() -> i32 {
             let Some(request_id) = session.undo() else {
                 return -4;
             };
-            wait_for_document_edit(session, request_id)
+            finish_edit_enqueue(request_id)
         })
     })
 }
@@ -1003,7 +1325,7 @@ pub extern "C" fn tw_redo() -> i32 {
             let Some(request_id) = session.redo() else {
                 return -4;
             };
-            wait_for_document_edit(session, request_id)
+            finish_edit_enqueue(request_id)
         })
     })
 }
@@ -1011,7 +1333,7 @@ pub extern "C" fn tw_redo() -> i32 {
 #[no_mangle]
 pub extern "C" fn tw_export_pdf(out_ptr: *mut *const u8, out_len: *mut usize) -> i32 {
     guard_ffi(|| {
-        with_session(|session| {
+        with_session_then_flush(|session| {
             let Some(request_id) = session.export_pdf() else {
                 return -4;
             };
@@ -1031,7 +1353,7 @@ pub extern "C" fn tw_save_document_as(
     out_len: *mut usize,
 ) -> i32 {
     guard_ffi(|| {
-        with_session(|session| {
+        with_session_then_flush(|session| {
             let format_str = unsafe { CStr::from_ptr(format_ptr) }.to_string_lossy();
             let Some(request_id) = session.save_as(format_from_extension_str(&format_str)) else {
                 return -4;
@@ -1041,17 +1363,49 @@ pub extern "C" fn tw_save_document_as(
     })
 }
 
+/// Blocking wrapper over [`tw_spell_check_document_async`] +
+/// [`tw_take_spell_check_result`].
 #[no_mangle]
 pub extern "C" fn tw_spell_check_document(
     out_ptr: *mut *const u8,
     out_len: *mut usize,
 ) -> i32 {
     guard_ffi(|| {
-        with_session(|session| {
+        with_session_then_flush(|session| {
             let Some(request_id) = session.spell_check() else {
                 return -4;
             };
             wait_for_spell_check(session, request_id, out_ptr, out_len)
+        })
+    })
+}
+
+/// Enqueue a spell check and return the correlation id.
+///
+/// 0 = enqueued, -1 = no session, -2 = null out pointer, -4 = worker unavailable.
+#[no_mangle]
+pub extern "C" fn tw_spell_check_document_async(out_request_id: *mut u64) -> i32 {
+    guard_ffi(|| enqueue_async(out_request_id, |session| session.spell_check()))
+}
+
+/// Collect misspellings for a request enqueued with
+/// `tw_spell_check_document_async`, newline separated, released with
+/// `tw_free_buffer`. An empty buffer means no misspellings.
+///
+/// 0 = ready, 1 = not ready yet, -1 = no session, -2 = the check failed,
+/// -3 = unknown request id.
+#[no_mangle]
+pub extern "C" fn tw_take_spell_check_result(
+    request_id: u64,
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    guard_ffi(|| {
+        if out_ptr.is_null() || out_len.is_null() {
+            return -2;
+        }
+        take_async_result(request_id, |bytes| {
+            transfer_bytes_to_caller(bytes, out_ptr, out_len)
         })
     })
 }
@@ -1095,6 +1449,26 @@ pub extern "C" fn tw_reject_all_revisions() -> i32 {
     })
 }
 
+/// Whether `page` still carries pre-edit geometry awaiting background reflow.
+/// A stale page must not be hit tested: the line map it holds describes content
+/// that has since moved, so a caret placed from it lands somewhere unrelated.
+///
+/// 1 = page is stale (pending forward reflow, hit tests unreliable)
+/// 0 = page is fresh
+/// -1 = no session
+#[no_mangle]
+pub extern "C" fn tw_is_page_stale(page: u32) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            if session.is_page_stale(page) {
+                1
+            } else {
+                0
+            }
+        })
+    })
+}
+
 #[no_mangle]
 pub extern "C" fn tw_hit_test(
     page: u32,
@@ -1109,6 +1483,9 @@ pub extern "C" fn tw_hit_test(
         let Some(session) = guard.as_ref() else {
             return -1;
         };
+        if session.is_page_stale(page) {
+            return HIT_PAGE_STALE;
+        }
         let Some(result) = session.hit_test(page, x, y) else {
             return -2;
         };
@@ -1141,6 +1518,9 @@ pub extern "C" fn tw_document_tail_hit(
         let Some(session) = guard.as_ref() else {
             return -1;
         };
+        // Deliberately not gated on page staleness: this resolves the last run of
+        // the document model, which a pending reflow leaves fully current, and
+        // never reads the page's geometry. `page` is echoed back for caret display.
         let Some(result) = session.document_tail_hit(page) else {
             return -2;
         };
@@ -1280,11 +1660,53 @@ pub extern "C" fn tw_selection_rects(
     })
 }
 
-/// Block until the worker publishes a fresh layout snapshot (for select-all, copy, etc.).
+/// Last enqueued edit `request_id` (R1.4 async correlation). Zero before first edit.
+#[no_mangle]
+pub extern "C" fn tw_last_request_id() -> u64 {
+    LAST_REQUEST_ID.load(Ordering::Relaxed)
+}
+
+/// Deliver any worker events that have arrived since the last call to the
+/// callback registered with `tw_init`, and settle the matching async result
+/// slots. A host that never blocks in one of the wrapper exports must call this
+/// (on a timer or frame callback) for events to be observed at all.
+///
+/// Returns the number of events delivered, or -1 when there is no session.
+#[no_mangle]
+pub extern "C" fn tw_pump_events() -> i32 {
+    guard_ffi(|| {
+        // Collect under the session lock, deliver after releasing it, so the host
+        // is free to call back into the engine from its callback.
+        let collected = with_session(|session| {
+            session.pump_events();
+            0
+        });
+        if collected != 0 {
+            return collected;
+        }
+        flush_event_outbox() as i32
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn wait_for_document_edit(session: &Session, request_id: u64) -> i32 {
+    match wait_for_request(session, request_id, Duration::from_millis(100), |event| {
+        match event {
+            BridgeEvent::DisplayListReady { .. } => Some(0),
+            BridgeEvent::Error { .. } => Some(-2),
+            _ => None,
+        }
+    }) {
+        -3 => 0,
+        code => code,
+    }
+}
+
+#[cfg(test)]
 #[no_mangle]
 pub extern "C" fn tw_wait_for_layout() -> i32 {
     guard_ffi(|| {
-        with_session(|session| {
+        with_session_then_flush(|session| {
             match session.wait_for_event(BLOCKING_WAIT.as_millis() as u64) {
                 Some(BridgeEvent::DisplayListReady { .. })
                 | Some(BridgeEvent::DocumentOpened { .. }) => 0,

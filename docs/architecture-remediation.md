@@ -29,9 +29,9 @@ The **layered Rust engine + Flutter UI** architecture is the right long-term bet
 | ADR / spec claim | Documented | Implemented today | Severity |
 |------------------|------------|-------------------|----------|
 | Page-granular invalidation (ADR-0005) | Yes | `worker.rs` → `invalidate_all()` + full `layout_document()` | Critical |
-| UI thread never blocks (ADR-0005) | Yes | `wait_for_events` busy-wait up to 100 ms (edit) / 30 s (open/save) on Dart isolate | Critical |
+| UI thread never blocks (ADR-0005) | Yes | Edits fire-and-forget; Dart awaits events via `NativeEventRouter` | **Implemented** (R1.4) |
 | Zero-copy display lists | Yes | Atlas embedded per page; multiple clone/copy layers Dart↔Rust | Critical |
-| Single mutation path (ADR-0007) | Yes | `BridgeCommand` shortcuts + format import constructs `Document` | Warning |
+| Single mutation path (ADR-0007) | Yes | All edits via `ApplyEdit { command }`; format import returns `Document` | **Implemented** (R2.3) |
 | Flutter not used for document text (ADR-0003) | Yes | `EditorController` TextField fallback + mock pagination | Warning |
 | Six-platform matrix | Yes | macOS app only; `tw-wasm` does not compile (`std::thread` in `tw-core`) | Critical |
 | Strict downward crate deps | Yes | `tw-pdf` → layout/render/edit; `tw-plugin` ↔ `tw-core` cycle in docs | Warning |
@@ -93,10 +93,12 @@ Wave mapping: **R0–R1 complete before W2 (F04+) expansion.** R2 overlaps W1 ha
 | Task | Location | Action | Status |
 |------|----------|--------|--------|
 | Stop silent drops | `session.rs` `send_command` | Blocking `send` on bounded command queue; `None` only when worker disconnected | **Done** |
-| Bound events | Worker → UI event channel | Bounded channel + `EventPublisher`: coalesce `DisplayListReady` per page; drop-oldest under pressure | **Done** |
+| Bound events | Worker → UI event channel | Bounded channel + `EventPublisher`: coalesce `DisplayListReady` per page | **Done** |
+| Keep correlations | `EventPublisher` | Coalescing drops the event, never the `request_id`: superseded ids queue in a compact `VecDeque<u64>` and re-emit when the channel drains | **Done** |
 | Stress test | `tw-core/tests/command_backpressure.rs` | 1000 rapid inserts; zero lost characters | **Done** |
+| Correlation stress test | `tw-core/tests/r1_event_correlation_backpressure.rs` | 1024 same-page edits with no consumer; every `request_id` still completes | **Done** |
 
-**Exit:** Stress test: 1000 rapid inserts; zero lost characters; document text matches input. Intermediate `DisplayListReady` events may be coalesced — the test polls document text, not per-request paint acks.
+**Exit:** Stress test: 1000 rapid inserts; zero lost characters; document text matches input. Intermediate `DisplayListReady` events are coalesced into a single repaint per page, but each edit's `request_id` still receives a completion, so a caller awaiting an edit never times out.
 
 ### R0 CI gates (add immediately)
 
@@ -129,6 +131,18 @@ Status: **Done**
 
 - `U-R1-incremental-layout`: edit on page 1 of 50-page fixture relayouts ≤3 pages synchronously — **Done** (`crates/tw-core/tests/r1_incremental_layout.rs`)
 - `I-R1-typing-latency-50p`: p50 &lt;15 ms, p99 &lt;20 ms via real `Session` + worker — **Done** (`crates/tw-core/tests/r1_incremental_layout.rs`)
+- `U-R1-cache-retention`: an incremental pass re-caches only its dirty pages and drops caches for pages the edit removed — **Done** (`crates/tw-layout/tests/r1_incremental_cache_retention.rs`)
+- `I-R1-forward-relayout`: after an edit on page 0 of a ~50-page flowing fixture, background reflow clears every `pending` page and hit-test resolves on the last page — **Done** (`crates/tw-core/tests/r1_forward_relayout.rs`)
+- `I-R1-page-count-reuse`: growing the page count reuses the display-list `Arc` of every page whose layout is unchanged — **Done** (`crates/tw-core/tests/r1_page_count_change_reuse.rs`)
+- `U-R1-stale-window`: a converged pass during background catch-up does not re-mark pages an earlier chunk already rebuilt — **Done** (`crates/tw-layout/tests/r1_stale_window.rs`)
+
+An incremental pass stops at the first block boundary whose flow state (page index, pen `y`, section geometry, list counters, pending boxes) matches the previous pass — the tail is then provably identical and reused verbatim. If the 3-page cap is hit first, the block is recorded as a resume point and the worker finishes the reflow in chunks whenever the command queue is empty, emitting repaints under `BACKGROUND_REQUEST_ID`. Pages after the reflow window stay `pending` (hit-test disabled) until that background pass reaches them.
+
+The `pending` window is `[LayoutEngine::pending_reflow_page(), page_count)`. That floor is the first page no pass has rebuilt since the edit that opened the window; it advances as background chunks land and survives a later converged pass, which by definition proves the tail is unchanged. Without that, every keystroke during catch-up would re-mark pages the background pass had already fixed. On a 48-page flowing fixture, one large front-of-document insert marks 44 pages `pending`, the midpoint clears at ~215 ms and the last page at ~460 ms in release (`crates/tw-core/tests/r1_stale_window_probe.rs`, `#[ignore]`d as a measurement). Edits whose reflow converges inside the synchronous window mark nothing `pending` at all.
+
+Dart distinguishes the two hit-test failure modes through `tw_is_page_stale`; `tw_hit_test` also returns `-4` for a stale page versus `-2` for a genuine miss. Conflating them makes a click on a not-yet-reflowed page look like a click on an empty page, which drops the caret at an unrelated tail position.
+
+Staleness gates geometry queries only. The document model stays current throughout a pending reflow, so `tw_document_tail_hit` — which resolves the document's last run and only echoes `page` back for caret display — answers regardless of staleness, and select-all keeps working during catch-up (`crates/tw-ffi/tests/r1_stale_page_hit_tests.rs`).
 
 ### R1.2 Session atlas separation
 
@@ -136,6 +150,7 @@ Status: **Done**
 |------|----------|--------|--------|
 | Remove atlas from page DL | `tw-render` `DisplayList` | Page payload = draw batches only | **Done** |
 | Atlas resource API | `tw-ffi` | `tw_get_atlas(generation, out_ptr, …)`; versioned separately | **Done** |
+| Generation-only query | `tw-ffi` | `tw_get_atlas_generation(out_generation)` so a change check costs no pixel copy | **Done** |
 | Dart cache | `document_view.dart` | Re-upload texture only when atlas generation changes | **Done** |
 | Dirty rects | `tw-shape` atlas | Optional: sub-rect upload for small edits | Skipped |
 
@@ -146,28 +161,42 @@ Status: **Done**
 
 ### R1.3 Per-page snapshots
 
-| Task | Location | Action |
-|------|----------|--------|
-| Page store | `tw-core/snapshot.rs` | `HashMap<(page, version), Arc<PageSnapshot>>` |
-| Publish | Worker | Emit `DisplayListReady { page, version }` per dirty page only |
-| Lazy fetch | Flutter | Off-screen pages fetched on scroll, not rebuilt every edit |
-| Arc reads | `SnapshotBuffer` | Replace `clone()` on read with `Arc` handoff |
+| Task | Location | Action | Status |
+|------|----------|--------|--------|
+| Page store | `tw-core/snapshot.rs` | `HashMap<(page, version), Arc<PageSnapshot>>` | **Done** |
+| Publish | Worker | Emit `DisplayListReady { page, version }` per dirty page only | **Done** |
+| Lazy fetch | Flutter | Off-screen pages fetched on scroll, not rebuilt every edit | **Done** |
+| Arc reads | `SnapshotBuffer` | Replace `clone()` on read with `Arc` handoff | **Done** |
 
-**Exit:** 500-page doc resident snapshot memory &lt;400 MB budget (see [performance-budgets.md](performance-budgets.md)).
+**Exit:** 500-page doc resident snapshot memory &lt;400 MB budget (see [performance-budgets.md](performance-budgets.md)) — **Done** (`crates/tw-core/tests/r1_per_page_snapshots.rs`).
 
 ### R1.4 Async FFI
 
-| Task | Location | Action |
-|------|----------|--------|
-| Fire-and-forget edits | `tw-ffi` | Remove `wait_for_document_edit` from production edit exports |
-| Wire callback | `tw-ffi` + Dart | Implement `EVENT_CALLBACK` via `NativeCallable.listener` / `Dart_PostCObject` |
-| Isolate option | `native_engine.dart` | Long-lived helper isolate for blocking open/save if needed |
-| Delete busy-wait | `tw-ffi` | `wait_for_events` test-only behind `#[cfg(test)]` |
+| Task | Location | Action | Status |
+|------|----------|--------|--------|
+| Fire-and-forget edits | `tw-ffi` | Remove `wait_for_document_edit` from production edit exports | **Done** |
+| Wire callback | `tw-ffi` + Dart | Implement `EVENT_CALLBACK` via `NativeCallable.listener` / `Dart_PostCObject` | **Done** |
+| Async open/save/spell | `tw-ffi` | Enqueue returns `request_id`; result collected later by id (`tw_*_async` + `tw_take_*`), blocking exports kept as wrappers | **Done** |
+| Event pump | `tw-ffi` | `tw_pump_events` so a host that never blocks still receives worker events; **required**, not optional | **Done** |
+| Isolate option | `native_engine.dart` | Long-lived helper isolate for blocking open/save if needed | Not needed (async exports supersede) |
+| Delete busy-wait | `tw-ffi` | `wait_for_events` test-only behind `#[cfg(test)]` | **Done** |
 
 **Exit:**
 
-- Flutter integration test: 60 keystrokes in 1 s; no frame &gt;16 ms blocked on FFI
-- ADR-0005 “UI thread never blocks” marked **Implemented** in ADR status table
+- Flutter integration test: 60 keystrokes in 1 s; no frame &gt;16 ms blocked on FFI — **Done** (`app/test/r14_async_ffi_test.dart`)
+- ADR-0005 “UI thread never blocks” marked **Implemented** in ADR status table — **Done**
+- `I-R1-async-document-exports`: enqueue returns an id, the result survives until collected, and abandoned slots are evicted rather than leaked — **Done** (`crates/tw-ffi/tests/r1_async_document_exports.rs`)
+
+Async results live in a bounded 16-slot, oldest-first-evicted table keyed by `request_id`. Getters return `1` while in flight, `0` with the payload, `-2` on failure, `-3` for an unknown or aged-out id. Dart remains free to use the blocking wrappers during migration, but must not pump from another isolate while one is parked.
+
+`Session::drain_events` is the only thing that invokes the event observer, and nothing calls it spontaneously — enqueuing a command does not. Before `tw_pump_events` existed, the Dart callback fired only when some unrelated blocking export happened to drain the channel as a side effect. Dart now runs an adaptive pump in `NativeEventRouter` (2 ms while a correlated request is outstanding, 16 ms idle). The requirement is stated at the top of [ffi-bridge.md](architecture/ffi-bridge.md) and on the `tw_init` and `Session::set_event_observer` doc comments, and a correlated wait that times out having never been pumped prints a one-time warning to stderr naming the cause.
+
+Chasing the missing pump turned up the actual cause of the 30 s `TimeoutException` on select-all: the callback passed the correlation id only through a pointer to a stack buffer, and Dart's `NativeCallable.listener` read it a turn of the event loop later, after the frame was gone. No correlation id was ever delivered correctly, and `nativeFfiEventsAvailable()` was consequently always false, silently skipping the whole real-FFI integration suite. Two hardening changes followed, both ABI-visible:
+
+| Task | Location | Action | Status |
+|------|----------|--------|--------|
+| Correlation by value | `tw-ffi` | `tw_event_callback` takes `event_type` and `request_id` as arguments; the payload is documented as call-scoped and no longer load-bearing | **Done** |
+| No host code under lock | `tw-ffi` | Events are collected under `SESSION` and forwarded after release, so a host may re-enter any export from its callback | **Done** (`crates/tw-ffi/tests/r1_callback_reentrancy.rs`) |
 
 ---
 
@@ -177,33 +206,59 @@ Status: **Done**
 
 ### R2.1 Document model vocabulary
 
-| Task | Action |
-|------|--------|
-| Expand enums | Add `RunContent` variants: `Hyperlink`, `Field`, `InlineImage`, `FootnoteRef`, `CommentRef`, `Bookmark` (placeholder render OK) |
-| Expand blocks | Add `ShapeBlock`, header/footer typed maps per [document-model.md](architecture/document-model.md) |
-| `#[non_exhaustive]` | Public enums in `tw-model` to allow forward-compatible extension |
+| Task | Action | Status |
+|------|--------|--------|
+| Expand enums | Add `RunContent` variants: `Hyperlink`, `Field`, `InlineImage`, `FootnoteRef`, `CommentRef`, `Bookmark` (placeholder render OK) | **Done** |
+| Expand blocks | Add `ShapeBlock`, header/footer typed maps per [document-model.md](architecture/document-model.md) | **Done** |
+| `#[non_exhaustive]` | Public enums in `tw-model` to allow forward-compatible extension | **Done** |
 
-**Exit:** DOCX import records element retention counts; failing test lists missing OOXML types.
+**Exit:** DOCX import records element retention counts; failing test lists missing OOXML types — **Done** (`crates/tw-docx/tests/r2_document_model_vocabulary.rs`).
 
 ### R2.2 Single text storage
 
-| Task | Action |
-|------|--------|
-| Pick one store | **Recommendation:** `String` per run; delete per-run `Rope` in `TextBuffer` OR make rope sole store |
-| Layout cache | `Arc<Document>` + version; no deep clone per edit |
-| Read path | All queries (`format_at`, hit test) on versioned snapshot |
+| Task | Action | Status |
+|------|--------|--------|
+| Pick one store | **Recommendation:** `String` per run; delete per-run `Rope` in `TextBuffer` OR make rope sole store | **Done** |
+| Layout cache | `Arc<Document>` + version; no deep clone per edit | **Done** |
+| Read path | All queries (`format_at`, hit test) on versioned snapshot | **Done** |
 
-**Exit:** Property test: 10k random edits; run text == buffer text == export plaintext.
+**Exit:** Property test: 10k random edits; run text == buffer text == export plaintext — **Done** (`crates/tw-edit/tests/r2_single_text_storage.rs`).
+
+### R2.2 CI gates
+
+Added to `.github/workflows/ci.yml`:
+
+```yaml
+- cargo test -p tw-edit --test r2_single_text_storage
+- cargo test -p tw-core --test r2_layout_cache_arc
+```
+
+Status: **Done**
 
 ### R2.3 Command-only mutations
 
-| Task | Action |
-|------|--------|
-| Collapse `BridgeCommand` | Worker handles only `ApplyEdit { command: Command }` + lifecycle commands |
-| Remove shortcuts | Migrate `ApplyHeading1`, `InsertTable`, … to `Command` variants |
-| Import purity | Format crates return `Document`; only `tw-edit` holds `&mut Document` in production |
+| Task | Action | Status |
+|------|--------|--------|
+| Collapse `BridgeCommand` | Worker handles only `ApplyEdit { command: Command }` + lifecycle commands | **Done** |
+| Remove shortcuts | Migrate `ApplyHeading1`, `InsertTable`, … to `Command` variants | **Done** |
+| Import purity | Format crates return `Document`; only `tw-edit` holds `&mut Document` in production | **Done** |
 
-**Exit:** `rg 'BridgeCommand::ApplyHeading'` returns zero; undo works for all migrated paths.
+**Exit:** `rg 'BridgeCommand::ApplyHeading'` returns zero; undo works for all migrated paths — **Done** (`crates/tw-core/tests/r2_command_only_mutations.rs`).
+
+### R2.3 CI gates
+
+Added to `.github/workflows/ci.yml`:
+
+```yaml
+- cargo test -p tw-core --test r2_command_only_mutations
+- |
+  if rg 'BridgeCommand::ApplyHeading|BridgeCommand::InsertTable|BridgeCommand::ApplyBullet|BridgeCommand::ApplyNormal|BridgeCommand::InsertImage|BridgeCommand::InsertPageBreak|BridgeCommand::AcceptAll|BridgeCommand::RejectAll' crates/*/src app/lib --glob '!**/tests/**'; then
+    echo "BridgeCommand edit shortcuts must not appear in production code"
+    exit 1
+  fi
+```
+
+Status: **Done**
 
 ### R2.4 EditorController decomposition
 
@@ -222,29 +277,43 @@ Status: **Done**
 
 **Exit:**
 
-- `editor_controller.dart` &lt;800 lines
-- CI builds `libtw_ffi` and runs Flutter tests against real engine
-- P0 count in [ui-functionality-audit.md](ui-functionality-audit.md) = 0
+- `editor_controller.dart` &lt;800 lines — **Done** (558 lines)
+- CI builds `libtw_ffi` and runs Flutter tests against real engine — **Done**
+- P0 count in [ui-functionality-audit.md](ui-functionality-audit.md) = 0 — **Done**
+
+**Status:** **Done** (2026-08-07)
 
 ### R2.5 FFI consolidation
 
-| Task | Action |
-|------|--------|
-| Codegen | Adopt `flutter_rust_bridge` or equivalent for query/format APIs |
-| Dispatch | `tw_dispatch(u32 request_id, command_bytes)` for edits |
-| Stable C ABI | Keep narrow exports for display list + atlas bytes only |
+| Task | Action | Status |
+|------|--------|--------|
+| Codegen | JSON command dispatch (`tw_dispatch`) as FRB-equivalent for edit/format APIs | **Done** |
+| Dispatch | `tw_dispatch(command_bytes)` for all `Command` edits | **Done** |
+| Stable C ABI | Narrow primary surface: lifecycle, dispatch, display list, atlas, query JSON | **Done** |
 
-**Exit:** New `SetCharFormat` field requires zero manual Dart typedef additions.
+**Exit:** New `SetCharFormat` field requires zero manual Dart typedef additions — **Done** (`format_codec.dart` dynamic JSON).
+
+**Status:** **Done** (2026-08-07)
 
 ### R2.6 Undo transactions
 
-| Task | Action |
-|------|--------|
-| `Transaction` type | Group commands; capture selection; support abort without stack pollution |
-| Coalescing | Merge consecutive `InsertText` same run within 1 s / word boundary |
-| Total inverse | `inverse()` returns `Result`, not `Option` |
+| Task | Action | Status |
+|------|--------|--------|
+| `Transaction` type | Group commands; capture selection; support abort without stack pollution | **Done** |
+| Coalescing | Merge consecutive `InsertText` same run within 1 s / word boundary | **Done** |
+| Total inverse | `inverse()` returns `Result`, not `Option` | **Done** |
 
-**Exit:** 100-char word types as one undo step; batch failure rolls back atomically.
+**Exit:** 100-char word types as one undo step; batch failure rolls back atomically — **Done** (`crates/tw-edit/tests/r2_6_undo_transactions.rs`).
+
+### R2.6 CI gates
+
+Added to `.github/workflows/ci.yml`:
+
+```yaml
+- cargo test -p tw-edit --test r2_6_undo_transactions
+```
+
+Status: **Done**
 
 ---
 
@@ -341,8 +410,8 @@ Update this document when a phase exits. Link PRs to phase IDs (`R1.2-atlas-sepa
 | Phase | Status | Exit date |
 |-------|--------|-----------|
 | R0 | **Done** | 2026-08-06 |
-| R1 | **In progress** (R1.1–R1.2 done) | |
-| R2 | Not started | |
+| R1 | **Done** | 2026-08-06 |
+| R2 | **Done** | 2026-08-07 |
 | R3 | Not started | |
 
 ---

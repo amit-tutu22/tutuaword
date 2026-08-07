@@ -7,6 +7,8 @@ import 'package:tutuaword/bridge/native_engine.dart';
 import 'package:tutuaword/bridge/native_event_router.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
 
+import 'native_ffi_test_helpers.dart';
+
 DocumentSessionStore _isolatedStore(String prefix) {
   return DocumentSessionStore(root: Directory.systemTemp.createTempSync(prefix));
 }
@@ -14,11 +16,11 @@ DocumentSessionStore _isolatedStore(String prefix) {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  tearDownAll(() {
-    NativeEngine.shutdown();
-  });
-
   group('R0.2 event router', () {
+    tearDown(() {
+      NativeEventRouter.instance.reset();
+    });
+
     test('completer completes only on matching request_id', () async {
       final router = NativeEventRouter.instance;
       router.reset();
@@ -49,6 +51,10 @@ void main() {
   });
 
   group('R0.2 autosave isolation', () {
+    tearDown(() async {
+      await NativeEngine.shutdownAsync();
+    });
+
     test('typing during autosave completes without cross-talk', () async {
       final store = _isolatedStore('tutuaword_r02_autosave_');
       final controller = EditorController(
@@ -57,21 +63,23 @@ void main() {
       );
       addTearDown(controller.dispose);
       if (!controller.isEngineConnected) return;
+      if (!await nativeFfiEventsAvailable()) return;
 
       await controller.newDocument();
       controller.ensureGlyphCaret();
 
-      controller.insertGlyphCharacter('A');
+      await controller.insertGlyphCharacter('A');
       expect(controller.documentText.toLowerCase(), contains('a'));
 
       final autosaveFuture = controller.performAutosave();
       for (final ch in 'BCDE'.split('')) {
         if (ch.isEmpty) continue;
-        controller.insertGlyphCharacter(ch);
+        await controller.insertGlyphCharacter(ch);
       }
 
       await autosaveFuture;
       await controller.performAutosave();
+      await controller.ensureLayoutReady();
 
       expect(controller.documentText.toLowerCase(), contains('abcde'));
       expect(controller.nativeEditDepth, 0);

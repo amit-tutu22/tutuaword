@@ -18,3 +18,5 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+# Builds multi-page fixtures for the stale-page hit-test regression tests.
+tw-native = { path = "../tw-native" }

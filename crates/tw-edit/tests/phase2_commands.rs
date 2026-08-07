@@ -6,6 +6,8 @@ fn first_block_id(session: &EditSession) -> tw_model::NodeId {
         Block::Paragraph(p) => p.id,
         Block::Table(t) => t.id,
         Block::ImageBlock(i) => i.id,
+        Block::ShapeBlock(s) => s.id,
+        _ => panic!("unexpected block type"),
     }
 }
 

@@ -11,7 +11,13 @@ use tw_ffi::{
 /// Global session tests share one FFI singleton; run serially.
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
-extern "C" fn noop_callback(_event_type: u32, _data: *const u8, _len: usize) {}
+extern "C" fn noop_callback(
+    _event_type: u32,
+    _request_id: u64,
+    _payload: *const u8,
+    _payload_len: usize,
+) {
+}
 
 fn init_session() {
     assert_eq!(tw_init(noop_callback), 0, "tw_init failed");

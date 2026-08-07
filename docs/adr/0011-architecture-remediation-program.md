@@ -39,6 +39,17 @@ Adopt a **sequential remediation program** (R0–R3) documented in [architecture
 
 Full task breakdown: [architecture-remediation.md](../architecture-remediation.md).
 
+## Implementation status
+
+| Phase | Status | Date |
+|-------|--------|------|
+| R0 | **Done** | 2026-08-06 |
+| R1 | **Done** | 2026-08-06 |
+| R2 | **Done** | 2026-08-07 |
+| R3 | Pending | — |
+
+**F04+ feature work is unblocked** as of R1 exit; **R2 architecture debt is cleared** (2026-08-07). Wave order in [feature-phases.md](../feature-phases.md) resumes; R3 remains recommended before web/mobile/collaboration claims.
+
 ## Consequences
 
 **Positive:**

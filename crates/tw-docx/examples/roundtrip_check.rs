@@ -34,6 +34,8 @@ fn outline(doc: &Document) -> (usize, usize, usize, usize, usize) {
                     images += 1;
                     image_bytes += i.data.bytes.len();
                 }
+                Block::ShapeBlock(_) => {}
+                _ => {}
             }
         }
     }

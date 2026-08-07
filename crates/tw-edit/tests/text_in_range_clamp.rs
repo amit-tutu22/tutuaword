@@ -17,7 +17,6 @@ fn text_in_range_clamps_oversized_end_offset() {
 
     let text = text_in_range(
         &session.document,
-        &session.buffer,
         &DocRange {
             start: DocPosition {
                 run_id,

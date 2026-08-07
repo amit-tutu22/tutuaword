@@ -1,33 +1,26 @@
-//! TextBuffer slice must not panic when the char range end exceeds run length.
+//! Character slice must not panic when the char range end exceeds run length.
 
-use tw_model::NodeId;
-use tw_text::TextBuffer;
+use tw_text::{char_len, slice_chars};
 
 #[test]
-fn slice_clamps_end_to_run_length() {
-    let run_id = NodeId::new();
-    let mut buffer = TextBuffer::new();
-    buffer.register(run_id, "hello");
-
-    let slice = buffer.slice(run_id, 0..8);
+fn slice_clamps_end_beyond_length() {
+    let text = "hello";
+    assert_eq!(char_len(text), 5);
+    let slice = slice_chars(text, 0..8);
     assert_eq!(slice, "hello");
 }
 
 #[test]
-fn slice_end_at_run_length_does_not_panic() {
-    let run_id = NodeId::new();
-    let mut buffer = TextBuffer::new();
-    buffer.register(run_id, "hello");
-    let slice = buffer.slice(run_id, 0..5);
+fn slice_exact_range() {
+    let text = "hello";
+    let slice = slice_chars(text, 0..5);
     assert_eq!(slice, "hello");
-    let empty = buffer.slice(run_id, 5..5);
+    let empty = slice_chars(text, 5..5);
     assert_eq!(empty, "");
 }
 
 #[test]
-fn slice_start_past_end_returns_empty() {
-    let run_id = NodeId::new();
-    let mut buffer = TextBuffer::new();
-    buffer.register(run_id, "hi");
-    assert_eq!(buffer.slice(run_id, 3..10), "");
+fn slice_start_beyond_length_returns_empty() {
+    let text = "hi";
+    assert_eq!(slice_chars(text, 3..10), "");
 }

@@ -27,13 +27,17 @@ class TutuawordApp extends StatelessWidget {
         useMaterial3: true,
         fontFamily: '.AppleSystemUIFont',
       ),
-      home: const EditorScreen(),
+      home: EditorScreen(),
     );
   }
 }
 
 class EditorScreen extends StatefulWidget {
-  const EditorScreen({super.key});
+  const EditorScreen({super.key, this.controller});
+
+  /// When set (e.g. in widget tests), this controller is used instead of
+  /// creating a production [EditorController] with autosave enabled.
+  final EditorController? controller;
 
   @override
   State<EditorScreen> createState() => _EditorScreenState();
@@ -41,16 +45,25 @@ class EditorScreen extends StatefulWidget {
 
 class _EditorScreenState extends State<EditorScreen> {
   late final EditorController _controller;
+  late final bool _ownsController;
   final _ribbonKey = GlobalKey<WordRibbonState>();
 
   @override
   void initState() {
     super.initState();
-    _controller = EditorController();
+    if (widget.controller != null) {
+      _controller = widget.controller!;
+      _ownsController = false;
+    } else {
+      _controller = EditorController();
+      _ownsController = true;
+    }
     _controller.addListener(_onUpdate);
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      await _controller.tryRecoverAutosave();
-    });
+    if (_ownsController) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        await _controller.tryRecoverAutosave();
+      });
+    }
   }
 
   void _onUpdate() => setState(() {});
@@ -58,7 +71,9 @@ class _EditorScreenState extends State<EditorScreen> {
   @override
   void dispose() {
     _controller.removeListener(_onUpdate);
-    _controller.dispose();
+    if (_ownsController) {
+      _controller.dispose();
+    }
     super.dispose();
   }
 

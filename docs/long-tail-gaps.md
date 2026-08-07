@@ -17,7 +17,7 @@ Core editing (DOCX import/export fidelity, glyph-mode formatting, layout correct
 | [PDF font embedding](#1-pdf-font-embedding-tw-pdf) | Partial — real glyph positions, fixed Helvetica 12pt | No | Phase 2 |
 | [Hunspell spell check](#2-hunspell-spell-check-tw-spell) | Stub — embedded word list, no suggestions | No | Phase 3 |
 | [HTML / Markdown parsers](#3-html--markdown-parsers) | MVP — basic text formatting only | No | Phase 3 |
-| [Hyperlinks and comments](#4-hyperlinks-and-comments-tw-model) | Not started in code | No | Phase 5 |
+| [Hyperlinks and comments](#4-hyperlinks-and-comments-tw-model) | Partial — R2.1 model vocabulary + DOCX import; edit/UI deferred | No | Phase 5 |
 | [Plugin WASM sandbox](#5-plugin-wasm-sandbox-tw-plugin) | Spec + traits only | No | Phase 6 |
 | [Production AI providers](#6-production-ai-providers-tw-ai) | Router + mocks only | No | Phase 4 |
 | [Track-change accept/reject UI](#7-track-change-acceptreject-ui) | Accept/Reject all wired; per-change nav still open | No | Phase 2 |
@@ -198,19 +198,22 @@ Tests: [`crates/tw-html/tests/export_import.rs`](../crates/tw-html/tests/export_
 
 ### Current state (as built)
 
-- [`crates/tw-model/src/nodes.rs`](../crates/tw-model/src/nodes.rs):
-  - `RunContent`: **Text, Tab, Break** only
-  - `Block`: **Paragraph, Table, ImageBlock** only
-- `CharFormat` has no URL or hyperlink field ([`format.rs`](../crates/tw-model/src/format.rs)).
+- [`crates/tw-model/src/nodes.rs`](../crates/tw-model/src/nodes.rs) and [`vocabulary.rs`](../crates/tw-model/src/vocabulary.rs) (R2.1, 2026-08-06):
+  - `RunContent`: **Text, Tab, Break**, plus **Hyperlink, Field, InlineImage, FootnoteRef, CommentRef, Bookmark**
+  - `Block`: **Paragraph, Table, ImageBlock**, plus **ShapeBlock**
+  - `Section.headers` / `Section.footers`: typed `HashMap<HeaderFooterType, HeaderFooter>` (legacy `SectionFormat.header_blocks` retained for serde compat)
+  - Public enums marked `#[non_exhaustive]` for forward-compatible extension
+- `CharFormat` has no URL or hyperlink field ([`format.rs`](../crates/tw-model/src/format.rs)) — hyperlinks live in `RunContent::Hyperlink`.
 - `Document` has no `comments` collection ([`document.rs`](../crates/tw-model/src/document.rs)).
+- `tw-docx` import parses `w:hyperlink`, `w:fldSimple`, footnote/comment refs, bookmarks, shapes, and all header/footer reference types; **`ImportRetentionReport`** on `ImportResult` counts encountered vs retained OOXML elements.
 - Track-changes **`Revision`** metadata on runs **is** implemented and round-trips through DOCX.
 
 ### Gap vs spec
 
-- [`docs/architecture/document-model.md`](architecture/document-model.md): `Comment`, `Bookmark`, `RunContent::Field`, `Block::ShapeBlock`, typed header/footer map — **specified, not built**.
+- [`docs/architecture/document-model.md`](architecture/document-model.md): `Comment` threads, `Document.comments`, full hyperlink styling, and field update — **partially built** (R2.1 vocabulary + import retention).
 - [`docs/architecture/collaboration.md`](architecture/collaboration.md): `CommentThread`, CRDT-synced comments — **spec only**.
-- [`docs/architecture/docx-compatibility.md`](architecture/docx-compatibility.md): comments part Phase 5 — not parsed.
-- `tw-docx` has no hyperlink or comment range parsing in paragraph import.
+- [`docs/architecture/docx-compatibility.md`](architecture/docx-compatibility.md): comments part Phase 5 — anchors imported as `CommentRef`, body not parsed.
+- Layout/render: placeholder text for new run variants; no link styling or comment margin markers yet.
 
 ### Key files
 
@@ -223,10 +226,10 @@ Tests: [`crates/tw-html/tests/export_import.rs`](../crates/tw-html/tests/export_
 
 ### Future work
 
-1. Add `CharFormat.hyperlink: Option<HyperlinkTarget>` and `Document.comments: Vec<CommentThread>`.
-2. Edit commands: `InsertHyperlink`, `AddComment`, `ReplyComment`, `ResolveComment`.
+1. ~~Add model vocabulary for hyperlinks, fields, bookmarks~~ (R2.1 done).
+2. Add `Document.comments: Vec<CommentThread>` and edit commands: `InsertHyperlink`, `AddComment`, `ReplyComment`, `ResolveComment`.
 3. Layout: blue underline, link hit-test; comment anchors in margin (rect batch).
-4. DOCX: parse `w:hyperlink`, preserve `word/comments.xml` via OPC passthrough.
+4. DOCX: parse `word/comments.xml` body; round-trip hyperlink `r:id` targets.
 5. FFI + Flutter: References/Review tabs.
 
 ### Exit criteria (documentation target)

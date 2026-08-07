@@ -5,11 +5,11 @@ import 'package:tutuaword/editor/editor_controller.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  group('EditorController (mock mode)', () {
+  group('EditorController (mock engine)', () {
     late EditorController controller;
 
     setUp(() {
-      controller = EditorController();
+      controller = EditorController.forTest();
     });
 
     tearDown(() {
@@ -20,34 +20,37 @@ void main() {
       expect(controller.pageCount, 1);
       expect(controller.currentPage, 0);
       expect(controller.documentText, isEmpty);
+      expect(controller.usesGlyphRendering, isTrue);
+      expect(controller.preferTextRendering, isFalse);
     });
 
-    test('insertCharacter appends text in mock mode', () {
-      if (controller.isEngineConnected) return;
-      controller.insertCharacter('H');
-      controller.insertCharacter('i');
+    test('insertCharacter appends text via mock engine', () async {
+      controller.ensureGlyphCaret();
+      await controller.insertGlyphCharacter('H');
+      await controller.insertGlyphCharacter('i');
       expect(controller.documentText, 'Hi');
     });
 
-    test('deleteBackward removes last character', () {
-      if (controller.isEngineConnected) return;
-      controller.insertCharacter('A');
-      controller.insertCharacter('B');
-      controller.deleteBackward();
+    test('deleteBackward removes last character', () async {
+      controller.ensureGlyphCaret();
+      await controller.insertGlyphCharacter('A');
+      await controller.insertGlyphCharacter('B');
+      await controller.deleteGlyphBackward();
       expect(controller.documentText, 'A');
     });
 
-    test('deleteForward removes first character in mock mode', () {
-      if (controller.isEngineConnected) return;
-      controller.insertCharacter('A');
-      controller.insertCharacter('B');
-      controller.deleteForward();
+    test('deleteForward removes first character at caret', () async {
+      controller.ensureGlyphCaret();
+      await controller.insertGlyphCharacter('A');
+      await controller.insertGlyphCharacter('B');
+      controller.hitTestAt(0, 72, 87);
+      await controller.deleteGlyphForward();
       expect(controller.documentText, 'B');
     });
 
-    test('textForPage returns full text on single page', () {
-      if (controller.isEngineConnected) return;
-      controller.insertCharacter('X');
+    test('textForPage returns document text', () async {
+      controller.ensureGlyphCaret();
+      await controller.insertGlyphCharacter('X');
       expect(controller.textForPage(0), 'X');
     });
 
@@ -69,23 +72,29 @@ void main() {
       expect(controller.printPreview, isFalse);
     });
 
-    test('toolbar stubs update status in mock mode', () {
+    test('toolbar actions update status with mock engine', () async {
       controller.insertTable();
+      await Future<void>.delayed(Duration.zero);
       expect(controller.statusText, contains('Table'));
 
       controller.insertImage();
+      await Future<void>.delayed(Duration.zero);
       expect(controller.statusText, contains('Image'));
 
       controller.applyHeading1();
+      await Future<void>.delayed(Duration.zero);
       expect(controller.statusText, contains('Heading 1'));
 
       controller.applyBulletList();
+      await Future<void>.delayed(Duration.zero);
       expect(controller.statusText, contains('Bullet'));
     });
 
     test('engine mode connects when FFI library is present', () {
-      if (!controller.isEngineConnected) return;
-      expect(controller.statusText, contains('Rust engine'));
+      final ffiController = EditorController.forTest();
+      addTearDown(ffiController.dispose);
+      if (!ffiController.isEngineConnected) return;
+      expect(ffiController.statusText, contains('Rust engine'));
     });
 
     test('toggleBold italic underline update local flags', () {
@@ -108,11 +117,7 @@ void main() {
     test('spellCheckDocument clears misspellings in mock mode', () async {
       await controller.spellCheckDocument();
       expect(controller.spellMisspellings, isEmpty);
-      if (!controller.isEngineConnected) {
-        expect(controller.statusText, contains('Spell check'));
-      } else {
-        expect(controller.statusText, anyOf(contains('Spell check'), contains('No spelling')));
-      }
+      expect(controller.statusText, contains('No spelling issues found'));
     });
   });
 
@@ -120,7 +125,7 @@ void main() {
     late EditorController controller;
 
     setUp(() {
-      controller = EditorController();
+      controller = EditorController.forTest();
     });
 
     tearDown(() {
@@ -243,48 +248,22 @@ void main() {
     });
   });
 
-  group('EditorController text pagination', () {
+  group('EditorController text storage', () {
     late EditorController controller;
 
     setUp(() {
-      controller = EditorController();
+      controller = EditorController.forTest();
     });
 
     tearDown(() {
       controller.dispose();
     });
 
-    test('resume-sized document paginates to a small page count', () {
-      final paragraphs = List.generate(
-        80,
-        (i) =>
-            'Section ${i + 1}: Professional experience and academic qualifications with detailed responsibilities.',
-      );
-      final text = paragraphs.join('\n\n');
+    test('replacePageText stores full document text', () {
+      final text = List.generate(120, (i) => 'Line item number $i.').join('\n');
       controller.replacePageText(0, text);
-
-      expect(text.length, greaterThan(5000));
-      expect(controller.pageCount, greaterThan(2));
-      expect(controller.pageCount, lessThan(12));
-    });
-
-    test('textForPage fills pages with wrapped lines not single paragraphs', () {
-      final text = List.generate(120, (i) => 'Line item number $i with some extra words.').join('\n');
-      controller.replacePageText(0, text);
-
-      expect(controller.pageCount, greaterThan(1));
-      final firstPage = controller.textForPage(0);
-      final firstPageLines = firstPage.split('\n').where((l) => l.isNotEmpty).length;
-      expect(firstPageLines, greaterThan(5));
-    });
-
-    test('all pages together contain the full document text', () {
-      const text = 'Alpha paragraph.\n\nBeta paragraph with more words.\n\nGamma end.';
-      controller.replacePageText(0, text);
-
-      final merged = List.generate(controller.pageCount, controller.textForPage).join('\n');
-      expect(merged.replaceAll('\n', ' '), contains('Alpha paragraph'));
-      expect(merged.replaceAll('\n', ' '), contains('Gamma end'));
+      expect(controller.documentText, text);
+      expect(controller.textForPage(0), text);
     });
   });
 }

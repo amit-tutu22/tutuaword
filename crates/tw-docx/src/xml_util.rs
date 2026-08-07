@@ -94,12 +94,15 @@ pub fn advance_past_tag<'a>(xml: &'a str, tag: &str) -> &'a str {
         .unwrap_or("")
 }
 
-/// The next run-level child inside a paragraph body: `w:r`, `w:ins`, or `w:del`.
+/// The next run-level child inside a paragraph body.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunLevelTag {
     Run,
     Insert,
     Delete,
+    Hyperlink,
+    FieldSimple,
+    BookmarkStart,
 }
 
 /// Finds the earliest run-level element at the current parse position.
@@ -108,6 +111,9 @@ pub fn next_run_level_tag(xml: &str) -> Option<(usize, RunLevelTag)> {
         xml.find("<w:r").map(|i| (i, RunLevelTag::Run)),
         xml.find("<w:ins").map(|i| (i, RunLevelTag::Insert)),
         xml.find("<w:del").map(|i| (i, RunLevelTag::Delete)),
+        xml.find("<w:hyperlink").map(|i| (i, RunLevelTag::Hyperlink)),
+        xml.find("<w:fldSimple").map(|i| (i, RunLevelTag::FieldSimple)),
+        xml.find("<w:bookmarkStart").map(|i| (i, RunLevelTag::BookmarkStart)),
     ]
     .into_iter()
     .flatten()
@@ -117,6 +123,9 @@ pub fn next_run_level_tag(xml: &str) -> Option<(usize, RunLevelTag)> {
             RunLevelTag::Run => "<w:r",
             RunLevelTag::Insert => "<w:ins",
             RunLevelTag::Delete => "<w:del",
+            RunLevelTag::Hyperlink => "<w:hyperlink",
+            RunLevelTag::FieldSimple => "<w:fldSimple",
+            RunLevelTag::BookmarkStart => "<w:bookmarkStart",
         };
         after
             .get(prefix.len()..)

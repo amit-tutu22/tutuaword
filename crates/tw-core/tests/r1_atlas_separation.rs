@@ -89,10 +89,10 @@ fn r1_atlas_separation_keystroke_ffi_under_2mb() {
     // v4 page payloads must not embed atlas pixels (header only, no 16MB blob).
     let page_count = session.get_display_list_bytes().page_count as usize;
     for page in 0..page_count {
-        let page_bytes = session
+        let page_snap = session
             .page_display_list(page as u32)
-            .expect("page snapshot")
-            .bytes;
+            .expect("page snapshot");
+        let page_bytes = page_snap.bytes.as_ref();
         assert!(page_bytes.len() >= 4);
         let file_version = u32::from_le_bytes(page_bytes[0..4].try_into().unwrap());
         assert_eq!(

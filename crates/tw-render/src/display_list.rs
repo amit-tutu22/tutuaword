@@ -175,6 +175,17 @@ impl DisplayListBuilder {
         bytes
     }
 
+    /// Compare two serialized page display lists ignoring the layout version
+    /// stamp, so a relayout that reproduced a page can be detected as a no-op.
+    pub fn page_bytes_match_content(a: &[u8], b: &[u8]) -> bool {
+        const VERSION_START: usize = std::mem::size_of::<u32>();
+        const VERSION_END: usize = VERSION_START + std::mem::size_of::<u64>();
+        a.len() == b.len()
+            && a.len() >= VERSION_END
+            && a[..VERSION_START] == b[..VERSION_START]
+            && a[VERSION_END..] == b[VERSION_END..]
+    }
+
     /// Serialize atlas pixels as a standalone resource for FFI transfer.
     pub fn atlas_to_bytes(atlas: &GlyphAtlas, generation: u64) -> Vec<u8> {
         let mut bytes = Vec::new();

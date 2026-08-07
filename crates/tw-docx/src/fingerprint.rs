@@ -61,6 +61,14 @@ fn hash_blocks(blocks: &[Block], hasher: &mut DefaultHasher) {
                 image.display_width.to_bits().hash(hasher);
                 image.display_height.to_bits().hash(hasher);
             }
+            Block::ShapeBlock(shape) => {
+                3u8.hash(hasher);
+                shape.shape.width.to_bits().hash(hasher);
+                shape.shape.height.to_bits().hash(hasher);
+            }
+            _ => {
+                255u8.hash(hasher);
+            }
         }
     }
 }
@@ -80,6 +88,33 @@ fn hash_paragraph(para: &Paragraph, hasher: &mut DefaultHasher) {
             RunContent::Break(kind) => {
                 2u8.hash(hasher);
                 kind.hash(hasher);
+            }
+            RunContent::Hyperlink { text, .. } => {
+                3u8.hash(hasher);
+                text.hash(hasher);
+            }
+            RunContent::Field(field) => {
+                4u8.hash(hasher);
+                field.display_text.hash(hasher);
+            }
+            RunContent::InlineImage(img) => {
+                5u8.hash(hasher);
+                img.image.asset_id.hash(hasher);
+            }
+            RunContent::FootnoteRef(note) => {
+                6u8.hash(hasher);
+                note.note_id.hash(hasher);
+            }
+            RunContent::CommentRef(c) => {
+                7u8.hash(hasher);
+                c.comment_id.hash(hasher);
+            }
+            RunContent::Bookmark(b) => {
+                8u8.hash(hasher);
+                b.name.hash(hasher);
+            }
+            _ => {
+                9u8.hash(hasher);
             }
         }
         let format = &run.format;

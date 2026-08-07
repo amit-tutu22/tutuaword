@@ -139,6 +139,8 @@ fn serialize_block(
         Block::Paragraph(para) => serialize_paragraph(para, doc, revision_ids),
         Block::Table(table) => serialize_table(table, doc, media, revision_ids),
         Block::ImageBlock(image) => serialize_image_paragraph(image, media),
+        Block::ShapeBlock(shape) => serialize_shape_paragraph(shape),
+        _ => String::from("<w:p/>"),
     }
 }
 
@@ -233,6 +235,7 @@ fn serialize_spacing(format: &ParaFormat) -> String {
             to_twips(*points)
         )),
         None => {}
+        Some(_) => {}
     }
     if attrs.is_empty() {
         String::new()
@@ -276,6 +279,7 @@ fn serialize_tab_stops(format: &ParaFormat) -> String {
             TabAlignment::Decimal => "decimal",
             TabAlignment::Bar => "bar",
             TabAlignment::Left => "left",
+            _ => "left",
         };
         xml.push_str(&format!(
             r#"<w:tab w:val="{align}" w:pos="{}"/>"#,
@@ -317,6 +321,16 @@ fn serialize_run(run: &Run, revision_ids: &mut RevisionIdAllocator) -> String {
         RunContent::Break(tw_model::BreakType::Page) => r#"<w:br w:type="page"/>"#.to_string(),
         RunContent::Break(tw_model::BreakType::Column) => r#"<w:br w:type="column"/>"#.to_string(),
         RunContent::Break(tw_model::BreakType::Line) => "<w:br/>".to_string(),
+        RunContent::Hyperlink { text, .. } => serialize_text(text, deleted),
+        RunContent::Field(field) => {
+            let display = field.display_text.as_deref().unwrap_or("[field]");
+            serialize_text(display, deleted)
+        }
+        RunContent::InlineImage(_) => "<w:t>[image]</w:t>".to_string(),
+        RunContent::FootnoteRef(_) => "<w:footnoteReference/>".to_string(),
+        RunContent::CommentRef(_) => "<w:commentReference/>".to_string(),
+        RunContent::Bookmark(b) => serialize_text(&format!("[{}]", b.name), deleted),
+        _ => serialize_text(run.content.display_text(), deleted),
     };
 
     let xml = format!(
@@ -665,11 +679,20 @@ fn serialize_image_paragraph(image: &ImageBlock, media: &mut MediaWriter) -> Str
     format!("<w:p><w:r><w:drawing>{drawing}</w:drawing></w:r></w:p>")
 }
 
+fn serialize_shape_paragraph(shape: &tw_model::ShapeBlock) -> String {
+    let cx = to_emu(shape.shape.width);
+    let cy = to_emu(shape.shape.height);
+    format!(
+        r#"<w:p><w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="{cx}" cy="{cy}"/><wp:docPr id="1" name="Shape"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp/></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#
+    )
+}
+
 fn wrap_element(wrap: TextWrap) -> &'static str {
     match wrap {
         TextWrap::Square => r#"<wp:wrapSquare wrapText="bothSides"/>"#,
         TextWrap::TopBottom => "<wp:wrapTopAndBottom/>",
         TextWrap::Inline | TextWrap::Behind | TextWrap::InFront => "<wp:wrapNone/>",
+        _ => "<wp:wrapNone/>",
     }
 }
 
@@ -760,6 +783,7 @@ fn alignment_value(alignment: Alignment) -> &'static str {
         Alignment::Center => "center",
         Alignment::Right => "right",
         Alignment::Justify => "both",
+        _ => "left",
     }
 }
 
@@ -771,6 +795,7 @@ fn underline_value(style: UnderlineStyle) -> &'static str {
         UnderlineStyle::Dotted => "dotted",
         UnderlineStyle::Dashed => "dash",
         UnderlineStyle::Wave => "wave",
+        _ => "single",
     }
 }
 

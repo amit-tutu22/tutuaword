@@ -1,82 +1,73 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
-import 'package:tutuaword/editor/display_list.dart';
+import 'package:tutuaword/bridge/mock_native_engine.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
+
+import 'editor_test_helpers.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  Future<EditorController> freshController() async {
-    final controller = EditorController(enableAutosave: false);
-    addTearDown(controller.dispose);
-    if (controller.isEngineConnected) {
-      await controller.newDocument();
-    }
-    return controller;
+  /// Underline value the engine holds for the caret run.
+  String engineUnderline(MockDocumentEngine engine) {
+    final json = jsonDecode(engine.fetchCaretFormat(engine.defaultRunId)!)
+        as Map<String, dynamic>;
+    return (json['char_format'] as Map<String, dynamic>)['underline'] as String;
   }
 
   group('F03.S1 underline', () {
     test('I-F03-S1-underline-toggle applies underline to typed text', () async {
-      final controller = await freshController();
-      if (!controller.isEngineConnected) return;
+      final engine = MockDocumentEngine();
+      final controller = createTestEditorController(engine: engine);
+      addTearDown(controller.dispose);
 
-      controller.ensureGlyphCaret();
-      for (final ch in 'abc'.split('')) {
-        controller.insertGlyphCharacter(ch);
-      }
+      await typeTextDirect(controller, 'abc');
       expect(controller.documentText, 'abc');
 
       controller.toggleUnderline();
-      expect(controller.underline, isTrue, reason: 'ribbon should show underline on');
+      await controller.ensureLayoutReady();
 
-      final snapshot = DisplayListSnapshot.fromBytes(controller.displayListBytes);
-      expect(
-        snapshot.rectBatch.isNotEmpty,
-        isTrue,
-        reason: 'underline should emit decoration rects in display list',
-      );
+      expect(controller.underline, isTrue, reason: 'ribbon should show underline on');
+      expect(engineUnderline(engine), 'Single');
     });
 
     test('I-F03-S1-underline-typing-attribute applies to subsequently typed text', () async {
-      final controller = await freshController();
-      if (!controller.isEngineConnected) return;
+      final engine = MockDocumentEngine();
+      final controller = createTestEditorController(engine: engine);
+      addTearDown(controller.dispose);
 
       controller.ensureGlyphCaret();
       controller.toggleUnderline();
+      await controller.ensureLayoutReady();
 
-      for (final ch in 'abc'.split('')) {
-        controller.insertGlyphCharacter(ch);
-      }
+      await typeTextDirect(controller, 'abc');
 
-      final snapshot = DisplayListSnapshot.fromBytes(controller.displayListBytes);
-      expect(
-        snapshot.rectBatch.isNotEmpty,
-        isTrue,
-        reason: 'typing with underline on should paint decoration rects',
-      );
+      expect(controller.documentText, 'abc');
       expect(controller.underline, isTrue, reason: 'ribbon should reflect typing attribute');
+      expect(engineUnderline(engine), 'Single');
     });
 
     test('I-F03-S1-underline-selection applies to select-all range', () async {
-      final controller = await freshController();
-      if (!controller.isEngineConnected) return;
+      final engine = MockDocumentEngine();
+      final controller = createTestEditorController(engine: engine);
+      addTearDown(controller.dispose);
 
-      controller.ensureGlyphCaret();
-      for (final ch in 'hello'.split('')) {
-        controller.insertGlyphCharacter(ch);
-      }
+      await typeTextDirect(controller, 'hello');
 
-      controller.selectAll();
+      await controller.selectAll();
       expect(controller.hasGlyphSelection, isTrue);
+      expect(controller.selectedText, 'hello');
 
       controller.toggleUnderline();
+      await controller.ensureLayoutReady();
 
-      final snapshot = DisplayListSnapshot.fromBytes(controller.displayListBytes);
-      expect(
-        snapshot.rectBatch.isNotEmpty,
-        isTrue,
-        reason: 'selection underline should produce decoration rects',
-      );
       expect(controller.underline, isTrue, reason: 'ribbon should show underline on');
+      expect(engineUnderline(engine), 'Single');
+
+      controller.toggleUnderline();
+      await controller.ensureLayoutReady();
+      expect(engineUnderline(engine), 'None');
     });
   });
 }

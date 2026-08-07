@@ -69,6 +69,8 @@ fn outline(doc: &Document) -> AuditStats {
                         stats.empty_images += 1;
                     }
                 }
+                Block::ShapeBlock(_) => {}
+                _ => {}
             }
         }
     }

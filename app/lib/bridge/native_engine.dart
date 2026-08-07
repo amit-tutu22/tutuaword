@@ -1,18 +1,24 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
+import 'package:tutuaword/bridge/command_codec.dart';
 import 'package:tutuaword/bridge/document_properties.dart';
 import 'package:tutuaword/bridge/native_event_router.dart';
 
-typedef TwInitNative = Int32 Function(Pointer<NativeFunction<Int32 Function(Uint32, Pointer<Uint8>, IntPtr)>>);
-typedef TwInitDart = int Function(Pointer<NativeFunction<Int32 Function(Uint32, Pointer<Uint8>, IntPtr)>>);
+typedef TwEventCallbackNative = Void Function(Uint32, Uint64, Pointer<Uint8>, IntPtr);
+typedef TwEventCallbackDart = void Function(int, int, Pointer<Uint8>, int);
 
-typedef TwApplyInsertTextNative = Int32 Function(Pointer<Utf8>, Uint32, Pointer<Utf8>);
-typedef TwApplyInsertTextDart = int Function(Pointer<Utf8>, int, Pointer<Utf8>);
+typedef TwInitNative = Int32 Function(Pointer<NativeFunction<TwEventCallbackNative>>);
+typedef TwInitDart = int Function(Pointer<NativeFunction<TwEventCallbackNative>>);
+
+typedef TwDispatchNative = Int32 Function(Pointer<Uint8>, IntPtr);
+typedef TwDispatchDart = int Function(Pointer<Uint8>, int);
 
 typedef TwApplyPasteHtmlNative = Int32 Function(Pointer<Utf8>, Uint32, Pointer<Utf8>);
 typedef TwApplyPasteHtmlDart = int Function(Pointer<Utf8>, int, Pointer<Utf8>);
@@ -41,6 +47,7 @@ typedef TwGetPageDisplayListNative = Int32 Function(
   Uint32,
   Pointer<Pointer<Uint8>>,
   Pointer<IntPtr>,
+  Pointer<Uint64>,
   Pointer<Float>,
   Pointer<Float>,
 );
@@ -48,6 +55,7 @@ typedef TwGetPageDisplayListDart = int Function(
   int,
   Pointer<Pointer<Uint8>>,
   Pointer<IntPtr>,
+  Pointer<Uint64>,
   Pointer<Float>,
   Pointer<Float>,
 );
@@ -78,6 +86,15 @@ typedef TwGetDocumentPropertiesJsonDart = int Function(Pointer<Pointer<Uint8>>, 
 
 typedef TwIsDocumentReadOnlyNative = Int32 Function();
 typedef TwIsDocumentReadOnlyDart = int Function();
+
+typedef TwIsPageStaleNative = Int32 Function(Uint32);
+typedef TwIsPageStaleDart = int Function(int);
+
+typedef TwPumpEventsNative = Int32 Function();
+typedef TwPumpEventsDart = int Function();
+
+typedef TwGetAtlasGenerationNative = Int32 Function(Pointer<Uint64>);
+typedef TwGetAtlasGenerationDart = int Function(Pointer<Uint64>);
 
 typedef TwOpenDocumentWithPathNative = Int32 Function(
   Pointer<Uint8>,
@@ -155,55 +172,6 @@ typedef TwApplyBulletListDart = int Function(Pointer<Utf8>);
 typedef TwApplyNumberedListNative = Int32 Function(Pointer<Utf8>);
 typedef TwApplyNumberedListDart = int Function(Pointer<Utf8>);
 
-typedef TwApplyCharFormatNative = Int32 Function(
-  Pointer<Utf8>,
-  Uint32,
-  Pointer<Utf8>,
-  Uint32,
-  Pointer<Utf8>,
-);
-typedef TwApplyCharFormatDart = int Function(
-  Pointer<Utf8>,
-  int,
-  Pointer<Utf8>,
-  int,
-  Pointer<Utf8>,
-);
-
-typedef TwApplyParaFormatNative = Int32 Function(
-  Pointer<Utf8>,
-  Uint32,
-  Pointer<Utf8>,
-  Uint32,
-  Pointer<Utf8>,
-);
-typedef TwApplyParaFormatDart = int Function(
-  Pointer<Utf8>,
-  int,
-  Pointer<Utf8>,
-  int,
-  Pointer<Utf8>,
-);
-
-typedef TwApplyDeleteRangeNative = Int32 Function(Pointer<Utf8>, Uint32, Uint32);
-typedef TwApplyDeleteRangeDart = int Function(Pointer<Utf8>, int, int);
-
-typedef TwApplyDeleteDocRangeNative = Int32 Function(
-  Pointer<Utf8>,
-  Uint32,
-  Pointer<Utf8>,
-  Uint32,
-);
-typedef TwApplyDeleteDocRangeDart = int Function(
-  Pointer<Utf8>,
-  int,
-  Pointer<Utf8>,
-  int,
-);
-
-typedef TwApplySplitParagraphNative = Int32 Function(Pointer<Utf8>, Uint32);
-typedef TwApplySplitParagraphDart = int Function(Pointer<Utf8>, int);
-
 typedef TwInsertTableNative = Int32 Function(Uint32, Uint32);
 typedef TwInsertTableDart = int Function(int, int);
 
@@ -252,9 +220,6 @@ typedef TwHitTestDart = int Function(int, double, double, Pointer<Utf8>, int, Po
 typedef TwDocumentTailHitNative = Int32 Function(Uint32, Pointer<Utf8>, IntPtr, Pointer<Uint32>);
 typedef TwDocumentTailHitDart = int Function(int, Pointer<Utf8>, int, Pointer<Uint32>);
 
-typedef TwWaitForLayoutNative = Int32 Function();
-typedef TwWaitForLayoutDart = int Function();
-
 typedef TwCaretGeometryNative = Int32 Function(Uint32, Float, Float, Pointer<Float>, Pointer<Float>, Pointer<Float>);
 typedef TwCaretGeometryDart = int Function(int, double, double, Pointer<Float>, Pointer<Float>, Pointer<Float>);
 
@@ -278,26 +243,32 @@ typedef TwCaretAtPositionDart = int Function(
 typedef TwSelectionRectsNative = Int32 Function(Uint32, Float, Float, Float, Float, Pointer<Float>, Uint32, Pointer<Uint32>);
 typedef TwSelectionRectsDart = int Function(int, double, double, double, double, Pointer<Float>, int, Pointer<Uint32>);
 
+typedef TwLastRequestIdNative = Uint64 Function();
+typedef TwLastRequestIdDart = int Function();
+
 typedef TwFreeBufferNative = Void Function(Pointer<Uint8>, IntPtr);
 typedef TwFreeBufferDart = void Function(Pointer<Uint8>, int);
 
 typedef TwShutdownNative = Void Function();
 typedef TwShutdownDart = void Function();
 
+/// Budget for an edit's worker round-trip. Typing never blocks on this — the
+/// caret advances optimistically and the repaint arrives with the event — so
+/// this only bounds how long a dropped or coalesced event can stall an
+/// operation that genuinely needs settled layout before the sync fallback.
+const Duration kEditCompletionTimeout = Duration(milliseconds: 1500);
+
 class NativeEngine {
   NativeEngine._(this._lib);
 
   static NativeEngine? _cached;
+  static NativeCallable<TwEventCallbackNative>? _eventCallable;
+  static Future<void>? _shutdownInFlight;
 
   final DynamicLibrary _lib;
-  late final TwApplyInsertTextDart applyInsertText;
+  late final TwDispatchDart dispatch;
   late final TwApplyPasteHtmlDart applyPasteHtml;
   late final TwApplyPasteDocxDart applyPasteDocx;
-  late final TwApplyCharFormatDart applyCharFormat;
-  late final TwApplyParaFormatDart applyParaFormat;
-  late final TwApplyDeleteRangeDart applyDeleteRange;
-  late final TwApplyDeleteDocRangeDart applyDeleteDocRange;
-  late final TwApplySplitParagraphDart applySplitParagraph;
   late final TwGetDisplayListDart getDisplayList;
   late final TwGetPageDisplayListDart getPageDisplayList;
   late final TwGetAtlasDart getAtlas;
@@ -305,6 +276,12 @@ class NativeEngine {
   late final TwGetLastErrorDart getLastErrorNative;
   late final TwGetDocumentPropertiesJsonDart getDocumentPropertiesJson;
   late final TwIsDocumentReadOnlyDart isDocumentReadOnlyNative;
+
+  /// Absent in engine builds that predate `tw_is_page_stale`; a missing symbol
+  /// degrades to "never stale", which is the pre-background-reflow behaviour.
+  TwIsPageStaleDart? isPageStaleNative;
+  TwPumpEventsDart? pumpEventsNative;
+  TwGetAtlasGenerationDart? getAtlasGenerationNative;
   late final TwGetTextRangeDart getTextRange;
   late final TwGetCaretFormatDart getCaretFormat;
   late final TwClearFormatDart clearFormatNative;
@@ -329,7 +306,7 @@ class NativeEngine {
   late final TwRejectAllRevisionsDart rejectAllRevisionsNative;
   late final TwHitTestDart hitTest;
   late final TwDocumentTailHitDart documentTailHit;
-  late final TwWaitForLayoutDart waitForLayoutNative;
+  late final TwLastRequestIdDart lastRequestIdNative;
   late final TwCaretGeometryDart caretGeometry;
   late final TwCaretAtPositionDart caretAtPositionNative;
   late final TwSelectionRectsDart selectionRects;
@@ -340,25 +317,15 @@ class NativeEngine {
     try {
       final lib = _openLibrary();
       final engine = NativeEngine._(lib);
+      _eventCallable ??= NativeCallable<TwEventCallbackNative>.listener(_eventCallback);
       lib.lookupFunction<TwInitNative, TwInitDart>('tw_init')(
-        Pointer.fromFunction(_eventCallback, 0),
+        _eventCallable!.nativeFunction,
       );
-      engine.applyInsertText =
-          lib.lookupFunction<TwApplyInsertTextNative, TwApplyInsertTextDart>('tw_apply_insert_text');
+      engine.dispatch = lib.lookupFunction<TwDispatchNative, TwDispatchDart>('tw_dispatch');
       engine.applyPasteHtml =
           lib.lookupFunction<TwApplyPasteHtmlNative, TwApplyPasteHtmlDart>('tw_apply_paste_html');
       engine.applyPasteDocx =
           lib.lookupFunction<TwApplyPasteDocxNative, TwApplyPasteDocxDart>('tw_apply_paste_docx');
-      engine.applyCharFormat =
-          lib.lookupFunction<TwApplyCharFormatNative, TwApplyCharFormatDart>('tw_apply_char_format');
-      engine.applyParaFormat =
-          lib.lookupFunction<TwApplyParaFormatNative, TwApplyParaFormatDart>('tw_apply_para_format');
-      engine.applyDeleteRange =
-          lib.lookupFunction<TwApplyDeleteRangeNative, TwApplyDeleteRangeDart>('tw_apply_delete_range');
-      engine.applyDeleteDocRange = lib.lookupFunction<TwApplyDeleteDocRangeNative,
-          TwApplyDeleteDocRangeDart>('tw_apply_delete_doc_range');
-      engine.applySplitParagraph = lib.lookupFunction<TwApplySplitParagraphNative,
-          TwApplySplitParagraphDart>('tw_apply_split_paragraph');
       engine.getDisplayList =
           lib.lookupFunction<TwGetDisplayListNative, TwGetDisplayListDart>('tw_get_display_list');
       engine.getPageDisplayList = lib.lookupFunction<TwGetPageDisplayListNative,
@@ -374,6 +341,27 @@ class NativeEngine {
       engine.isDocumentReadOnlyNative =
           lib.lookupFunction<TwIsDocumentReadOnlyNative, TwIsDocumentReadOnlyDart>(
               'tw_is_document_read_only');
+      // Optional exports: an older engine build simply lacks them, and each
+      // has a defined degraded behaviour rather than failing the whole load.
+      try {
+        engine.isPageStaleNative =
+            lib.lookupFunction<TwIsPageStaleNative, TwIsPageStaleDart>('tw_is_page_stale');
+      } on ArgumentError {
+        engine.isPageStaleNative = null;
+      }
+      try {
+        engine.pumpEventsNative =
+            lib.lookupFunction<TwPumpEventsNative, TwPumpEventsDart>('tw_pump_events');
+      } on ArgumentError {
+        engine.pumpEventsNative = null;
+      }
+      try {
+        engine.getAtlasGenerationNative =
+            lib.lookupFunction<TwGetAtlasGenerationNative, TwGetAtlasGenerationDart>(
+                'tw_get_atlas_generation');
+      } on ArgumentError {
+        engine.getAtlasGenerationNative = null;
+      }
       engine.getTextRange =
           lib.lookupFunction<TwGetTextRangeNative, TwGetTextRangeDart>('tw_get_text_range');
       engine.getCaretFormat = lib.lookupFunction<TwGetCaretFormatNative, TwGetCaretFormatDart>(
@@ -419,8 +407,8 @@ class NativeEngine {
       engine.hitTest = lib.lookupFunction<TwHitTestNative, TwHitTestDart>('tw_hit_test');
       engine.documentTailHit =
           lib.lookupFunction<TwDocumentTailHitNative, TwDocumentTailHitDart>('tw_document_tail_hit');
-      engine.waitForLayoutNative =
-          lib.lookupFunction<TwWaitForLayoutNative, TwWaitForLayoutDart>('tw_wait_for_layout');
+      engine.lastRequestIdNative =
+          lib.lookupFunction<TwLastRequestIdNative, TwLastRequestIdDart>('tw_last_request_id');
       engine.caretGeometry =
           lib.lookupFunction<TwCaretGeometryNative, TwCaretGeometryDart>('tw_caret_geometry');
       engine.caretAtPositionNative = lib.lookupFunction<TwCaretAtPositionNative, TwCaretAtPositionDart>(
@@ -428,6 +416,8 @@ class NativeEngine {
       engine.selectionRects =
           lib.lookupFunction<TwSelectionRectsNative, TwSelectionRectsDart>('tw_selection_rects');
       engine.freeBuffer = lib.lookupFunction<TwFreeBufferNative, TwFreeBufferDart>('tw_free_buffer');
+      final pump = engine.pumpEventsNative;
+      if (pump != null) NativeEventRouter.instance.attachPump(pump);
       _cached = engine;
       return engine;
     } catch (_) {
@@ -437,11 +427,24 @@ class NativeEngine {
 
   /// Release the native session — for tests and app shutdown.
   static void shutdown() {
+    // ignore: discarded_futures
+    shutdownAsync();
+  }
+
+  static Future<void> shutdownAsync() {
+    return _shutdownInFlight ??= _shutdownImpl().whenComplete(() {
+      _shutdownInFlight = null;
+    });
+  }
+
+  static Future<void> _shutdownImpl() async {
     final engine = _cached;
     if (engine == null) return;
     engine._lib.lookupFunction<TwShutdownNative, TwShutdownDart>('tw_shutdown')();
-    NativeEventRouter.instance.reset();
     _cached = null;
+    NativeEventRouter.instance.reset();
+    NativeEventRouter.instance.detachPump();
+    // Keep _eventCallable alive until process exit — closing it races worker callbacks.
   }
 
   static DynamicLibrary _openLibrary() {
@@ -470,9 +473,16 @@ class NativeEngine {
     throw UnsupportedError('Platform not supported');
   }
 
-  static int _eventCallback(int eventType, Pointer<Uint8> data, int len) {
-    NativeEventRouter.instance.handleWireEvent(eventType, data, len);
-    return 0;
+  /// [payload] repeats the type and request id, but only stays alive for the
+  /// duration of the native call — and this callback is deferred to a later turn
+  /// of the event loop, so it must correlate purely on the by-value arguments.
+  static void _eventCallback(
+    int eventType,
+    int requestId,
+    Pointer<Uint8> payload,
+    int payloadLen,
+  ) {
+    NativeEventRouter.instance.onEvent(eventType, requestId);
   }
 }
 
@@ -483,8 +493,6 @@ class DisplayListData {
     required this.pageWidth,
     required this.pageHeight,
     required this.pageCount,
-    required this.documentText,
-    required this.atlasGeneration,
   });
 
   final Uint8List bytes;
@@ -492,8 +500,20 @@ class DisplayListData {
   final double pageWidth;
   final double pageHeight;
   final int pageCount;
-  final String documentText;
-  final int atlasGeneration;
+}
+
+class PageDisplayListData {
+  PageDisplayListData({
+    required this.bytes,
+    required this.version,
+    required this.pageWidth,
+    required this.pageHeight,
+  });
+
+  final Uint8List bytes;
+  final int version;
+  final double pageWidth;
+  final double pageHeight;
 }
 
 class AtlasData {
@@ -535,6 +555,58 @@ class GlyphSelectionRect {
 }
 
 extension NativeEngineOps on NativeEngine {
+  int lastRequestId() => lastRequestIdNative();
+
+  /// Enqueue a JSON [`Command`] via `tw_dispatch` (R2.5).
+  int dispatchCommandBytes(Uint8List jsonBytes) {
+    final ptr = calloc<Uint8>(jsonBytes.length);
+    try {
+      ptr.asTypedList(jsonBytes.length).setAll(0, jsonBytes);
+      return dispatch(ptr, jsonBytes.length);
+    } finally {
+      calloc.free(ptr);
+    }
+  }
+
+  int dispatchCommand(Map<String, dynamic> command) {
+    return dispatchCommandBytes(CommandCodec.encode(command));
+  }
+
+  int _dispatchCommands(List<Map<String, dynamic>> commands) {
+    for (final command in commands) {
+      final code = dispatchCommand(command);
+      if (code != 0) return code;
+    }
+    return 0;
+  }
+
+  /// Await the worker response for the most recently enqueued edit (R1.4).
+  Future<bool> awaitEditCompletion({Duration timeout = kEditCompletionTimeout}) async {
+    final requestId = lastRequestId();
+    if (requestId == 0) return true;
+    try {
+      final eventType = await NativeEventRouter.instance.waitFor(requestId, timeout: timeout);
+      return eventType != NativeEventTypes.error;
+    } on TimeoutException {
+      assert(() {
+        debugPrint(
+          'awaitEditCompletion: timed out waiting for requestId=$requestId; '
+          'falling back to sync fetchDisplayList',
+        );
+        return true;
+      }());
+      fetchDisplayList();
+      return true;
+    }
+  }
+
+  /// Enqueue an edit FFI call, then await its correlated worker event.
+  Future<bool> enqueueEdit(int Function() ffiCall) async {
+    final code = ffiCall();
+    if (code != 0) return false;
+    return awaitEditCompletion();
+  }
+
   DisplayListData? fetchDisplayList() {
     final outPtr = calloc<Pointer<Uint8>>();
     final outLen = calloc<IntPtr>();
@@ -570,8 +642,6 @@ extension NativeEngineOps on NativeEngine {
         pageWidth: outWidth.value,
         pageHeight: outHeight.value,
         pageCount: outPageCount.value,
-        documentText: fetchDocumentText() ?? '',
-        atlasGeneration: fetchAtlas()?.generation ?? 0,
       );
     } finally {
       calloc.free(outPtr);
@@ -584,25 +654,46 @@ extension NativeEngineOps on NativeEngine {
   }
 
   /// Display list for one page, without changing the session's current page.
-  Uint8List? fetchPageDisplayList(int page) {
+  PageDisplayListData? fetchPageDisplayList(int page) {
     final outPtr = calloc<Pointer<Uint8>>();
     final outLen = calloc<IntPtr>();
+    final outVersion = calloc<Uint64>();
     final outWidth = calloc<Float>();
     final outHeight = calloc<Float>();
 
     try {
-      final result = getPageDisplayList(page, outPtr, outLen, outWidth, outHeight);
+      final result = getPageDisplayList(
+        page,
+        outPtr,
+        outLen,
+        outVersion,
+        outWidth,
+        outHeight,
+      );
       if (result != 0) return null;
 
       final len = outLen.value;
       final ptr = outPtr.value;
-      if (ptr == nullptr || len == 0) return Uint8List(0);
+      if (ptr == nullptr || len == 0) {
+        return PageDisplayListData(
+          bytes: Uint8List(0),
+          version: outVersion.value,
+          pageWidth: outWidth.value,
+          pageHeight: outHeight.value,
+        );
+      }
       final bytes = ptr.asTypedList(len).sublist(0);
       freeBuffer(ptr, len);
-      return bytes;
+      return PageDisplayListData(
+        bytes: bytes,
+        version: outVersion.value,
+        pageWidth: outWidth.value,
+        pageHeight: outHeight.value,
+      );
     } finally {
       calloc.free(outPtr);
       calloc.free(outLen);
+      calloc.free(outVersion);
       calloc.free(outWidth);
       calloc.free(outHeight);
     }
@@ -744,6 +835,11 @@ extension NativeEngineOps on NativeEngine {
 
   bool newDocument() => newDocumentNative() == 0;
 
+  /// Blocks the calling isolate: `tw_open_document_with_path` enqueues the open
+  /// and then parks on `wait_for_open` (30 s cap) before returning, so there is
+  /// no request id for Dart to correlate against the `DocumentOpened` event.
+  /// Making this awaitable needs the export split into an enqueue that returns
+  /// the request id plus a result getter (Rust-side change).
   int openDocumentBytes(Uint8List bytes, {String? path}) {
     final ptr = calloc<Uint8>(bytes.length);
     final pathPtr = path?.toNativeUtf8();
@@ -774,6 +870,24 @@ extension NativeEngineOps on NativeEngine {
 
   bool isDocumentReadOnly() => isDocumentReadOnlyNative() == 1;
 
+  /// True while [page] still carries pre-edit geometry because the background
+  /// forward reflow has not reached it. Hit tests on such a page return no
+  /// result, which callers must not confuse with an empty page.
+  bool isPageStale(int page) => (isPageStaleNative?.call(page) ?? 0) == 1;
+
+  /// Atlas generation without copying the pixel buffer. Null when the engine
+  /// build lacks the query, which forces callers back to a full fetch.
+  int? fetchAtlasGeneration() {
+    final query = getAtlasGenerationNative;
+    if (query == null) return null;
+    final out = calloc<Uint64>();
+    try {
+      return query(out) == 0 ? out.value : null;
+    } finally {
+      calloc.free(out);
+    }
+  }
+
   String? _readNativeString(int Function(Pointer<Pointer<Uint8>>, Pointer<IntPtr>) reader) {
     final outPtr = calloc<Pointer<Uint8>>();
     final outLen = calloc<IntPtr>();
@@ -791,6 +905,8 @@ extension NativeEngineOps on NativeEngine {
     }
   }
 
+  /// Blocks the calling isolate — see [openDocumentBytes]; `tw_save_document`
+  /// returns the serialized bytes only after `wait_for_document_saved`.
   Uint8List? saveDocumentBytes() {
     final outPtr = calloc<Pointer<Uint8>>();
     final outLen = calloc<IntPtr>();
@@ -810,27 +926,54 @@ extension NativeEngineOps on NativeEngine {
   }
 
   void insertText(String runId, int offset, String text) {
-    final runPtr = runId.toNativeUtf8();
-    final textPtr = text.toNativeUtf8();
-    try {
-      if (applyInsertText(runPtr, offset, textPtr) != 0) {
-        throw StateError('insertText failed for run $runId at $offset');
-      }
-    } finally {
-      calloc.free(runPtr);
-      calloc.free(textPtr);
+    final code = dispatchCommand(CommandCodec.insertText(
+      runId: runId,
+      offset: offset,
+      text: text,
+    ));
+    if (code != 0) {
+      throw StateError('insertText failed for run $runId at $offset');
     }
   }
 
-  /// Like [insertText] but returns false instead of throwing on failure.
+  /// Fire-and-forget insert; use [tryInsertTextAsync] to await layout.
   bool tryInsertText(String runId, int offset, String text) {
+    return dispatchCommand(CommandCodec.insertText(
+          runId: runId,
+          offset: offset,
+          text: text,
+        )) ==
+        0;
+  }
+
+  Future<bool> tryInsertTextAsync(String runId, int offset, String text) async {
+    return enqueueEdit(() => dispatchCommand(CommandCodec.insertText(
+          runId: runId,
+          offset: offset,
+          text: text,
+        )));
+  }
+
+  Future<bool> tryPasteHtmlAsync(String runId, int offset, String html) async {
     final runPtr = runId.toNativeUtf8();
-    final textPtr = text.toNativeUtf8();
+    final htmlPtr = html.toNativeUtf8();
     try {
-      return applyInsertText(runPtr, offset, textPtr) == 0;
+      return enqueueEdit(() => applyPasteHtml(runPtr, offset, htmlPtr));
     } finally {
       calloc.free(runPtr);
-      calloc.free(textPtr);
+      calloc.free(htmlPtr);
+    }
+  }
+
+  Future<bool> tryPasteDocxAsync(String runId, int offset, Uint8List bytes) async {
+    final runPtr = runId.toNativeUtf8();
+    final dataPtr = calloc<Uint8>(bytes.length);
+    try {
+      dataPtr.asTypedList(bytes.length).setAll(0, bytes);
+      return enqueueEdit(() => applyPasteDocx(runPtr, offset, dataPtr, bytes.length));
+    } finally {
+      calloc.free(runPtr);
+      calloc.free(dataPtr);
     }
   }
 
@@ -865,16 +1008,15 @@ extension NativeEngineOps on NativeEngine {
     required int endOffset,
     required String formatJson,
   }) {
-    final startPtr = startRunId.toNativeUtf8();
-    final endPtr = endRunId.toNativeUtf8();
-    final jsonPtr = formatJson.toNativeUtf8();
-    try {
-      return applyCharFormat(startPtr, startOffset, endPtr, endOffset, jsonPtr) == 0;
-    } finally {
-      calloc.free(startPtr);
-      calloc.free(endPtr);
-      calloc.free(jsonPtr);
-    }
+    final patch = jsonDecode(formatJson) as Map<String, dynamic>;
+    return _dispatchCommands(CommandCodec.charFormatPatchCommands(
+          startRunId: startRunId,
+          startOffset: startOffset,
+          endRunId: endRunId,
+          endOffset: endOffset,
+          patch: patch,
+        )) ==
+        0;
   }
 
   /// Apply a partial ParaFormat JSON delta over paragraphs touched by the range.
@@ -885,25 +1027,161 @@ extension NativeEngineOps on NativeEngine {
     required int endOffset,
     required String formatJson,
   }) {
+    final format = jsonDecode(formatJson) as Map<String, dynamic>;
+    return dispatchCommand(CommandCodec.setParaFormatRange(
+          startRunId: startRunId,
+          startOffset: startOffset,
+          endRunId: endRunId,
+          endOffset: endOffset,
+          format: format,
+        )) ==
+        0;
+  }
+
+  Future<bool> deleteRangeAsync(String runId, int start, int end) async {
+    return enqueueEdit(() => dispatchCommand(CommandCodec.deleteRange(
+          runId: runId,
+          start: start,
+          end: end,
+        )));
+  }
+
+  Future<bool> deleteDocRangeAsync(
+    String startRunId,
+    int startOffset,
+    String endRunId,
+    int endOffset,
+  ) async {
+    return enqueueEdit(() => dispatchCommand(CommandCodec.deleteDocRange(
+          startRunId: startRunId,
+          startOffset: startOffset,
+          endRunId: endRunId,
+          endOffset: endOffset,
+        )));
+  }
+
+  Future<bool> splitParagraphAsync(String runId, int offset) async {
+    return enqueueEdit(() => dispatchCommand(CommandCodec.splitParagraphAt(
+          runId: runId,
+          offset: offset,
+        )));
+  }
+
+  Future<bool> applyCharFormatJsonAsync({
+    required String startRunId,
+    required int startOffset,
+    required String endRunId,
+    required int endOffset,
+    required String formatJson,
+  }) async {
+    final patch = jsonDecode(formatJson) as Map<String, dynamic>;
+    final commands = CommandCodec.charFormatPatchCommands(
+      startRunId: startRunId,
+      startOffset: startOffset,
+      endRunId: endRunId,
+      endOffset: endOffset,
+      patch: patch,
+    );
+    return enqueueEdit(() => _dispatchCommands(commands));
+  }
+
+  Future<bool> applyParaFormatJsonAsync({
+    required String startRunId,
+    required int startOffset,
+    required String endRunId,
+    required int endOffset,
+    required String formatJson,
+  }) async {
+    final format = jsonDecode(formatJson) as Map<String, dynamic>;
+    return enqueueEdit(() => dispatchCommand(CommandCodec.setParaFormatRange(
+          startRunId: startRunId,
+          startOffset: startOffset,
+          endRunId: endRunId,
+          endOffset: endOffset,
+          format: format,
+        )));
+  }
+
+  Future<bool> clearFormatAsync(
+    String startRunId,
+    int startOffset,
+    String endRunId,
+    int endOffset,
+  ) async {
     final startPtr = startRunId.toNativeUtf8();
     final endPtr = endRunId.toNativeUtf8();
-    final jsonPtr = formatJson.toNativeUtf8();
     try {
-      return applyParaFormat(startPtr, startOffset, endPtr, endOffset, jsonPtr) == 0;
+      return enqueueEdit(() => clearFormatNative(startPtr, startOffset, endPtr, endOffset));
     } finally {
       calloc.free(startPtr);
       calloc.free(endPtr);
-      calloc.free(jsonPtr);
     }
   }
 
-  bool deleteRange(String runId, int start, int end) {
-    final runPtr = runId.toNativeUtf8();
+  Future<bool> insertPageBreakAtAsync({String? caretRunId}) async {
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
     try {
-      return applyDeleteRange(runPtr, start, end) == 0;
+      return enqueueEdit(() => insertPageBreak(ptr));
     } finally {
-      calloc.free(runPtr);
+      if (caretRunId != null) calloc.free(ptr);
     }
+  }
+
+  Future<bool> setCurrentPageIndexAsync(int page) => enqueueEdit(() => setCurrentPage(page));
+
+  Future<bool> applyHeading1StyleAsync({String? caretRunId}) async {
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return enqueueEdit(() => applyHeading1(ptr));
+    } finally {
+      if (caretRunId != null) calloc.free(ptr);
+    }
+  }
+
+  Future<bool> applyNormalStyleAtAsync({String? caretRunId}) async {
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return enqueueEdit(() => applyNormalStyle(ptr));
+    } finally {
+      if (caretRunId != null) calloc.free(ptr);
+    }
+  }
+
+  Future<bool> applyBulletListStyleAsync({String? caretRunId}) async {
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return enqueueEdit(() => applyBulletList(ptr));
+    } finally {
+      if (caretRunId != null) calloc.free(ptr);
+    }
+  }
+
+  Future<bool> applyNumberedListStyleAsync({String? caretRunId}) async {
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return enqueueEdit(() => applyNumberedList(ptr));
+    } finally {
+      if (caretRunId != null) calloc.free(ptr);
+    }
+  }
+
+  Future<bool> insertTableBlockAsync(int rows, int cols) =>
+      enqueueEdit(() => insertTable(rows, cols));
+
+  Future<bool> insertImageBlockAsync(double width, double height) =>
+      enqueueEdit(() => insertImage(width, height));
+
+  Future<bool> undoEditAsync() => enqueueEdit(undo);
+
+  Future<bool> redoEditAsync() => enqueueEdit(redo);
+
+  bool deleteRange(String runId, int start, int end) {
+    return dispatchCommand(CommandCodec.deleteRange(
+          runId: runId,
+          start: start,
+          end: end,
+        )) ==
+        0;
   }
 
   bool deleteDocRange(
@@ -912,23 +1190,21 @@ extension NativeEngineOps on NativeEngine {
     String endRunId,
     int endOffset,
   ) {
-    final startPtr = startRunId.toNativeUtf8();
-    final endPtr = endRunId.toNativeUtf8();
-    try {
-      return applyDeleteDocRange(startPtr, startOffset, endPtr, endOffset) == 0;
-    } finally {
-      calloc.free(startPtr);
-      calloc.free(endPtr);
-    }
+    return dispatchCommand(CommandCodec.deleteDocRange(
+          startRunId: startRunId,
+          startOffset: startOffset,
+          endRunId: endRunId,
+          endOffset: endOffset,
+        )) ==
+        0;
   }
 
   bool splitParagraphAt(String runId, int offset) {
-    final runPtr = runId.toNativeUtf8();
-    try {
-      return applySplitParagraph(runPtr, offset) == 0;
-    } finally {
-      calloc.free(runPtr);
-    }
+    return dispatchCommand(CommandCodec.splitParagraphAt(
+          runId: runId,
+          offset: offset,
+        )) ==
+        0;
   }
 
   bool setCurrentPageIndex(int page) => setCurrentPage(page) == 0;
@@ -995,6 +1271,7 @@ extension NativeEngineOps on NativeEngine {
     }
   }
 
+  /// Blocks the calling isolate — see [openDocumentBytes].
   Uint8List? saveDocumentAsBytes(String formatExtension) {
     final formatPtr = formatExtension.toNativeUtf8();
     final outPtr = calloc<Pointer<Uint8>>();
@@ -1015,6 +1292,8 @@ extension NativeEngineOps on NativeEngine {
     }
   }
 
+  /// Blocks the calling isolate — see [openDocumentBytes]; the whole-document
+  /// spell pass runs before `tw_spell_check_document` returns.
   List<String>? spellCheckMisspellings() {
     final outPtr = calloc<Pointer<Uint8>>();
     final outLen = calloc<IntPtr>();
@@ -1052,10 +1331,6 @@ extension NativeEngineOps on NativeEngine {
       calloc.free(runIdBuf);
       calloc.free(offsetOut);
     }
-  }
-
-  void waitForLayoutSync() {
-    waitForLayoutNative();
   }
 
   HitTestResult? fetchDocumentTailHit(int page) {

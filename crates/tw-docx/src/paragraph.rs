@@ -1,11 +1,17 @@
-use tw_model::{BreakType, Document, Paragraph, Run, RunContent};
+use tw_model::{
+    BookmarkAnchor, BreakType, CommentRef, Document, FieldData, FieldType, FootnoteRef,
+    HyperlinkTarget, Paragraph, Run, RunContent,
+};
 
+use crate::retention::ImportRetentionReport;
 use crate::styles::{parse_char_properties, parse_para_default_char_format, parse_para_properties};
-use crate::xml_util::{extract_plain_text, extract_run_text, next_run_level_tag, read_attr_on_element, read_attr_value, take_element, RunLevelTag};
+use crate::table::{parse_inline_image, MediaResolver};
+use crate::xml_util::{
+    extract_plain_text, extract_run_text, next_run_level_tag, read_attr_on_element,
+    read_attr_value, read_int_attr, split_elements, take_element, RunLevelTag,
+};
 
 /// The `<w:pPr>` slice of a paragraph, or the whole element when it has none.
-/// Scoping matters: read against the full paragraph, `w:spacing` and `w:u`
-/// from a run's `w:rPr` would be taken for paragraph properties.
 pub fn paragraph_properties_xml(para_xml: &str) -> &str {
     let Some(start) = para_xml.find("<w:pPr") else {
         return para_xml;
@@ -19,6 +25,15 @@ pub fn paragraph_properties_xml(para_xml: &str) -> &str {
 }
 
 pub fn parse_paragraph(doc: &Document, para_xml: &str) -> Option<Paragraph> {
+    parse_paragraph_with_retention(doc, para_xml, None, None)
+}
+
+pub fn parse_paragraph_with_retention(
+    doc: &Document,
+    para_xml: &str,
+    retention: Option<&mut ImportRetentionReport>,
+    media: Option<&dyn MediaResolver>,
+) -> Option<Paragraph> {
     let mut para = Paragraph::new();
 
     if para_xml.contains("<w:pPr") {
@@ -41,12 +56,11 @@ pub fn parse_paragraph(doc: &Document, para_xml: &str) -> Option<Paragraph> {
             }
         }
 
-        // Run properties live in `<w:pPr>` too; only body runs become content.
         let body_xml = match para_xml.find("</w:pPr>") {
             Some(end) => &para_xml[end..],
             None => para_xml,
         };
-        let mut runs = parse_paragraph_runs(doc, body_xml, 0);
+        let mut runs = parse_paragraph_runs(doc, body_xml, 0, retention, media);
         for run in &mut runs {
             let direct = run.format.clone();
             run.format = para_defaults.clone();
@@ -73,12 +87,11 @@ pub fn parse_paragraph(doc: &Document, para_xml: &str) -> Option<Paragraph> {
         return Some(para);
     }
 
-    // Run properties live in `<w:pPr>` too; only body runs become content.
     let body_xml = match para_xml.find("</w:pPr>") {
         Some(end) => &para_xml[end..],
         None => para_xml,
     };
-    let mut runs = parse_paragraph_runs(doc, body_xml, 0);
+    let mut runs = parse_paragraph_runs(doc, body_xml, 0, retention, media);
 
     if runs.is_empty() {
         let text = extract_plain_text(para_xml);
@@ -106,7 +119,13 @@ pub fn parse_paragraph_xml(para_xml: &str) -> Option<Paragraph> {
 
 const MAX_TRACK_CHANGE_DEPTH: u32 = 64;
 
-fn parse_paragraph_runs(doc: &Document, body_xml: &str, depth: u32) -> Vec<Run> {
+fn parse_paragraph_runs(
+    doc: &Document,
+    body_xml: &str,
+    depth: u32,
+    mut retention: Option<&mut ImportRetentionReport>,
+    media: Option<&dyn MediaResolver>,
+) -> Vec<Run> {
     if depth > MAX_TRACK_CHANGE_DEPTH {
         return Vec::new();
     }
@@ -119,13 +138,12 @@ fn parse_paragraph_runs(doc: &Document, body_xml: &str, depth: u32) -> Vec<Run> 
                 let Some((element, after)) = take_element(rest, "w:r") else {
                     break;
                 };
-                // Body slice between `<w:r` and `>` … `</w:r>`.
                 let body = element
                     .strip_prefix("<w:r")
                     .and_then(|s| s.find('>').map(|i| &s[i + 1..]))
                     .and_then(|s| s.strip_suffix("</w:r>"))
                     .unwrap_or(element);
-                runs.extend(parse_run(doc, body));
+                runs.extend(parse_run(doc, body, retention.as_deref_mut(), media));
                 rest = after;
             }
             RunLevelTag::Insert => {
@@ -139,7 +157,8 @@ fn parse_paragraph_runs(doc: &Document, body_xml: &str, depth: u32) -> Vec<Run> 
                     .map(|i| &element[i + 1..])
                     .and_then(|s| s.strip_suffix("</w:ins>"))
                     .unwrap_or("");
-                for run in parse_paragraph_runs(doc, inner, depth + 1) {
+                for run in parse_paragraph_runs(doc, inner, depth + 1, retention.as_deref_mut(), media)
+                {
                     let mut run = run;
                     run.revision = Some(tw_model::Revision::insert(author.clone()));
                     runs.push(run);
@@ -157,11 +176,108 @@ fn parse_paragraph_runs(doc: &Document, body_xml: &str, depth: u32) -> Vec<Run> 
                     .map(|i| &element[i + 1..])
                     .and_then(|s| s.strip_suffix("</w:del>"))
                     .unwrap_or("");
-                for run in parse_paragraph_runs(doc, inner, depth + 1) {
+                for run in parse_paragraph_runs(doc, inner, depth + 1, retention.as_deref_mut(), media)
+                {
                     let mut run = run;
                     run.revision = Some(tw_model::Revision::delete(author.clone()));
                     runs.push(run);
                 }
+                rest = after;
+            }
+            RunLevelTag::Hyperlink => {
+                if let Some(r) = retention.as_deref_mut() {
+                    r.record_encountered("hyperlink");
+                }
+                let Some((element, after)) = take_element(rest, "w:hyperlink") else {
+                    break;
+                };
+                let inner = element
+                    .find('>')
+                    .map(|i| &element[i + 1..])
+                    .and_then(|s| s.strip_suffix("</w:hyperlink>"))
+                    .unwrap_or("");
+                let target = parse_hyperlink_target(element);
+                let inner_runs = parse_paragraph_runs(doc, inner, depth, retention.as_deref_mut(), media);
+                let text = inner_runs
+                    .iter()
+                    .map(|r| r.text())
+                    .collect::<String>();
+                if !text.is_empty() || target.url != "#" {
+                    if let Some(r) = retention.as_deref_mut() {
+                        r.record_retained("hyperlink");
+                    }
+                    let format = inner_runs
+                        .first()
+                        .map(|r| r.format.clone())
+                        .unwrap_or_default();
+                    runs.push(Run {
+                        id: tw_model::NodeId::new(),
+                        format,
+                        content: RunContent::Hyperlink { target, text },
+                        revision: None,
+                    });
+                }
+                rest = after;
+            }
+            RunLevelTag::FieldSimple => {
+                if let Some(r) = retention.as_deref_mut() {
+                    r.record_encountered("fldSimple");
+                }
+                let Some((element, after)) = take_element(rest, "w:fldSimple") else {
+                    break;
+                };
+                let instr = read_attr_on_element(element, "w:fldSimple", "w:instr");
+                let inner = element
+                    .find('>')
+                    .map(|i| &element[i + 1..])
+                    .and_then(|s| s.strip_suffix("</w:fldSimple>"))
+                    .unwrap_or("");
+                let display = extract_plain_text(inner);
+                let field_type = instr
+                    .as_deref()
+                    .map(parse_field_type)
+                    .unwrap_or(FieldType::Other("unknown".into()));
+                if let Some(r) = retention.as_deref_mut() {
+                    r.record_retained("fldSimple");
+                }
+                runs.push(Run {
+                    id: tw_model::NodeId::new(),
+                    format: tw_model::CharFormat::default(),
+                    content: RunContent::Field(FieldData {
+                        field_type,
+                        instruction: instr,
+                        display_text: if display.is_empty() {
+                            None
+                        } else {
+                            Some(display)
+                        },
+                    }),
+                    revision: None,
+                });
+                rest = after;
+            }
+            RunLevelTag::BookmarkStart => {
+                if let Some(r) = retention.as_deref_mut() {
+                    r.record_encountered("bookmarkStart");
+                }
+                let Some((element, after)) = take_element(rest, "w:bookmarkStart") else {
+                    break;
+                };
+                let name = read_attr_on_element(element, "w:bookmarkStart", "w:name")
+                    .unwrap_or_else(|| "_".into());
+                let bookmark_id = read_int_attr(element, "w:bookmarkStart", "w:id");
+                if let Some(r) = retention.as_deref_mut() {
+                    r.record_retained("bookmarkStart");
+                }
+                runs.push(Run {
+                    id: tw_model::NodeId::new(),
+                    format: tw_model::CharFormat::default(),
+                    content: RunContent::Bookmark(BookmarkAnchor {
+                        name,
+                        bookmark_id,
+                    }),
+                    revision: None,
+                });
                 rest = after;
             }
         }
@@ -169,7 +285,48 @@ fn parse_paragraph_runs(doc: &Document, body_xml: &str, depth: u32) -> Vec<Run> 
     runs
 }
 
-fn parse_run(doc: &Document, run_xml: &str) -> Vec<Run> {
+fn parse_hyperlink_target(element: &str) -> HyperlinkTarget {
+    let anchor = read_attr_on_element(element, "w:hyperlink", "w:anchor");
+    let url = read_attr_on_element(element, "w:hyperlink", "r:id")
+        .map(|id| format!("r:id:{id}"))
+        .or_else(|| anchor.clone().map(|a| format!("#{a}")))
+        .unwrap_or_else(|| "#".into());
+    HyperlinkTarget {
+        url,
+        anchor,
+        tooltip: read_attr_on_element(element, "w:hyperlink", "w:tooltip"),
+    }
+}
+
+fn parse_field_type(instr: &str) -> FieldType {
+    let upper = instr.trim().to_ascii_uppercase();
+    if upper.contains("PAGE") && !upper.contains("NUMPAGES") {
+        FieldType::Page
+    } else if upper.contains("NUMPAGES") {
+        FieldType::NumPages
+    } else if upper.contains("DATE") {
+        FieldType::Date
+    } else if upper.contains("TIME") {
+        FieldType::Time
+    } else if upper.contains("FILENAME") {
+        FieldType::Filename
+    } else if upper.contains("AUTHOR") {
+        FieldType::Author
+    } else if upper.contains("TITLE") {
+        FieldType::Title
+    } else if upper.contains("REF") || upper.contains("PAGEREF") {
+        FieldType::CrossRef
+    } else {
+        FieldType::Other(instr.trim().to_string())
+    }
+}
+
+fn parse_run(
+    doc: &Document,
+    run_xml: &str,
+    mut retention: Option<&mut ImportRetentionReport>,
+    media: Option<&dyn MediaResolver>,
+) -> Vec<Run> {
     let mut format = parse_char_properties(run_xml);
 
     if let Some(style_id_str) = read_attr_value(run_xml, "w:rStyle", "w:val") {
@@ -179,7 +336,6 @@ fn parse_run(doc: &Document, run_xml: &str) -> Vec<Run> {
     }
 
     let mut revision = None;
-    // Legacy import path: revision markers inside a run (older export builds).
     if run_xml.contains("<w:ins ") {
         revision = Some(tw_model::Revision::insert("import"));
     } else if run_xml.contains("<w:del ") {
@@ -187,8 +343,7 @@ fn parse_run(doc: &Document, run_xml: &str) -> Vec<Run> {
     }
 
     let mut runs = Vec::new();
-    // Only a page break needs its own run: layout has to split the page on it.
-    // A line break is just a newline in the run's text.
+
     if run_xml.contains("w:type=\"page\"") || run_xml.contains("w:type='page'") {
         runs.push(Run {
             id: tw_model::NodeId::new(),
@@ -196,6 +351,64 @@ fn parse_run(doc: &Document, run_xml: &str) -> Vec<Run> {
             content: RunContent::Break(BreakType::Page),
             revision: revision.clone(),
         });
+    }
+
+    if run_xml.contains("<w:footnoteReference") {
+        if let Some(r) = retention.as_deref_mut() {
+            r.record_encountered("footnoteReference");
+            r.record_retained("footnoteReference");
+        }
+        let note_id = split_elements(run_xml, "w:footnoteReference")
+            .into_iter()
+            .next()
+            .and_then(|el| read_int_attr(el, "w:footnoteReference", "w:id"))
+            .unwrap_or(0);
+        runs.push(Run {
+            id: tw_model::NodeId::new(),
+            format: format.clone(),
+            content: RunContent::FootnoteRef(FootnoteRef {
+                note_id,
+                display_number: None,
+            }),
+            revision: revision.clone(),
+        });
+    }
+
+    if run_xml.contains("<w:commentReference") {
+        if let Some(r) = retention.as_deref_mut() {
+            r.record_encountered("commentReference");
+            r.record_retained("commentReference");
+        }
+        let comment_id = split_elements(run_xml, "w:commentReference")
+            .into_iter()
+            .next()
+            .and_then(|el| read_int_attr(el, "w:commentReference", "w:id"))
+            .unwrap_or(0);
+        runs.push(Run {
+            id: tw_model::NodeId::new(),
+            format: format.clone(),
+            content: RunContent::CommentRef(CommentRef { comment_id }),
+            revision: revision.clone(),
+        });
+    }
+
+    if run_xml.contains("<w:drawing") || run_xml.contains("<w:pict") {
+        if let Some(r) = retention.as_deref_mut() {
+            r.record_encountered("drawing");
+        }
+        if let Some(resolver) = media {
+            if let Some(inline) = parse_inline_image(run_xml, resolver) {
+                if let Some(r) = retention.as_deref_mut() {
+                    r.record_retained("drawing");
+                }
+                runs.push(Run {
+                    id: tw_model::NodeId::new(),
+                    format: format.clone(),
+                    content: RunContent::InlineImage(inline),
+                    revision: revision.clone(),
+                });
+            }
+        }
     }
 
     let text = extract_run_text(run_xml);

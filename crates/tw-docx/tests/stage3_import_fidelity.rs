@@ -58,8 +58,9 @@ fn rich_header_blocks_import_from_header_part() {
         ],
     );
     let doc = import(&bytes).unwrap().document;
-    assert_eq!(doc.sections[0].format.header_blocks.len(), 1);
-    let header_para = doc.sections[0].format.header_blocks[0]
+    assert!(doc.sections[0].headers.contains_key(&tw_model::HeaderFooterType::Default));
+    let header_para = doc.sections[0].headers[&tw_model::HeaderFooterType::Default]
+        .blocks[0]
         .paragraph()
         .unwrap();
     assert_eq!(header_para.full_text(), "Header Title");

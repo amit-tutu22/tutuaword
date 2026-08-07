@@ -397,6 +397,15 @@ pub struct DisplayListSnapshot {
 
 When a page is not dirty, the previous snapshot is reused (no rebuild, no repaint).
 
+### Per-page snapshot store (R1.3)
+
+`SnapshotBuffer` stores each page as `Arc<SinglePageSnapshot>` keyed by page index. Incremental edits update only rebuilt pages via `publish_incremental`; unchanged pages keep the same `Arc` (shared with the previous snapshot generation).
+
+- `Session::get_display_list_bytes()` returns `Arc<PageSnapshot>` (metadata + current page view).
+- `Session::page_display_list(page)` returns `Arc<SinglePageSnapshot>` for scroll/lazy fetch.
+- FFI `tw_get_page_display_list(page, …, out_version, …)` exposes per-page layout version for Dart cache validation.
+- Flutter `EditorController.displayListForPage` and `DocumentView` invalidate only dirty pages on edit, not the full scroll cache.
+
 ## Debug Rendering
 
 Development-only rendering modes (enabled via `--features debug-render`):

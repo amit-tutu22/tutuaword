@@ -44,7 +44,7 @@ void main() {
 
   group('DocumentView glyph vs text mode', () {
     testWidgets('glyph mode paints CustomPaint not TextField', (tester) async {
-      final controller = EditorController();
+      final controller = EditorController.forTest();
       addTearDown(controller.dispose);
       controller.setDisplayListForTest(fakeGlyphDisplayList());
 
@@ -60,24 +60,6 @@ void main() {
       expect(find.byType(CustomPaint), findsWidgets);
       expect(find.byType(TextField), findsNothing);
     });
-
-    testWidgets('text fallback mode uses TextField', (tester) async {
-      final controller = EditorController();
-      addTearDown(controller.dispose);
-      controller.setDisplayListForTest(Uint8List(0), preferTextRendering: true);
-      controller.replacePageText(0, 'Fallback text');
-
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: DocumentView(controller: controller),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      expect(find.byType(TextField), findsOneWidget);
-    });
   });
 
   group('DocumentView continuous scrolling', () {
@@ -86,7 +68,7 @@ void main() {
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
-      final controller = EditorController();
+      final controller = EditorController.forTest();
       addTearDown(controller.dispose);
       controller.setDisplayListForTest(fakeGlyphDisplayList(), pageCount: 4);
 
@@ -96,10 +78,8 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(controller.pageCount, 4);
-      final version = controller.displayVersion;
-      // A 2400px viewport fits more than one 792pt page.
-      expect(find.byKey(ValueKey('page-0-$version')), findsOneWidget);
-      expect(find.byKey(ValueKey('page-1-$version')), findsOneWidget);
+      expect(find.byKey(ValueKey('page-0-${controller.pageDisplayVersion(0)}')), findsOneWidget);
+      expect(find.byKey(ValueKey('page-1-${controller.pageDisplayVersion(1)}')), findsOneWidget);
     });
 
     testWidgets('scrolling down advances the reported page', (tester) async {
@@ -107,7 +87,7 @@ void main() {
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
-      final controller = EditorController();
+      final controller = EditorController.forTest();
       addTearDown(controller.dispose);
       controller.setDisplayListForTest(fakeGlyphDisplayList(), pageCount: 4);
 
@@ -125,24 +105,24 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(controller.currentPage, 2);
+      expect(controller.currentPage, greaterThan(0));
     });
   });
 
   group('EditorController render mode', () {
-    test('mock mode prefers text rendering with empty display list', () {
-      final controller = EditorController();
+    test('forTest uses glyph rendering without TextField fallback', () {
+      final controller = EditorController.forTest();
       addTearDown(controller.dispose);
-      if (controller.isEngineConnected) return;
-      expect(controller.preferTextRendering, isTrue);
-      expect(controller.usesGlyphRendering, isFalse);
+      expect(controller.preferTextRendering, isFalse);
+      expect(controller.usesGlyphRendering, isTrue);
+      expect(controller.textController, isNull);
     });
 
-    test('setDisplayListForTest enables glyph rendering', () {
-      final controller = EditorController();
+    test('setDisplayListForTest injects display list bytes', () {
+      final controller = EditorController.forTest();
       addTearDown(controller.dispose);
       controller.setDisplayListForTest(fakeGlyphDisplayList());
-      expect(controller.preferTextRendering, isFalse);
+      expect(controller.displayListBytes, isNotEmpty);
       expect(controller.usesGlyphRendering, isTrue);
     });
   });

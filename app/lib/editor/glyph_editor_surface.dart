@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -60,15 +61,15 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
     final key = event.logicalKey;
     if (key == LogicalKeyboardKey.backspace) {
-      widget.controller.deleteGlyphBackward();
+      unawaited(widget.controller.deleteGlyphBackward());
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.delete) {
-      widget.controller.deleteGlyphForward();
+      unawaited(widget.controller.deleteGlyphForward());
       return KeyEventResult.handled;
     }
     if (key == LogicalKeyboardKey.enter || key == LogicalKeyboardKey.numpadEnter) {
-      widget.controller.insertGlyphParagraphBreak();
+      unawaited(widget.controller.insertGlyphParagraphBreak());
       return KeyEventResult.handled;
     }
     // Tab must be handled here: Flutter steals it for focus traversal when
@@ -77,7 +78,7 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
       if (HardwareKeyboard.instance.isShiftPressed) {
         widget.controller.decreaseIndent();
       } else {
-        widget.controller.insertGlyphCharacter('\t');
+        unawaited(widget.controller.insertGlyphCharacter('\t'));
       }
       return KeyEventResult.handled;
     }
@@ -96,19 +97,19 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
       char = ' ';
     }
     if (char == '\t') {
-      widget.controller.insertGlyphCharacter('\t');
+      unawaited(widget.controller.insertGlyphCharacter('\t'));
       return KeyEventResult.handled;
     }
     // Never treat Enter / Return as a printable character (avoids □ tofu).
     if (char == '\n' || char == '\r') {
-      widget.controller.insertGlyphParagraphBreak();
+      unawaited(widget.controller.insertGlyphParagraphBreak());
       return KeyEventResult.handled;
     }
     if (char != null &&
         char.isNotEmpty &&
         !HardwareKeyboard.instance.isControlPressed &&
         !HardwareKeyboard.instance.isMetaPressed) {
-      widget.controller.insertGlyphCharacter(char);
+      unawaited(widget.controller.insertGlyphCharacter(char));
       return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;
@@ -198,7 +199,7 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
         actions: <Type, Action<Intent>>{
           _InsertTabIntent: CallbackAction<_InsertTabIntent>(
             onInvoke: (_) {
-              widget.controller.insertGlyphCharacter('\t');
+              unawaited(widget.controller.insertGlyphCharacter('\t'));
               return null;
             },
           ),
@@ -210,7 +211,7 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
           ),
           _SelectAllIntent: CallbackAction<_SelectAllIntent>(
             onInvoke: (_) {
-              widget.controller.selectAll();
+              unawaited(widget.controller.selectAll().catchError((_) {}));
               return null;
             },
           ),

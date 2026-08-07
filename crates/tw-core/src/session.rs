@@ -4,10 +4,14 @@ use crate::snapshot::SnapshotBuffer;
 use crate::worker::{BridgeCommand, BridgeEvent, QueuedCommand, WorkerHandle, STARTUP_REQUEST_ID};
 use parking_lot::Mutex;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
-use tw_edit::{Command, EditSession};
+use tw_edit::{
+    bullet_list_command_for_caret, heading1_command_for_caret, insert_image_command,
+    insert_page_break_command_for, insert_table_command, normal_style_command_for_caret,
+    numbered_list_command_for_caret, Command, EditSession,
+};
 use tw_layout::LayoutEngine;
 use tw_model::{Document, NodeId};
 use tw_native::NativeFormat;
@@ -16,6 +20,9 @@ use tw_render::DisplayListBuilder;
 pub type DocId = u32;
 
 pub type EventObserver = Arc<dyn Fn(BridgeEvent) + Send + Sync>;
+
+/// Upper bound on events retained for correlated waits before the oldest are shed.
+const MAX_PENDING_EVENTS: usize = 1024;
 
 /// Result of waiting for a correlated worker response.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,6 +38,10 @@ pub struct Session {
     pending_events: Mutex<VecDeque<BridgeEvent>>,
     event_observer: StdMutex<Option<EventObserver>>,
     next_request_id: AtomicU64,
+    /// External [`Session::pump_events`] calls, used only to diagnose a host that
+    /// installed an observer and then never pumped.
+    pump_calls: AtomicU64,
+    unpumped_warning_emitted: AtomicBool,
     pub doc_id: DocId,
 }
 
@@ -46,28 +57,91 @@ impl Session {
             pending_events: Mutex::new(VecDeque::new()),
             event_observer: StdMutex::new(None),
             next_request_id: AtomicU64::new(1),
+            pump_calls: AtomicU64::new(0),
+            unpumped_warning_emitted: AtomicBool::new(false),
             doc_id: 1,
         }
     }
 
-    /// Forward every worker event to Dart (or tests) before buffering for correlated waits.
+    /// Forward every worker event to the host (or tests) before buffering it for
+    /// correlated waits.
+    ///
+    /// **The observer only fires while this session drains its event channel, and
+    /// nothing drains it spontaneously.** Enqueuing a command does not; the worker
+    /// pushes into a channel and moves on. A host that installs an observer and
+    /// then waits for events without calling [`Session::pump_events`] will observe
+    /// no events at all, and every correlated wait will run to its full timeout.
+    ///
+    /// Call `pump_events` on a timer or frame callback for as long as the observer
+    /// is installed. The blocking helpers drain as a side effect of waiting, which
+    /// is why an unpumped host can appear to work until the last blocking call is
+    /// removed.
     pub fn set_event_observer(&self, observer: EventObserver) {
         *self.event_observer.lock().expect("event observer lock") = Some(observer);
     }
 
-    fn drain_events(&self) {
+    fn drain_events(&self) -> usize {
         let observer = self
             .event_observer
             .lock()
             .expect("event observer lock")
             .clone();
         let mut pending = self.pending_events.lock();
+        let mut forwarded = 0;
         while let Ok(event) = self.worker.event_rx.try_recv() {
             if let Some(ref forward) = observer {
                 forward(event.clone());
             }
             pending.push_back(event);
+            forwarded += 1;
         }
+        // Callers that never poll (the async FFI path drives everything off the
+        // observer) would otherwise grow this correlation buffer without bound.
+        while pending.len() > MAX_PENDING_EVENTS {
+            pending.pop_front();
+        }
+        forwarded
+    }
+
+    /// Deliver newly received worker events to the observer without consuming the
+    /// correlation buffer, so a host that drives the engine purely off events can
+    /// make progress without a blocking wait. Returns the number forwarded.
+    ///
+    /// Required, not optional, for any host that installs an event observer -- see
+    /// [`Session::set_event_observer`].
+    pub fn pump_events(&self) -> usize {
+        self.pump_calls.fetch_add(1, Ordering::Relaxed);
+        self.drain_events()
+    }
+
+    /// A correlated wait that ran to its timeout while an observer was installed
+    /// and nothing ever pumped is almost certainly the unpumped-host mistake, not a
+    /// slow worker. Say so once, on stderr, rather than letting the host rediscover
+    /// it as an unexplained multi-second hang.
+    fn warn_if_never_pumped(&self) {
+        if self.pump_calls.load(Ordering::Relaxed) != 0 {
+            return;
+        }
+        let has_observer = self
+            .event_observer
+            .lock()
+            .expect("event observer lock")
+            .is_some();
+        if !has_observer {
+            return;
+        }
+        if self
+            .unpumped_warning_emitted
+            .swap(true, Ordering::Relaxed)
+        {
+            return;
+        }
+        eprintln!(
+            "tw-core: a correlated wait timed out and Session::pump_events has never \
+             been called. An installed event observer only fires while the event \
+             channel is drained; call pump_events (tw_pump_events over FFI) on a \
+             timer or frame callback."
+        );
     }
 
     fn send_command(&self, command: BridgeCommand) -> Option<u64> {
@@ -114,16 +188,16 @@ impl Session {
     }
 
     pub fn accept_all_revisions(&self) -> Option<u64> {
-        self.send_command(BridgeCommand::AcceptAllRevisions)
+        self.apply(Command::AcceptAllRevisions)
     }
 
     pub fn reject_all_revisions(&self) -> Option<u64> {
-        self.send_command(BridgeCommand::RejectAllRevisions)
+        self.apply(Command::RejectAllRevisions)
     }
 
     /// Returns the next buffered or freshly received event (any request id).
     pub fn poll_event(&self) -> Option<BridgeEvent> {
-        self.drain_events();
+        let _ = self.drain_events();
         self.pending_events.lock().pop_front()
     }
 
@@ -132,7 +206,7 @@ impl Session {
         let deadline = Instant::now() + timeout;
         let started = Instant::now();
         loop {
-            self.drain_events();
+            let _ = self.drain_events();
             {
                 let mut pending = self.pending_events.lock();
                 if let Some(index) = pending
@@ -143,6 +217,7 @@ impl Session {
                 }
             }
             if Instant::now() >= deadline {
+                self.warn_if_never_pumped();
                 return WaitOutcome::Timeout;
             }
             if started.elapsed() < Duration::from_millis(8) {
@@ -153,16 +228,28 @@ impl Session {
         }
     }
 
-    pub fn get_display_list_bytes(&self) -> crate::snapshot::PageSnapshot {
+    pub fn get_display_list_bytes(&self) -> Arc<crate::snapshot::PageSnapshot> {
         self.snapshot.read()
     }
 
+    /// Read-only document snapshot from the layout cache (versioned with layout).
+    pub fn document(&self) -> Arc<Document> {
+        self.layout_cache.read().document_snapshot()
+    }
+
     /// Display list for an arbitrary page without disturbing the current page.
-    ///
-    /// The worker publishes every page in one snapshot, so continuous scrolling
-    /// can read any page synchronously instead of round-tripping SetCurrentPage.
-    pub fn page_display_list(&self, page: u32) -> Option<crate::snapshot::SinglePageSnapshot> {
-        self.snapshot.read().pages.get(page as usize).cloned()
+    pub fn page_display_list(&self, page: u32) -> Option<Arc<crate::snapshot::SinglePageSnapshot>> {
+        self.snapshot.read().page(page)
+    }
+
+    pub fn page_display_version(&self, page: u32) -> Option<u64> {
+        self.page_display_list(page).map(|p| p.version)
+    }
+
+    /// Atlas generation without touching the pixel buffer, so callers can skip a
+    /// fetch when the atlas has not changed.
+    pub fn atlas_generation(&self) -> u64 {
+        self.snapshot.read().atlas_generation
     }
 
     pub fn atlas_resource(&self) -> (u64, u32, u32, Arc<Vec<u8>>) {
@@ -187,12 +274,21 @@ impl Session {
         self.send_command(BridgeCommand::Redo)
     }
 
+    fn apply_from_document<F>(&self, build: F) -> Option<u64>
+    where
+        F: FnOnce(&tw_model::Document) -> Option<Command>,
+    {
+        let cache = self.layout_cache.read();
+        let doc = cache.document();
+        build(doc).and_then(|command| self.apply(command))
+    }
+
     pub fn apply_heading1(&self) -> Option<u64> {
         self.apply_heading1_at(None)
     }
 
     pub fn apply_heading1_at(&self, caret_run_id: Option<tw_model::NodeId>) -> Option<u64> {
-        self.send_command(BridgeCommand::ApplyHeading1 { caret_run_id })
+        self.apply_from_document(|doc| heading1_command_for_caret(doc, caret_run_id))
     }
 
     pub fn apply_normal_style(&self) -> Option<u64> {
@@ -200,7 +296,7 @@ impl Session {
     }
 
     pub fn apply_normal_style_at(&self, caret_run_id: Option<tw_model::NodeId>) -> Option<u64> {
-        self.send_command(BridgeCommand::ApplyNormalStyle { caret_run_id })
+        self.apply_from_document(|doc| normal_style_command_for_caret(doc, caret_run_id))
     }
 
     pub fn apply_bullet_list(&self) -> Option<u64> {
@@ -208,7 +304,7 @@ impl Session {
     }
 
     pub fn apply_bullet_list_at(&self, caret_run_id: Option<tw_model::NodeId>) -> Option<u64> {
-        self.send_command(BridgeCommand::ApplyBulletList { caret_run_id })
+        self.apply_from_document(|doc| bullet_list_command_for_caret(doc, caret_run_id))
     }
 
     pub fn apply_numbered_list(&self) -> Option<u64> {
@@ -216,15 +312,15 @@ impl Session {
     }
 
     pub fn apply_numbered_list_at(&self, caret_run_id: Option<tw_model::NodeId>) -> Option<u64> {
-        self.send_command(BridgeCommand::ApplyNumberedList { caret_run_id })
+        self.apply_from_document(|doc| numbered_list_command_for_caret(doc, caret_run_id))
     }
 
     pub fn insert_table(&self, rows: u32, cols: u32) -> Option<u64> {
-        self.send_command(BridgeCommand::InsertTable { rows, cols })
+        self.apply_from_document(|doc| insert_table_command(doc, rows, cols))
     }
 
     pub fn insert_image(&self, width: f32, height: f32) -> Option<u64> {
-        self.send_command(BridgeCommand::InsertImage { width, height })
+        self.apply_from_document(|doc| insert_image_command(doc, width, height))
     }
 
     pub fn insert_page_break(&self) -> Option<u64> {
@@ -232,7 +328,7 @@ impl Session {
     }
 
     pub fn insert_page_break_at(&self, caret_run_id: Option<tw_model::NodeId>) -> Option<u64> {
-        self.send_command(BridgeCommand::InsertPageBreak { caret_run_id })
+        self.apply_from_document(|doc| insert_page_break_command_for(doc, caret_run_id))
     }
 
     pub fn paste_html_at(&self, run_id: tw_model::NodeId, offset: usize, html: Vec<u8>) -> Option<u64> {
@@ -310,6 +406,11 @@ impl Session {
 
     pub fn layout_page_count(&self) -> u32 {
         self.layout_cache.read().page_count()
+    }
+
+    /// True while `page` still carries pre-edit geometry awaiting background reflow.
+    pub fn is_page_stale(&self, page: u32) -> bool {
+        self.layout_cache.read().is_page_stale(page)
     }
 
     pub fn wait_for_event(&self, timeout_ms: u64) -> Option<BridgeEvent> {

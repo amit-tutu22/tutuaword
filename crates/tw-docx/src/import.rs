@@ -4,13 +4,14 @@ use std::io::{Cursor, Read};
 use tw_model::{Block, Document, Paragraph};
 use zip::ZipArchive;
 
-use crate::paragraph::{paragraph_properties_xml, parse_paragraph};
+use crate::paragraph::{paragraph_properties_xml, parse_paragraph_with_retention};
 use crate::properties::{parse_app_properties, parse_core_properties, parse_read_only_from_settings};
+use crate::retention::{scan_ooxml_elements, ImportRetentionReport};
 use crate::styles::{
     parse_numbering_xml, parse_para_properties, parse_section_properties, parse_styles_xml,
     parse_theme_xml,
 };
-use crate::table::{parse_image_block, parse_table, MediaResolver};
+use crate::table::{parse_image_block, parse_shape_block, parse_table, MediaResolver};
 use crate::xml_util::{
     extract_body_xml, extract_plain_text, iter_body_blocks, read_own_attr,
     split_elements, BlockKind,
@@ -81,8 +82,19 @@ pub fn import_docx(source: &[u8]) -> Result<ImportResult, DocxError> {
     let xml = document_xml.ok_or(DocxError::MissingDocumentPart)?;
     let media = PackageMedia::new(&package);
     let relationships = media.relationships.clone();
-    let mut document =
-        parse_document_xml(&xml, &styles_xml, &numbering_xml, &theme_xml, &media);
+    let mut retention = ImportRetentionReport::new();
+    scan_ooxml_elements(&xml, &mut retention);
+    for hf in header_parts.values().chain(footer_parts.values()) {
+        scan_ooxml_elements(hf, &mut retention);
+    }
+    let mut document = parse_document_xml(
+        &xml,
+        &styles_xml,
+        &numbering_xml,
+        &theme_xml,
+        &media,
+        &mut retention,
+    );
 
     let mut props = tw_model::DocumentProperties::default();
     if let Some(core) = core_properties_xml.as_deref() {
@@ -106,10 +118,15 @@ pub fn import_docx(source: &[u8]) -> Result<ImportResult, DocxError> {
         &footer_parts,
         &relationships,
         &media,
+        &mut retention,
     );
     package.source_fingerprint = Some(crate::fingerprint::document_fingerprint(&document));
 
-    Ok(ImportResult { document, package })
+    Ok(ImportResult {
+        document,
+        package,
+        retention,
+    })
 }
 
 /// Resolves `r:embed` ids against `word/_rels/document.xml.rels` and pulls the
@@ -188,6 +205,7 @@ fn parse_document_xml(
     numbering_xml: &Option<String>,
     theme_xml: &Option<String>,
     media: &dyn MediaResolver,
+    retention: &mut ImportRetentionReport,
 ) -> Document {
     let mut doc = Document::new();
 
@@ -202,7 +220,7 @@ fn parse_document_xml(
     }
 
     let body = extract_body_xml(xml);
-    let (mut blocks, section_format) = parse_body_blocks(body, &doc, media);
+    let (mut blocks, section_format) = parse_body_blocks(body, &doc, media, retention);
 
     if blocks.is_empty() {
         blocks.push(Block::Paragraph(Paragraph::new()));
@@ -223,6 +241,7 @@ fn parse_body_blocks(
     body: &str,
     doc: &Document,
     media: &dyn MediaResolver,
+    retention: &mut ImportRetentionReport,
 ) -> (Vec<Block>, Option<tw_model::SectionFormat>) {
     let mut blocks = Vec::new();
     let mut section_format = None;
@@ -231,14 +250,29 @@ fn parse_body_blocks(
         match kind {
             BlockKind::Paragraph => {
                 let image = parse_image_block(chunk, media);
-                if let Some(para) = parse_paragraph(doc, chunk) {
-                    blocks.push(Block::Paragraph(para));
+                let shape = if image.is_none() {
+                    parse_shape_block(chunk)
+                } else {
+                    None
+                };
+                if let Some(shape) = shape {
+                    retention.record_encountered("drawing");
+                    retention.record_retained("drawing");
+                    blocks.push(Block::ShapeBlock(shape));
                 } else if image.is_none() {
-                    let mut para = Paragraph::new();
-                    para.format = parse_para_properties(paragraph_properties_xml(chunk));
-                    blocks.push(Block::Paragraph(para));
+                    if let Some(para) =
+                        parse_paragraph_with_retention(doc, chunk, Some(retention), Some(media))
+                    {
+                        blocks.push(Block::Paragraph(para));
+                    } else {
+                        let mut para = Paragraph::new();
+                        para.format = parse_para_properties(paragraph_properties_xml(chunk));
+                        blocks.push(Block::Paragraph(para));
+                    }
                 }
                 if let Some(img) = image {
+                    retention.record_encountered("drawing");
+                    retention.record_retained("drawing");
                     blocks.push(Block::ImageBlock(img));
                 }
             }
@@ -261,6 +295,7 @@ fn apply_headers_footers(
     footers: &HashMap<String, String>,
     relationships: &HashMap<String, String>,
     media: &dyn MediaResolver,
+    retention: &mut ImportRetentionReport,
 ) {
     let body = extract_body_xml(document_xml);
     if let Some((sect_chunk, _)) = iter_body_blocks(body)
@@ -268,47 +303,59 @@ fn apply_headers_footers(
         .find(|(_, k)| *k == BlockKind::SectionProps)
     {
         for element in split_elements(sect_chunk, "w:headerReference") {
-            let ref_type = read_own_attr(element, "w:type").unwrap_or_else(|| "default".into());
-            if ref_type != "default" {
-                continue;
-            }
+            retention.record_encountered("headerReference");
+            let ref_type = read_own_attr(element, "w:type").unwrap_or("default");
+            let hf_type = tw_model::HeaderFooterType::from_ooxml(ref_type);
             let Some(ref_id) = read_own_attr(element, "r:id") else {
                 continue;
             };
             if let Some(part) = part_for_relationship(relationships, &ref_id) {
                 if let Some(xml) = headers.get(&part) {
-                    let (blocks, _) = parse_body_blocks(extract_part_body(xml), doc, media);
+                    let (blocks, _) =
+                        parse_body_blocks(extract_part_body(xml), doc, media, retention);
                     if let Some(section) = doc.sections.first_mut() {
-                        if blocks.is_empty() {
-                            section.format.header_text =
-                                Some(extract_header_footer_text(xml));
+                        let hf = if blocks.is_empty() {
+                            tw_model::HeaderFooter {
+                                blocks: Vec::new(),
+                                plain_text: Some(extract_header_footer_text(xml)),
+                            }
                         } else {
-                            section.format.header_blocks = blocks;
-                            section.format.header_text = None;
-                        }
+                            tw_model::HeaderFooter {
+                                blocks,
+                                plain_text: None,
+                            }
+                        };
+                        section.headers.insert(hf_type, hf);
+                        retention.record_retained("headerReference");
                     }
                 }
             }
         }
         for element in split_elements(sect_chunk, "w:footerReference") {
-            let ref_type = read_own_attr(element, "w:type").unwrap_or_else(|| "default".into());
-            if ref_type != "default" {
-                continue;
-            }
+            retention.record_encountered("footerReference");
+            let ref_type = read_own_attr(element, "w:type").unwrap_or("default");
+            let hf_type = tw_model::HeaderFooterType::from_ooxml(ref_type);
             let Some(ref_id) = read_own_attr(element, "r:id") else {
                 continue;
             };
             if let Some(part) = part_for_relationship(relationships, &ref_id) {
                 if let Some(xml) = footers.get(&part) {
-                    let (blocks, _) = parse_body_blocks(extract_part_body(xml), doc, media);
+                    let (blocks, _) =
+                        parse_body_blocks(extract_part_body(xml), doc, media, retention);
                     if let Some(section) = doc.sections.first_mut() {
-                        if blocks.is_empty() {
-                            section.format.footer_text =
-                                Some(extract_header_footer_text(xml));
+                        let hf = if blocks.is_empty() {
+                            tw_model::HeaderFooter {
+                                blocks: Vec::new(),
+                                plain_text: Some(extract_header_footer_text(xml)),
+                            }
                         } else {
-                            section.format.footer_blocks = blocks;
-                            section.format.footer_text = None;
-                        }
+                            tw_model::HeaderFooter {
+                                blocks,
+                                plain_text: None,
+                            }
+                        };
+                        section.footers.insert(hf_type, hf);
+                        retention.record_retained("footerReference");
                     }
                 }
             }

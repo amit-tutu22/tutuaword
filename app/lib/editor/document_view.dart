@@ -25,6 +25,7 @@ class _DocumentViewState extends State<DocumentView> {
   /// Per-page display lists. Every page of a layout version shares one atlas,
   /// so the decoded texture is kept separately and reused across pages.
   final Map<int, DisplayListSnapshot> _snapshots = {};
+  final Map<int, int> _loadedPageVersions = {};
   final Set<int> _pending = {};
   ui.Image? _atlasImage;
   bool _buildingAtlas = false;
@@ -63,9 +64,12 @@ class _DocumentViewState extends State<DocumentView> {
   void _onControllerUpdate() {
     if (widget.controller.displayVersion != _loadedVersion) {
       _loadedVersion = widget.controller.displayVersion;
-      _snapshots.clear();
-      _pending.clear();
-      _disposeImages();
+      // Drop only pages whose per-page version changed (R1.3 lazy invalidation).
+      _loadedPageVersions.removeWhere((page, version) {
+        return widget.controller.pageDisplayVersion(page) != version;
+      });
+      _snapshots.removeWhere((page, _) => !_loadedPageVersions.containsKey(page));
+      _pending.removeWhere((page) => !_loadedPageVersions.containsKey(page));
     }
     if (widget.controller.atlasGeneration != _loadedAtlasGeneration) {
       _loadedAtlasGeneration = widget.controller.atlasGeneration;
@@ -90,6 +94,11 @@ class _DocumentViewState extends State<DocumentView> {
   }
 
   Future<void> _loadPage(int index) async {
+    final pageVersion = widget.controller.pageDisplayVersion(index);
+    if (_loadedPageVersions[index] == pageVersion &&
+        _snapshots.containsKey(index)) {
+      return;
+    }
     final version = widget.controller.displayVersion;
     final bytes = widget.controller.displayListForPage(index);
     if (bytes.isEmpty) {
@@ -121,6 +130,7 @@ class _DocumentViewState extends State<DocumentView> {
 
     setState(() {
       _snapshots[index] = snapshot;
+      _loadedPageVersions[index] = pageVersion;
       decodedImages.forEach((id, image) {
         // A concurrent page load may have decoded the same asset first.
         if (_images.containsKey(id)) {
@@ -236,7 +246,7 @@ class _DocumentViewState extends State<DocumentView> {
                 child: GestureDetector(
                   onTap: readOnly ? () => controller.setCurrentPage(index) : null,
                   child: _PageCanvas(
-                    key: ValueKey('page-$index-${controller.displayVersion}'),
+                    key: ValueKey('page-$index-${controller.pageDisplayVersion(index)}'),
                     controller: controller,
                     pageIndex: index,
                     snapshot: _snapshots[index],
@@ -254,7 +264,7 @@ class _DocumentViewState extends State<DocumentView> {
   }
 }
 
-class _PageCanvas extends StatefulWidget {
+class _PageCanvas extends StatelessWidget {
   const _PageCanvas({
     super.key,
     required this.controller,
@@ -272,126 +282,19 @@ class _PageCanvas extends StatefulWidget {
   final Map<String, ui.Image> images;
   final bool readOnly;
 
-  @override
-  State<_PageCanvas> createState() => _PageCanvasState();
-}
-
-class _PageCanvasState extends State<_PageCanvas> {
-  TextEditingController? _textController;
-  FocusNode? _focusNode;
-  bool _syncingFromController = false;
-
   bool get _wantGlyphEditor =>
-      widget.controller.isPageEditable(widget.pageIndex) &&
-      !widget.controller.preferTextRendering &&
-      !widget.readOnly;
+      controller.isPageEditable(pageIndex) && !readOnly;
 
   bool get _canPaintDisplayList =>
-      !widget.controller.preferTextRendering &&
-      widget.snapshot != null &&
-      widget.snapshot!.hasPaintableContent;
-
-  bool get _useTextEditor => widget.controller.preferTextRendering;
-
-  @override
-  void initState() {
-    super.initState();
-    if (_useTextEditor) {
-      _initTextEditor();
-    }
-  }
-
-  void _initTextEditor() {
-    _textController = TextEditingController(
-      text: widget.controller.textForPage(widget.pageIndex),
-    );
-    _focusNode = FocusNode();
-    _textController!.addListener(_onTextChanged);
-    if (!widget.readOnly) {
-      widget.controller.attachTextEditor(_textController!, _focusNode!);
-    }
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && !widget.readOnly) _focusNode?.requestFocus();
-    });
-  }
-
-  @override
-  void didUpdateWidget(_PageCanvas oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    final wasText = oldWidget.controller.preferTextRendering;
-    final isText = widget.controller.preferTextRendering;
-    if (wasText != isText) {
-      if (isText && _textController == null) {
-        _initTextEditor();
-      } else if (!isText && _textController != null) {
-        _disposeTextEditor();
-      }
-    }
-    if (_textController != null &&
-        (widget.pageIndex != oldWidget.pageIndex ||
-            widget.controller.displayVersion != oldWidget.controller.displayVersion)) {
-      final pageText = widget.controller.textForPage(widget.pageIndex);
-      if (_textController!.text != pageText) {
-        _syncingFromController = true;
-        _textController!.text = pageText;
-        _syncingFromController = false;
-      }
-    }
-    if (_textController != null && !widget.readOnly) {
-      widget.controller.attachTextEditor(_textController!, _focusNode!);
-    }
-  }
-
-  void _disposeTextEditor() {
-    _textController?.removeListener(_onTextChanged);
-    if (!widget.readOnly && _textController != null) {
-      widget.controller.detachTextEditor(_textController!);
-    }
-    _textController?.dispose();
-    _focusNode?.dispose();
-    _textController = null;
-    _focusNode = null;
-  }
-
-  @override
-  void dispose() {
-    _disposeTextEditor();
-    super.dispose();
-  }
-
-  void _onTextChanged() {
-    if (_syncingFromController || _textController == null) return;
-    widget.controller.replacePageText(widget.pageIndex, _textController!.text);
-  }
-
-  TextStyle get _textStyle {
-    final c = widget.controller;
-    var decoration = TextDecoration.none;
-    if (c.underline) decoration = TextDecoration.underline;
-    if (c.strikethrough) {
-      decoration = decoration == TextDecoration.none
-          ? TextDecoration.lineThrough
-          : TextDecoration.combine([decoration, TextDecoration.lineThrough]);
-    }
-    return TextStyle(
-      fontFamily: c.fontFamily,
-      fontSize: c.fontSize,
-      height: 1.4,
-      fontWeight: c.bold ? FontWeight.bold : FontWeight.normal,
-      fontStyle: c.italic ? FontStyle.italic : FontStyle.normal,
-      decoration: decoration,
-    );
-  }
+      snapshot != null && snapshot!.hasPaintableContent;
 
   @override
   Widget build(BuildContext context) {
-    final pageText = widget.controller.textForPage(widget.pageIndex);
-
     return ClipRect(
       clipBehavior: Clip.hardEdge,
       child: Container(
-        width: widget.controller.pageWidth,
-        height: widget.controller.pageHeight,
+        width: controller.pageWidth,
+        height: controller.pageHeight,
         decoration: BoxDecoration(
           color: Colors.white,
           boxShadow: [
@@ -401,18 +304,18 @@ class _PageCanvasState extends State<_PageCanvas> {
               offset: const Offset(0, 2),
             ),
           ],
-          border: widget.controller.printPreview
+          border: controller.printPreview
               ? Border.all(color: const Color(0xFFB4B4B4), width: 1)
               : null,
         ),
         child: Stack(
           children: [
-            if (widget.controller.printPreview)
+            if (controller.printPreview)
               Positioned(
                 top: 6,
                 right: 8,
                 child: Text(
-                  'Page ${widget.pageIndex + 1}',
+                  'Page ${pageIndex + 1}',
                   style: TextStyle(
                     fontSize: 10,
                     color: Colors.grey.shade600,
@@ -421,53 +324,34 @@ class _PageCanvasState extends State<_PageCanvas> {
               ),
             if (_wantGlyphEditor)
               GlyphEditorSurface(
-                controller: widget.controller,
-                pageIndex: widget.pageIndex,
-                snapshot: widget.snapshot ?? DisplayListSnapshot.empty(),
-                atlasImage: widget.atlasImage,
-                images: widget.images,
+                controller: controller,
+                pageIndex: pageIndex,
+                snapshot: snapshot ?? DisplayListSnapshot.empty(),
+                atlasImage: atlasImage,
+                images: images,
               )
-            else if (_canPaintDisplayList && widget.snapshot != null)
+            else if (_canPaintDisplayList && snapshot != null)
               CustomPaint(
-                size: Size(widget.controller.pageWidth, widget.controller.pageHeight),
+                size: Size(controller.pageWidth, controller.pageHeight),
                 painter: DocumentPainter(
-                  snapshot: widget.snapshot!,
-                  atlasImage: widget.atlasImage,
-                  images: widget.images,
+                  snapshot: snapshot!,
+                  atlasImage: atlasImage,
+                  images: images,
                 ),
               )
-            else if (widget.controller.printPreview)
+            else if (controller.printPreview)
               Center(
                 child: Text(
-                  'Page ${widget.pageIndex + 1}',
+                  'Page ${pageIndex + 1}',
                   style: TextStyle(color: Colors.grey.shade500, fontSize: 12),
                 ),
               )
-            else if (_useTextEditor && !widget.readOnly && _textController != null)
-              Padding(
-                padding: const EdgeInsets.all(72),
-                child: TextField(
-                  controller: _textController,
-                  focusNode: _focusNode,
-                  maxLines: null,
-                  style: _textStyle,
-                  textAlign: widget.controller.alignment,
-                  decoration: const InputDecoration(
-                    border: InputBorder.none,
-                    isCollapsed: true,
-                    contentPadding: EdgeInsets.zero,
-                  ),
-                  cursorColor: Colors.black,
-                  selectionControls: materialTextSelectionControls,
-                ),
-              )
-            else if (_useTextEditor && widget.readOnly)
-              Padding(
-                padding: const EdgeInsets.all(72),
+            else if (!controller.isEngineConnected)
+              const Padding(
+                padding: EdgeInsets.all(72),
                 child: Text(
-                  pageText,
-                  style: _textStyle,
-                  textAlign: widget.controller.alignment,
+                  'Rust engine unavailable.\nRun scripts/build-ffi.sh to enable editing.',
+                  style: TextStyle(fontSize: 12, color: Colors.grey),
                 ),
               )
             else

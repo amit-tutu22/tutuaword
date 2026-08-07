@@ -25,8 +25,51 @@ jobs:
         run: cargo test -p tw-core --test r1_incremental_layout
       - name: R1.2 atlas separation gate
         run: cargo test -p tw-core --test r1_atlas_separation
+      - name: R1.3 per-page snapshots gate
+        run: cargo test -p tw-core --test r1_per_page_snapshots
+      - name: R1.1 forward relayout + cache retention gates
+        run: |
+          cargo test -p tw-layout --test r1_incremental_cache_retention
+          cargo test -p tw-layout --test r1_stale_window
+          cargo test -p tw-core --test r1_page_count_change_reuse
+          cargo test -p tw-core --test r1_forward_relayout
+      - name: R0.2 event correlation under backpressure gate
+        run: cargo test -p tw-core --test r1_event_correlation_backpressure
+      - name: R1.4 async FFI gate
+        run: |
+          bash scripts/build-ffi.sh
+          cd app && flutter test test/r14_async_ffi_test.dart test/r02_autosave_isolation_test.dart --concurrency=1
+      - name: R2.1 document model vocabulary gate
+        run: cargo test -p tw-docx --test r2_document_model_vocabulary
+      - name: R2.2 single text storage gate
+        run: |
+          cargo test -p tw-edit --test r2_single_text_storage
+          cargo test -p tw-core --test r2_layout_cache_arc
+      - name: R2.3 command-only mutations gate
+        run: |
+          cargo test -p tw-core --test r2_command_only_mutations
+          if rg 'BridgeCommand::ApplyHeading|BridgeCommand::InsertTable|BridgeCommand::ApplyBullet|BridgeCommand::ApplyNormal|BridgeCommand::InsertImage|BridgeCommand::InsertPageBreak|BridgeCommand::AcceptAll|BridgeCommand::RejectAll' crates/*/src app/lib --glob '!**/tests/**'; then
+            echo "BridgeCommand edit shortcuts must not appear in production code"
+            exit 1
+          fi
+      - name: R2.5 FFI consolidation gate
+        run: |
+          cargo test -p tw-ffi --test r2_5_ffi_consolidation -- --test-threads=1
+          bash scripts/build-ffi.sh
+          cd app && flutter test test/r25_ffi_consolidation_test.dart --concurrency=1
+      - name: R2.6 undo transactions gate
+        run: cargo test -p tw-edit --test r2_6_undo_transactions
+      - name: P1-7 async document exports gate
+        run: cargo test -p tw-ffi --test r1_async_document_exports -- --test-threads=1
+      - name: Stale-page hit test gate
+        run: cargo test -p tw-ffi --test r1_stale_page_hit_tests -- --test-threads=1
+      - name: Event callback re-entrancy gate
+        run: cargo test -p tw-ffi --test r1_callback_reentrancy -- --test-threads=1
+      # Both latency tests early-return under cfg!(debug_assertions), so --release is
+      # required for them to measure anything. Filters must follow `--`; cargo accepts
+      # only one positional TESTNAME.
       - name: F02.S1 typing latency gate (release)
-        run: cargo test -p tw-core --release i_f02_s1_typing_latency i_r1_typing -- --nocapture
+        run: cargo test -p tw-core --release -- i_f02_s1_typing_latency i_r1_typing --nocapture
       - name: DOCX corpus + Tier A numbering/styles gates
         run: cargo test -p tw-docx --test corpus_render --test tier_a_numbering_styles --test numbering_and_revisions
 
@@ -37,6 +80,12 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+      - name: R2.4 editor decomposition gate
+        run: |
+          bash scripts/build-ffi.sh
+          lines=$(wc -l < app/lib/editor/editor_controller.dart)
+          test "$lines" -lt 800
+          cd app && flutter test test/r24_controller_decomposition_test.dart test/editor_controller_test.dart --concurrency=1
       - name: Flutter test
         working-directory: app
         run: flutter test

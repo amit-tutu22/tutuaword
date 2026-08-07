@@ -1,85 +1,85 @@
-use crate::{apply, Command, EditError, EditResult};
+use crate::undo::{EditSessionInner, TransactionGuard};
+use crate::{Command, DocRange, EditError, EditResult};
+use std::time::Duration;
 use tw_model::Document;
-use tw_text::TextBuffer;
 
 pub struct EditSession {
-    pub document: Document,
-    pub buffer: TextBuffer,
-    undo_stack: Vec<(Command, EditResult)>,
-    redo_stack: Vec<(Command, EditResult)>,
+    inner: EditSessionInner,
 }
 
 impl EditSession {
     pub fn new() -> Self {
-        let mut session = Self {
-            document: Document::new(),
-            buffer: TextBuffer::new(),
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
-        };
-        session.sync_buffer();
-        session
+        Self {
+            inner: EditSessionInner::new(),
+        }
     }
 
     pub fn from_document(doc: Document) -> Self {
-        let mut session = Self {
-            document: doc,
-            buffer: TextBuffer::new(),
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
-        };
-        session.sync_buffer();
-        session
-    }
-
-    fn sync_buffer(&mut self) {
-        self.buffer = TextBuffer::new();
-        for para in self.document.paragraphs_mut() {
-            for run in &para.runs {
-                self.buffer.register(run.id, run.text());
-            }
+        Self {
+            inner: EditSessionInner::from_document(doc),
         }
     }
 
-    /// Re-register rope buffers after out-of-band document mutation (tests).
-    pub fn resync_buffer(&mut self) {
-        self.sync_buffer();
+    pub fn with_coalesce_window(window: Duration) -> Self {
+        Self {
+            inner: EditSessionInner::with_coalesce_window(window),
+        }
+    }
+
+    /// Test hook: override the coalescing clock (defaults to `Instant::now()`).
+    #[doc(hidden)]
+    pub fn set_test_clock(&mut self, now: std::time::Instant) {
+        self.inner.set_test_clock(now);
     }
 
     pub fn apply(&mut self, command: Command) -> Result<EditResult, EditError> {
-        let result = apply(&mut self.document, &mut self.buffer, command.clone())?;
-        self.redo_stack.clear();
-        self.undo_stack.push((command, result.clone()));
-        Ok(result)
+        self.inner.apply(command)
+    }
+
+    pub fn begin_transaction(&mut self, selection: Option<DocRange>) -> TransactionGuard<'_> {
+        self.inner.begin_transaction(selection)
     }
 
     pub fn undo(&mut self) -> Result<Option<EditResult>, EditError> {
-        let Some((command, result)) = self.undo_stack.pop() else {
-            return Ok(None);
-        };
-        if let Some(inverse) = command.inverse(&result) {
-            let inverse_result = apply(&mut self.document, &mut self.buffer, inverse)?;
-            self.redo_stack.push((command, result));
-            return Ok(Some(inverse_result));
-        }
-        Ok(None)
+        Ok(self.inner.undo()?.map(|(result, _)| result))
     }
 
     pub fn redo(&mut self) -> Result<Option<EditResult>, EditError> {
-        let Some((command, result)) = self.redo_stack.pop() else {
-            return Ok(None);
-        };
-        let redo_result = apply(&mut self.document, &mut self.buffer, command.clone())?;
-        self.undo_stack.push((command, result));
-        Ok(Some(redo_result))
+        self.inner.redo()
     }
 
     pub fn can_undo(&self) -> bool {
-        !self.undo_stack.is_empty()
+        self.inner.can_undo()
     }
 
     pub fn can_redo(&self) -> bool {
-        !self.redo_stack.is_empty()
+        self.inner.can_redo()
+    }
+
+    pub fn undo_stack_len(&self) -> usize {
+        self.inner.undo_stack_len()
+    }
+
+    pub fn selection_for_undo(&self, index: usize) -> Option<&DocRange> {
+        self.inner.selection_for_undo(index)
+    }
+
+    pub fn undo_selection(&mut self) -> Result<Option<DocRange>, EditError> {
+        Ok(self.inner.undo()?.and_then(|(_, sel)| sel))
+    }
+}
+
+impl std::ops::Deref for EditSession {
+    type Target = EditSessionInner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl std::ops::DerefMut for EditSession {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
     }
 }
 
@@ -92,7 +92,7 @@ impl Default for EditSession {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tw_model::{CharFormat, NodeId};
+    use tw_model::CharFormat;
 
     #[test]
     fn insert_and_undo() {
@@ -130,7 +130,7 @@ mod tests {
     }
 
     #[test]
-    fn undo_redo_100_ops() {
+    fn coalesced_undo_redo_100_chars() {
         let mut session = EditSession::new();
         let run_id = session.document.sections[0].blocks[0]
             .paragraph()
@@ -154,9 +154,9 @@ mod tests {
                 .unwrap();
         }
 
-        for _ in 0..100 {
-            session.undo().unwrap();
-        }
+        assert_eq!(session.undo_stack_len(), 1);
+
+        session.undo().unwrap();
         assert_eq!(
             session.document.sections[0].blocks[0]
                 .paragraph()
@@ -165,23 +165,13 @@ mod tests {
             ""
         );
 
-        for i in 0..100 {
-            session.redo().unwrap();
-            assert_eq!(
-                session.document.sections[0].blocks[0]
-                    .paragraph()
-                    .unwrap()
-                    .full_text(),
-                "x".repeat(i + 1)
-            );
-        }
+        session.redo().unwrap();
         assert_eq!(
             session.document.sections[0].blocks[0]
                 .paragraph()
                 .unwrap()
-                .full_text()
-                .len(),
-            100
+                .full_text(),
+            "x".repeat(100)
         );
     }
 

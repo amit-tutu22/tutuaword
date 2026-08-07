@@ -2,7 +2,7 @@ use tw_model::NodeId;
 
 pub type PageIndex = u32;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PositionedGlyph {
     pub glyph_id: u32,
     /// Source character this glyph represents (for PDF / accessibility export).
@@ -27,7 +27,7 @@ pub enum DecorationKind {
     Highlight,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TextDecoration {
     pub x: f32,
     pub y: f32,
@@ -37,7 +37,7 @@ pub struct TextDecoration {
     pub kind: DecorationKind,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TextLine {
     pub y: f32,
     pub x: f32,
@@ -54,7 +54,7 @@ pub struct TextLine {
     pub decorations: Vec<TextDecoration>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ImageLayout {
     pub x: f32,
     pub y: f32,
@@ -68,7 +68,7 @@ pub struct ImageLayout {
     pub encoded: std::sync::Arc<Vec<u8>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TableCellLayout {
     pub x: f32,
     pub y: f32,
@@ -79,7 +79,7 @@ pub struct TableCellLayout {
     pub lines: Vec<TextLine>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TableLayout {
     pub x: f32,
     pub y: f32,
@@ -92,7 +92,7 @@ pub struct TableLayout {
     pub grid_line_colors: Vec<u32>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum LayoutBox {
     TextLine(TextLine),
     Image(ImageLayout),
@@ -106,7 +106,7 @@ pub enum LayoutBox {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PageLayout {
     pub page_index: PageIndex,
     pub width: f32,
@@ -125,7 +125,7 @@ pub struct HitTestResult {
     pub char_offset: usize,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct LineMap {
     pub lines: Vec<TextLine>,
 }

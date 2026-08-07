@@ -16,6 +16,8 @@ import 'package:tutuaword/editor/document_view.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
 import 'package:tutuaword/editor/glyph_editor_surface.dart';
 import 'package:tutuaword/ui/document_properties_dialog.dart';
+import 'editor_test_helpers.dart';
+import 'native_ffi_test_helpers.dart';
 
 /// Pump [DocumentView] after open — async display-list decode never fully settles.
 Future<void> pumpDocumentView(WidgetTester tester) async {
@@ -55,10 +57,6 @@ void main() {
     );
   });
 
-  tearDownAll(() {
-    NativeEngine.shutdown();
-  });
-
   Uint8List docxWithCoreProperties() {
     const documentXml = '''
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Props</w:t></w:r></w:p></w:body></w:document>''';
@@ -88,17 +86,10 @@ void main() {
 
   group('F01.S1 document lifecycle', () {
     test('newDocument clears path and text', () async {
-      final store = DocumentSessionStore(
-        root: Directory.systemTemp.createTempSync('tutuaword_f01_s1_'),
-      );
-      final controller = EditorController(
-        sessionStore: store,
-        enableAutosave: false,
-      );
+      final controller = createTestEditorController();
       addTearDown(controller.dispose);
-      if (!controller.isEngineConnected) return;
 
-      controller.insertGlyphCharacter('X');
+      await typeTextDirect(controller, 'X');
       expect(controller.documentText, isNotEmpty);
 
       await controller.newDocument();
@@ -127,6 +118,8 @@ void main() {
     });
 
     test('I-F01-S1-save-as-docx roundtrip via temp file', () async {
+      if (!await nativeFfiEventsAvailable()) return;
+
       final store = DocumentSessionStore(
         root: Directory.systemTemp.createTempSync('tutuaword_f01_s1_'),
       );
@@ -134,13 +127,14 @@ void main() {
         sessionStore: store,
         enableAutosave: false,
       );
-      addTearDown(controller.dispose);
-      if (!controller.isEngineConnected) return;
+      if (!controller.isEngineConnected) {
+        controller.dispose();
+        return;
+      }
 
       await controller.newDocument();
       controller.ensureGlyphCaret();
-      controller.insertGlyphCharacter('R');
-      controller.insertGlyphCharacter('T');
+      await typeTextDirect(controller, 'RT');
 
       final dir = Directory.systemTemp.createTempSync('tutuaword_f01_');
       addTearDown(() {
@@ -153,8 +147,11 @@ void main() {
 
       await controller.newDocument();
       await controller.openDocumentFromPath(outPath);
+      await controller.ensureLayoutReady();
 
       expect(controller.documentText.toLowerCase(), contains('rt'));
+      await controller.ensureLayoutReady();
+      controller.dispose();
     });
   });
 
@@ -220,6 +217,8 @@ void main() {
     });
 
     test('I-F01-S2-crash-recover restores unsaved draft', () async {
+      if (!await nativeFfiEventsAvailable()) return;
+
       final store = DocumentSessionStore(
         root: Directory.systemTemp.createTempSync('tutuaword_f01_s2_recover_'),
       );
@@ -234,11 +233,10 @@ void main() {
 
       await first.newDocument();
       first.ensureGlyphCaret();
-      first.insertGlyphCharacter('D');
-      first.insertGlyphCharacter('R');
-      first.insertGlyphCharacter('A');
-      first.insertGlyphCharacter('F');
-      first.insertGlyphCharacter('T');
+      for (final ch in 'DRAFT'.split('')) {
+        await first.insertGlyphCharacter(ch);
+      }
+      await first.ensureLayoutReady();
       await first.performAutosave();
       first.dispose();
 
@@ -284,6 +282,8 @@ void main() {
 
   group('F01.S3 export and print preview', () {
     test('I-F01-S3-export-pdf-menu saves structural pdf bytes', () async {
+      if (!await nativeFfiEventsAvailable()) return;
+
       final store = DocumentSessionStore(
         root: Directory.systemTemp.createTempSync('tutuaword_f01_s3_'),
       );
@@ -296,9 +296,10 @@ void main() {
 
       await controller.newDocument();
       controller.ensureGlyphCaret();
-      controller.insertGlyphCharacter('P');
-      controller.insertGlyphCharacter('D');
-      controller.insertGlyphCharacter('F');
+      await controller.insertGlyphCharacter('P');
+      await controller.insertGlyphCharacter('D');
+      await controller.insertGlyphCharacter('F');
+      await controller.ensureLayoutReady();
 
       final dir = Directory.systemTemp.createTempSync('tutuaword_f01_s3_pdf_');
       addTearDown(() {

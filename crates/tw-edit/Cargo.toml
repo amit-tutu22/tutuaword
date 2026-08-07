@@ -9,5 +9,9 @@ license.workspace = true
 tw-model = { path = "../tw-model" }
 tw-text = { path = "../tw-text" }
 thiserror = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 
 [dev-dependencies]
+serde_json = { workspace = true }
+uuid = { workspace = true }

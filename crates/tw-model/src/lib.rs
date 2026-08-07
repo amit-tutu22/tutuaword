@@ -9,6 +9,7 @@ mod revision;
 mod styles;
 mod table;
 mod theme;
+mod vocabulary;
 
 pub use document::*;
 pub use format::*;
@@ -21,3 +22,4 @@ pub use revision::*;
 pub use styles::*;
 pub use table::*;
 pub use theme::*;
+pub use vocabulary::*;

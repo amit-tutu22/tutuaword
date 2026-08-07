@@ -7,7 +7,6 @@ license.workspace = true
 
 [dependencies]
 tw-model = { path = "../tw-model" }
-tw-text = { path = "../tw-text" }
 tw-edit = { path = "../tw-edit" }
 tw-layout = { path = "../tw-layout" }
 tw-render = { path = "../tw-render" }

@@ -322,6 +322,65 @@ pub fn parse_image_block(para_xml: &str, media: &dyn MediaResolver) -> Option<Im
     Some(block)
 }
 
+/// Inline image inside a run (`w:r` / `w:drawing`).
+pub fn parse_inline_image(run_xml: &str, media: &dyn MediaResolver) -> Option<tw_model::InlineImageRef> {
+    let rel_id = picture_relationship_id(run_xml)?;
+    let width = read_attr_value(run_xml, "wp:extent", "cx")
+        .and_then(|v| v.parse::<f32>().ok())
+        .map(|emu| emu / EMU_PER_POINT)
+        .unwrap_or(48.0);
+    let height = read_attr_value(run_xml, "wp:extent", "cy")
+        .and_then(|v| v.parse::<f32>().ok())
+        .map(|emu| emu / EMU_PER_POINT)
+        .unwrap_or(48.0);
+    let image = media.resolve(&rel_id).unwrap_or_else(|| tw_model::ImageData {
+        asset_id: rel_id.clone(),
+        mime_type: "image/png".into(),
+        width_px: width as u32,
+        height_px: height as u32,
+        bytes: Vec::new(),
+    });
+    Some(tw_model::InlineImageRef {
+        image,
+        display_width: width,
+        display_height: height,
+    })
+}
+
+/// Block-level shape when drawing is not an image blip.
+pub fn parse_shape_block(para_xml: &str) -> Option<tw_model::ShapeBlock> {
+    if !para_xml.contains("<w:drawing") && !para_xml.contains("<w:pict") {
+        return None;
+    }
+    if picture_relationship_id(para_xml).is_some() {
+        return None;
+    }
+    let width = read_attr_value(para_xml, "wp:extent", "cx")
+        .and_then(|v| v.parse::<f32>().ok())
+        .map(|emu| emu / EMU_PER_POINT)
+        .unwrap_or(100.0);
+    let height = read_attr_value(para_xml, "wp:extent", "cy")
+        .and_then(|v| v.parse::<f32>().ok())
+        .map(|emu| emu / EMU_PER_POINT)
+        .unwrap_or(50.0);
+    let shape_type = if para_xml.contains("wps:wsp") || para_xml.contains("wordprocessingShape") {
+        tw_model::ShapeKind::TextBox
+    } else if para_xml.contains("<v:line") || para_xml.contains("<v:rect") {
+        tw_model::ShapeKind::Line
+    } else {
+        tw_model::ShapeKind::Rectangle
+    };
+    Some(tw_model::ShapeBlock {
+        id: NodeId::new(),
+        shape: tw_model::ShapeData {
+            shape_type,
+            width,
+            height,
+        },
+        wrap: tw_model::TextWrap::Square,
+    })
+}
+
 /// Finds the relationship id of the image a drawing displays, if it displays
 /// one: `<a:blip>` for DrawingML, `<v:imagedata>` for legacy VML pictures.
 fn picture_relationship_id(para_xml: &str) -> Option<String> {

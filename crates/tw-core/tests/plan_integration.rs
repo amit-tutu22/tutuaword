@@ -2,7 +2,7 @@
 //! numbered lists, find/replace, split paragraphs, DOCX round-trip, and PDF export.
 
 use tw_core::SyncSession;
-use tw_core::numbered_list_command;
+use tw_edit::numbered_list_command;
 use tw_docx::{export, import, DocxPackage};
 use tw_edit::{Command, DocPosition, DocRange, EditSession};
 use tw_model::{Alignment, Block, CharFormat, Document, NumberingRef, ParaFormat, Revision};

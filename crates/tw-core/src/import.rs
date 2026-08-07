@@ -2,7 +2,6 @@ use std::io::Cursor;
 
 use thiserror::Error;
 use tw_model::Document;
-use tw_native::NativeFormat;
 use zip::ZipArchive;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

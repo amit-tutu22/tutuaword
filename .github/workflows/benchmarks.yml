@@ -1,0 +1,32 @@
+name: Benchmarks
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+jobs:
+  criterion:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # Criterion stores baselines under target/criterion. Restoring the main-branch
+      # baseline lets PR runs report a delta instead of an absolute number.
+      - name: Restore benchmark baseline
+        uses: actions/cache@v4
+        with:
+          path: target/criterion
+          key: criterion-${{ runner.os }}-${{ github.sha }}
+          restore-keys: criterion-${{ runner.os }}-
+
+      - name: Run benchmarks
+        run: cargo bench -p tw-core -- --save-baseline current
+
+      # Phase 1 policy (docs/performance-budgets.md): report regressions, do not block.
+      # Hard thresholds are enforced by the release latency tests in ci.yml instead,
+      # which are far less noisy than criterion on shared CI runners.
+      - name: Report regressions
+        run: ./scripts/check-bench-regression.sh 10

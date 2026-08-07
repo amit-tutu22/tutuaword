@@ -1,12 +1,10 @@
 [package]
 name = "tw-text"
-description = "Text buffer operations with rope-backed storage"
+description = "Character-index string utilities for run text"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-tw-model = { path = "../tw-model" }
-ropey = { workspace = true }
 
 [dev-dependencies]

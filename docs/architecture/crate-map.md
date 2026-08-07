@@ -119,17 +119,19 @@ Violations of this rule will be caught by CI (cargo-deny or a custom lint).
 
 ### tw-text
 
-**Purpose:** Text buffer operations — the rope-backed storage for run text content.
+**Purpose:** Character-index string utilities for run text (R2.2). Canonical text lives in `tw-model::RunContent::Text`.
 
-**Depends on:** `tw-model`, `ropey`
+**Depends on:** (none)
 
 **Public API surface:**
-- `TextBuffer` — rope-backed mutable text storage keyed by `RunId`
-- `CharIndex`, `ByteIndex` — position types
-- `insert(run_id, offset, text)` → updates run length
-- `delete(run_id, range)` → updates run length
-- `slice(run_id, range)` → borrowed text view
-- `grapheme_boundary(offset)` → nearest grapheme cluster boundary
+- `char_len(text)` — UTF-8 character count
+- `slice_chars(text, range)` — slice by character indices with clamping
+
+### tw-edit::run_text
+
+**Purpose:** Run-level helpers over the document tree's `String` storage.
+
+- `run_char_len`, `run_slice`, `run_char_len_by_id`, `run_slice_by_id`, `run_with_id`
 
 ### tw-shape
 
@@ -184,7 +186,7 @@ Violations of this rule will be caught by CI (cargo-deny or a custom lint).
 
 **Public API surface:**
 - `Command` enum — every possible edit operation
-- `EditSession { model, undo_stack, redo_stack }`
+- `EditSession { document, undo_stack: Vec<UndoEntry>, redo_stack }` — `UndoEntry` groups coalesced/transactional commands; `TransactionGuard` for atomic batches
 - `apply(session, command) → Result<EditResult, EditError>`
 - `undo(session) → Option<Command>`
 - `redo(session) → Option<Command>`

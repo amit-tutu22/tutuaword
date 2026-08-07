@@ -82,8 +82,6 @@ fn accept_delete_removes_marked_text() {
     if let tw_model::Block::Paragraph(para) = &mut session.document.sections[0].blocks[0] {
         para.runs[0].revision = Some(Revision::delete("Alice"));
     }
-    session.resync_buffer();
-
     let run_id = session.document.sections[0].blocks[0]
         .paragraph()
         .unwrap()
@@ -112,8 +110,6 @@ fn reject_delete_keeps_text_without_revision() {
     if let tw_model::Block::Paragraph(para) = &mut session.document.sections[0].blocks[0] {
         para.runs[0].revision = Some(Revision::delete("Bob"));
     }
-    session.resync_buffer();
-
     let run_id = session.document.sections[0].blocks[0]
         .paragraph()
         .unwrap()
@@ -140,8 +136,6 @@ fn accept_all_clears_mixed_revisions() {
         del.revision = Some(Revision::delete("A"));
         para.runs.push(del);
     }
-    session.resync_buffer();
-
     session.apply(Command::AcceptAllRevisions).unwrap();
 
     let para = session.document.sections[0].blocks[0].paragraph().unwrap();
@@ -156,7 +150,6 @@ fn accept_revision_is_undoable() {
     if let tw_model::Block::Paragraph(para) = &mut session.document.sections[0].blocks[0] {
         para.runs[0].revision = Some(Revision::insert("Author"));
     }
-    session.resync_buffer();
     let run_id = session.document.sections[0].blocks[0]
         .paragraph()
         .unwrap()

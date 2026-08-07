@@ -1,5 +1,4 @@
 use tw_model::{Block, Document, ImageBlock, NodeId, Paragraph, Table};
-use tw_text::TextBuffer;
 
 use crate::{EditError, EditResult};
 
@@ -182,7 +181,6 @@ pub fn resize_table_column(
 
 pub fn delete_block(
     doc: &mut Document,
-    buffer: &mut TextBuffer,
     id: NodeId,
 ) -> Result<EditResult, EditError> {
     let (si, bi) = doc
@@ -199,17 +197,14 @@ pub fn delete_block(
             Block::Paragraph(p) => p.id,
             Block::Table(t) => t.id,
             Block::ImageBlock(i) => i.id,
+            Block::ShapeBlock(s) => s.id,
+            _ => return Err(EditError::InvalidRange),
         }
     } else {
         return Err(EditError::InvalidRange);
     };
 
     let block = doc.sections[si].blocks.remove(bi);
-    if let Block::Paragraph(ref p) = block {
-        for run in &p.runs {
-            buffer.unregister(run.id);
-        }
-    }
 
     Ok(EditResult {
         affected_nodes: vec![id],
@@ -221,7 +216,6 @@ pub fn delete_block(
 
 pub fn insert_block(
     doc: &mut Document,
-    buffer: &mut TextBuffer,
     after_block_id: NodeId,
     block: Block,
 ) -> Result<EditResult, EditError> {
@@ -230,14 +224,11 @@ pub fn insert_block(
         .ok_or(EditError::BlockNotFound(after_block_id))?;
 
     let new_id = match &block {
-        Block::Paragraph(p) => {
-            for run in &p.runs {
-                buffer.register(run.id, run.text());
-            }
-            p.id
-        }
+        Block::Paragraph(p) => p.id,
         Block::Table(t) => t.id,
         Block::ImageBlock(i) => i.id,
+        Block::ShapeBlock(s) => s.id,
+        _ => return Err(EditError::InvalidRange),
     };
 
     doc.sections[si].blocks.insert(bi + 1, block);

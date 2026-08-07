@@ -135,6 +135,10 @@ fn outline(doc: &tw_model::Document) -> Vec<String> {
             tw_model::Block::ImageBlock(image) => {
                 format!("image:{}", image.data.bytes.len())
             }
+            tw_model::Block::ShapeBlock(shape) => {
+                format!("shape:{}x{}", shape.shape.width, shape.shape.height)
+            }
+            _ => "other".to_string(),
         })
         .collect()
 }

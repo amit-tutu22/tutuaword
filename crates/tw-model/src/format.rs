@@ -128,6 +128,7 @@ impl CharFormat {
     }
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum TabAlignment {
     #[default]
@@ -243,6 +244,7 @@ impl Default for SectionFormat {
     }
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 pub enum Alignment {
     #[default]
@@ -252,6 +254,7 @@ pub enum Alignment {
     Justify,
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum LineSpacing {
     Single,
@@ -261,6 +264,7 @@ pub enum LineSpacing {
     Multiple(f32),
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 pub enum UnderlineStyle {
     None,
@@ -293,6 +297,7 @@ impl Color {
     }
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum BreakType {
     Line,

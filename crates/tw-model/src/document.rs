@@ -90,7 +90,7 @@ impl Document {
         self.sections.iter_mut().flat_map(|s| {
             s.blocks.iter_mut().filter_map(|b| match b {
                 Block::Paragraph(p) => Some(p),
-                Block::Table(_) | Block::ImageBlock(_) => None,
+                Block::Table(_) | Block::ImageBlock(_) | Block::ShapeBlock(_) => None,
             })
         })
     }
@@ -138,6 +138,7 @@ impl Document {
                     Block::Paragraph(p) => p.id,
                     Block::Table(t) => t.id,
                     Block::ImageBlock(i) => i.id,
+                    Block::ShapeBlock(s) => s.id,
                 };
                 if id == block_id {
                     return Some((si, bi));

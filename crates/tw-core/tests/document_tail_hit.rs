@@ -33,12 +33,18 @@ fn document_tail_hit_covers_full_typed_text() {
     layout.layout_document(&session.document);
 
     let mut cache = LayoutCache::default();
-    cache.update_from_session(&layout, &session.document, &session.buffer);
+    cache.update_from_session(&layout, std::sync::Arc::new(session.document.clone()));
 
     let hit = cache.document_tail_hit(0).expect("tail hit");
     assert_eq!(hit.run_id, run_id);
     assert_eq!(hit.char_offset, 10);
-    assert_eq!(session.buffer.len(run_id), 10);
+    assert_eq!(
+        session.document.paragraph_at(0, 0).unwrap().runs[0]
+            .text()
+            .chars()
+            .count(),
+        10
+    );
 
     let text = cache
         .text_in_range(run_id, 0, hit.run_id, hit.char_offset)

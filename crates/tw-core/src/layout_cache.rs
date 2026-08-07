@@ -1,20 +1,19 @@
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tw_edit::{DocPosition, DocRange};
+use tw_edit::{run_char_len_by_id, text_in_range, DocPosition, DocRange};
 use tw_layout::{HitTestResult, LayoutEngine, LineMap};
 use tw_model::{CharFormat, Document, NodeId, ParaFormat};
-use tw_text::TextBuffer;
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct LayoutCache {
     line_maps: HashMap<u32, LineMap>,
     page_epochs: HashMap<u32, u64>,
     pending_pages: HashSet<u32>,
     layout_epoch: u64,
     page_count: u32,
-    document: Document,
-    buffer: TextBuffer,
+    document: Arc<Document>,
+    document_version: u64,
 }
 
 impl LayoutCache {
@@ -28,51 +27,73 @@ impl LayoutCache {
         }
     }
 
-    pub fn update_from_session(
-        &mut self,
-        engine: &LayoutEngine,
-        document: &Document,
-        buffer: &TextBuffer,
-    ) {
+    pub fn update_from_session(&mut self, engine: &LayoutEngine, document: Arc<Document>) {
         self.layout_epoch += 1;
+        self.document_version = self.layout_epoch;
         self.update_from_engine(engine);
         self.page_epochs.clear();
         self.pending_pages.clear();
         for page in 0..self.page_count {
             self.page_epochs.insert(page, self.layout_epoch);
         }
-        self.document = document.clone();
-        self.buffer = buffer.clone();
+        self.document = document;
     }
 
-    /// Incremental layout update: refresh relayouted pages, mark downstream pending.
+    /// Incremental layout update: refresh relayouted pages and record whether the
+    /// engine still owes a forward reflow for the pages after them.
     pub fn update_from_session_incremental(
         &mut self,
         engine: &LayoutEngine,
-        document: &Document,
-        buffer: &TextBuffer,
+        document: Arc<Document>,
         epoch: u64,
-        relayout_start: u32,
         page_count: u32,
+        pending_forward_reflow: bool,
     ) {
         self.layout_epoch = epoch;
+        self.document_version = epoch;
         self.page_count = page_count.max(1);
-        self.document = document.clone();
-        self.buffer = buffer.clone();
+        self.document = document;
 
-        let relayout_end = relayout_start + engine.last_relayout_pages() as u32;
-        for page in relayout_start..relayout_end.min(page_count) {
+        self.line_maps.retain(|page, _| *page < page_count);
+        self.page_epochs.retain(|page, _| *page < page_count);
+
+        let mut relayout_end = engine.last_relayout_start_page() as u32;
+        for &page in engine.dirty_pages() {
+            if page >= page_count {
+                continue;
+            }
             if let Some(map) = engine.line_map(page) {
                 self.line_maps.insert(page, map.clone());
                 self.page_epochs.insert(page, epoch);
-                self.pending_pages.remove(&page);
             }
+            relayout_end = relayout_end.max(page + 1);
         }
-        for page in relayout_end..page_count {
-            if !self.line_maps.contains_key(&page) {
-                self.pending_pages.insert(page);
-            }
+
+        // Pages past the reflow window still carry pre-edit geometry until the
+        // background pass reaches them; hit testing must not trust them. The floor
+        // comes from the engine rather than this pass's `relayout_end`: a converged
+        // pass rebuilds only a short prefix but does not re-invalidate the pages an
+        // earlier capped pass already brought up to date.
+        self.pending_pages.clear();
+        if pending_forward_reflow {
+            let stale_from = engine
+                .pending_reflow_page()
+                .map_or(relayout_end, |page| page as u32);
+            self.pending_pages.extend(stale_from..page_count);
         }
+    }
+
+    pub fn document(&self) -> &Document {
+        &self.document
+    }
+
+    /// Cheap Arc handoff for read-only snapshot consumers.
+    pub fn document_snapshot(&self) -> Arc<Document> {
+        Arc::clone(&self.document)
+    }
+
+    pub fn document_version(&self) -> u64 {
+        self.document_version
     }
 
     pub fn is_page_stale(&self, page: u32) -> bool {
@@ -100,7 +121,7 @@ impl LayoutCache {
                 char_offset: end_offset,
             },
         };
-        tw_edit::text_in_range(&self.document, &self.buffer, &range).ok()
+        text_in_range(&self.document, &range).ok()
     }
 
     /// Resolved character and paragraph format at a caret position.
@@ -146,7 +167,7 @@ impl LayoutCache {
     /// Last editable position in the document (for select-all / paste-at-end).
     pub fn document_tail_hit(&self, page: u32) -> Option<HitTestResult> {
         let run_id = last_text_run(&self.document)?;
-        let char_offset = self.buffer.len(run_id);
+        let char_offset = run_char_len_by_id(&self.document, run_id);
         Some(HitTestResult {
             page,
             run_id,
@@ -214,6 +235,20 @@ impl LayoutCache {
 
     pub fn page_count(&self) -> u32 {
         self.page_count.max(1)
+    }
+}
+
+impl Default for LayoutCache {
+    fn default() -> Self {
+        Self {
+            line_maps: HashMap::new(),
+            page_epochs: HashMap::new(),
+            pending_pages: HashSet::new(),
+            layout_epoch: 0,
+            page_count: 0,
+            document: Arc::new(Document::default()),
+            document_version: 0,
+        }
     }
 }
 

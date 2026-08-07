@@ -2,9 +2,9 @@
 
 use crate::command::{DocPosition, DocRange};
 use crate::range;
+use crate::run_text::run_char_len;
 use crate::{Command, EditError, EditSession};
 use tw_model::{Block, CharFormat, Document, NodeId, Paragraph};
-use tw_text::TextBuffer;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PasteSegment {
@@ -42,7 +42,7 @@ pub fn paste_inline_segments_at(
         return Ok(());
     }
 
-    let para_start = run_char_offset_in_paragraph(&session.document, &session.buffer, run_id, offset)?;
+    let para_start = run_char_offset_in_paragraph(&session.document, run_id, offset)?;
     session.apply(Command::InsertText {
         run_id,
         offset,
@@ -70,13 +70,11 @@ pub fn paste_inline_segments_at(
 
         let (start_run, start_off) = char_position_in_paragraph(
             &session.document,
-            &session.buffer,
             anchor_run,
             para_start + rel,
         )?;
         let (end_run, end_off) = char_position_in_paragraph(
             &session.document,
-            &session.buffer,
             anchor_run,
             para_start + rel + len,
         )?;
@@ -135,6 +133,8 @@ pub fn paste_fragment_at(
             Block::Paragraph(p) => p.id,
             Block::Table(t) => t.id,
             Block::ImageBlock(i) => i.id,
+            Block::ShapeBlock(s) => s.id,
+            _ => continue,
         };
         session.apply(Command::InsertBlock {
             after_block_id: after_id,
@@ -164,7 +164,6 @@ pub fn segments_from_paragraph(para: &Paragraph) -> Vec<PasteSegment> {
 
 fn run_char_offset_in_paragraph(
     doc: &Document,
-    buffer: &TextBuffer,
     run_id: NodeId,
     offset_in_run: usize,
 ) -> Result<usize, EditError> {
@@ -177,7 +176,7 @@ fn run_char_offset_in_paragraph(
     let mut total = 0usize;
     for (i, run) in para.runs.iter().enumerate() {
         if i < ri {
-            total += buffer.len(run.id);
+            total += run_char_len(run);
         } else if i == ri {
             total += offset_in_run;
             break;
@@ -188,7 +187,6 @@ fn run_char_offset_in_paragraph(
 
 fn char_position_in_paragraph(
     doc: &Document,
-    buffer: &TextBuffer,
     anchor_run: NodeId,
     char_offset: usize,
 ) -> Result<(NodeId, usize), EditError> {
@@ -200,7 +198,7 @@ fn char_position_in_paragraph(
         .ok_or(EditError::RunNotFound(anchor_run))?;
     let mut remaining = char_offset;
     for run in &para.runs {
-        let len = buffer.len(run.id);
+        let len = run_char_len(run);
         if remaining <= len {
             return Ok((run.id, remaining));
         }
@@ -210,5 +208,5 @@ fn char_position_in_paragraph(
         .runs
         .last()
         .ok_or(EditError::RunNotFound(anchor_run))?;
-    Ok((last.id, buffer.len(last.id)))
+    Ok((last.id, run_char_len(last)))
 }

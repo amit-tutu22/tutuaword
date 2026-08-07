@@ -13,39 +13,104 @@ abstract final class NativeEventTypes {
   static const error = 5;
 }
 
+/// Drains the native event channel, returning how many events were forwarded.
+typedef NativeEventPump = int Function();
+
 /// Routes FFI worker events to per-[requestId] completers (R0.2 correlation).
 class NativeEventRouter {
   NativeEventRouter._();
 
   static final NativeEventRouter instance = NativeEventRouter._();
 
+  /// The engine only invokes the Dart callback while its event channel is being
+  /// drained, and nothing drains it spontaneously — so without a pump an
+  /// awaited request is never answered. Fast while a wait is outstanding; slow
+  /// otherwise, because background reflow repaints arrive with no waiter.
+  static const _pumpWhileWaiting = Duration(milliseconds: 2);
+  static const _pumpWhenIdle = Duration(milliseconds: 16);
+
   final Map<int, Completer<int>> _pending = {};
+  final Map<int, int> _earlyEvents = {};
+  NativeEventPump? _pump;
+  Timer? _pumpTimer;
+  Duration? _pumpInterval;
+
+  /// Installed once the native library is loaded; mock-backed tests never
+  /// attach one, so they run without timers.
+  void attachPump(NativeEventPump pump) {
+    _pump = pump;
+    _tunePump();
+  }
+
+  void detachPump() {
+    _pump = null;
+    _pumpTimer?.cancel();
+    _pumpTimer = null;
+    _pumpInterval = null;
+  }
+
+  void _tunePump() {
+    final pump = _pump;
+    if (pump == null) return;
+    final wanted = _pending.isEmpty ? _pumpWhenIdle : _pumpWhileWaiting;
+    if (_pumpTimer != null && _pumpInterval == wanted) return;
+    _pumpTimer?.cancel();
+    _pumpInterval = wanted;
+    _pumpTimer = Timer.periodic(wanted, (_) => pump());
+  }
 
   /// Decode LE u32 event_type + LE u64 request_id from callback [data].
+  /// Decodes the LE u32 event_type + LE u64 request_id wire payload.
+  ///
+  /// Only safe while the engine's buffer is alive, meaning a synchronous
+  /// callback on the draining thread. Correlation deliberately does not depend
+  /// on this: the engine passes both values by value, because reading a stale
+  /// pointer from a deferred callback yields recycled stack bytes and request
+  /// ids that match nothing.
+  @visibleForTesting
   void handleWireEvent(int eventType, Pointer<Uint8> data, int len) {
     if (len < 12) return;
-    final bytes = data.asTypedList(len);
-    final bd = ByteData.sublistView(Uint8List.fromList(bytes));
-    final requestId = bd.getUint64(4, Endian.little);
-    onEvent(eventType, requestId);
+    final bd = ByteData.sublistView(data.asTypedList(len));
+    onEvent(eventType, bd.getUint64(4, Endian.little));
   }
 
   void onEvent(int eventType, int requestId) {
     final completer = _pending.remove(requestId);
     if (completer != null && !completer.isCompleted) {
       completer.complete(eventType);
+      _tunePump();
+      return;
     }
+    _earlyEvents[requestId] = eventType;
   }
 
   /// Register interest in [requestId]; completes with event type when matched.
-  Future<int> waitFor(int requestId) {
+  Future<int> waitFor(int requestId, {Duration? timeout}) {
+    // Anything the worker has already finished is sitting undelivered until
+    // someone drains it, so drain before concluding the event has not arrived.
+    _pump?.call();
+    final early = _earlyEvents.remove(requestId);
+    if (early != null) {
+      return Future.value(early);
+    }
+
     final existing = _pending[requestId];
     if (existing != null && !existing.isCompleted) {
-      return existing.future;
+      return _withTimeout(existing.future, timeout);
     }
     final completer = Completer<int>();
     _pending[requestId] = completer;
-    return completer.future;
+    _tunePump();
+    return _withTimeout(completer.future, timeout);
+  }
+
+  Future<int> _withTimeout(Future<int> future, Duration? timeout) {
+    if (timeout == null) return future;
+    return future.timeout(timeout, onTimeout: () {
+      _pending.removeWhere((_, c) => c.isCompleted);
+      _tunePump();
+      throw TimeoutException('event wait timed out', timeout);
+    });
   }
 
   @visibleForTesting
@@ -56,8 +121,22 @@ class NativeEventRouter {
       }
     }
     _pending.clear();
+    _earlyEvents.clear();
+    // The pump is a property of the loaded library, not of correlation state:
+    // callers reset between documents and still expect events to arrive.
+    _tunePump();
   }
 
   @visibleForTesting
+  bool get isPumping => _pumpTimer != null;
+
+  @visibleForTesting
+  Duration? get pumpInterval => _pumpInterval;
+
+  @visibleForTesting
   int get pendingCount => _pending.length;
+
+  /// Events that arrived with no registered waiter, keyed by request id.
+  @visibleForTesting
+  Map<int, int> get unmatchedEvents => Map.unmodifiable(_earlyEvents);
 }
