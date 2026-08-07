@@ -8,7 +8,19 @@ license.workspace = true
 [dependencies]
 tw-model = { path = "../tw-model" }
 rustybuzz = { workspace = true }
-fontdb = { workspace = true }
 swash = { workspace = true }
+
+# Native hosts scan installed fonts; `fs` plus the usual memmap/fontconfig
+# features make that work the way it did when the workspace defaulted them on.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+fontdb = { workspace = true, features = ["std", "fs", "memmap", "fontconfig"] }
+
+# There is no font directory and no filesystem on the web, so `fs` is dropped
+# rather than left dormant: without it `Database::load_system_fonts`,
+# `Source::File`, and `Source::SharedFile` do not exist, so no code path can
+# reach the filesystem even by mistake. Faces come from
+# `FontDatabase::register_face` only.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+fontdb = { workspace = true, features = ["std"] }
 
 [dev-dependencies]

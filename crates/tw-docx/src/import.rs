@@ -5,6 +5,7 @@ use tw_model::{Block, Document, Paragraph};
 use zip::ZipArchive;
 
 use crate::paragraph::{paragraph_properties_xml, parse_paragraph_with_retention};
+use crate::preserve::PreservedParagraph;
 use crate::properties::{parse_app_properties, parse_core_properties, parse_read_only_from_settings};
 use crate::retention::{scan_ooxml_elements, ImportRetentionReport};
 use crate::styles::{
@@ -80,21 +81,43 @@ pub fn import_docx(source: &[u8]) -> Result<ImportResult, DocxError> {
     }
 
     let xml = document_xml.ok_or(DocxError::MissingDocumentPart)?;
-    let media = PackageMedia::new(&package);
-    let relationships = media.relationships.clone();
+    let relationships = package
+        .parts
+        .get("word/_rels/document.xml.rels")
+        .map(|bytes| parse_relationships(&String::from_utf8_lossy(bytes)))
+        .unwrap_or_default();
     let mut retention = ImportRetentionReport::new();
     scan_ooxml_elements(&xml, &mut retention);
     for hf in header_parts.values().chain(footer_parts.values()) {
         scan_ooxml_elements(hf, &mut retention);
     }
-    let mut document = parse_document_xml(
-        &xml,
-        &styles_xml,
-        &numbering_xml,
-        &theme_xml,
-        &media,
-        &mut retention,
-    );
+    let mut preserved_paragraphs = crate::preserve::PreservedParagraphMap::new();
+    let mut document = {
+        let media = PackageMedia {
+            package: &package,
+            relationships: relationships.clone(),
+        };
+        let mut doc = parse_document_xml(
+            &xml,
+            &styles_xml,
+            &numbering_xml,
+            &theme_xml,
+            &media,
+            &mut retention,
+            &mut preserved_paragraphs,
+        );
+        apply_headers_footers(
+            &mut doc,
+            &xml,
+            &header_parts,
+            &footer_parts,
+            &relationships,
+            &media,
+            &mut retention,
+        );
+        doc
+    };
+    package.preserved_paragraphs = preserved_paragraphs;
 
     let mut props = tw_model::DocumentProperties::default();
     if let Some(core) = core_properties_xml.as_deref() {
@@ -111,16 +134,11 @@ pub fn import_docx(source: &[u8]) -> Result<ImportResult, DocxError> {
         }
     }
 
-    apply_headers_footers(
-        &mut document,
-        &xml,
-        &header_parts,
-        &footer_parts,
-        &relationships,
-        &media,
-        &mut retention,
-    );
     package.source_fingerprint = Some(crate::fingerprint::document_fingerprint(&document));
+    package.source_numbering_fingerprint =
+        Some(crate::fingerprint::numbering_fingerprint(&document.settings.numbering));
+    package.source_styles_fingerprint =
+        Some(crate::fingerprint::styles_fingerprint(&document.styles));
 
     Ok(ImportResult {
         document,
@@ -166,7 +184,7 @@ impl MediaResolver for PackageMedia<'_> {
             height_px: 0,
             bytes: bytes.clone(),
         };
-        Some(crate::image_convert::normalize_image(data))
+        Some(data)
     }
 }
 
@@ -206,6 +224,7 @@ fn parse_document_xml(
     theme_xml: &Option<String>,
     media: &dyn MediaResolver,
     retention: &mut ImportRetentionReport,
+    preserved_paragraphs: &mut crate::preserve::PreservedParagraphMap,
 ) -> Document {
     let mut doc = Document::new();
 
@@ -220,7 +239,8 @@ fn parse_document_xml(
     }
 
     let body = extract_body_xml(xml);
-    let (mut blocks, section_format) = parse_body_blocks(body, &doc, media, retention);
+    let (mut blocks, section_format) =
+        parse_body_blocks(body, &doc, media, retention, preserved_paragraphs);
 
     if blocks.is_empty() {
         blocks.push(Block::Paragraph(Paragraph::new()));
@@ -242,6 +262,7 @@ fn parse_body_blocks(
     doc: &Document,
     media: &dyn MediaResolver,
     retention: &mut ImportRetentionReport,
+    preserved_paragraphs: &mut crate::preserve::PreservedParagraphMap,
 ) -> (Vec<Block>, Option<tw_model::SectionFormat>) {
     let mut blocks = Vec::new();
     let mut section_format = None;
@@ -263,6 +284,13 @@ fn parse_body_blocks(
                     if let Some(para) =
                         parse_paragraph_with_retention(doc, chunk, Some(retention), Some(media))
                     {
+                        preserved_paragraphs.insert(
+                            para.id,
+                            PreservedParagraph {
+                                xml: chunk.to_string(),
+                                fingerprint: crate::fingerprint::paragraph_fingerprint(&para),
+                            },
+                        );
                         blocks.push(Block::Paragraph(para));
                     } else {
                         let mut para = Paragraph::new();
@@ -311,8 +339,14 @@ fn apply_headers_footers(
             };
             if let Some(part) = part_for_relationship(relationships, &ref_id) {
                 if let Some(xml) = headers.get(&part) {
-                    let (blocks, _) =
-                        parse_body_blocks(extract_part_body(xml), doc, media, retention);
+                    let mut discard = crate::preserve::PreservedParagraphMap::new();
+                    let (blocks, _) = parse_body_blocks(
+                        extract_part_body(xml),
+                        doc,
+                        media,
+                        retention,
+                        &mut discard,
+                    );
                     if let Some(section) = doc.sections.first_mut() {
                         let hf = if blocks.is_empty() {
                             tw_model::HeaderFooter {
@@ -340,8 +374,14 @@ fn apply_headers_footers(
             };
             if let Some(part) = part_for_relationship(relationships, &ref_id) {
                 if let Some(xml) = footers.get(&part) {
-                    let (blocks, _) =
-                        parse_body_blocks(extract_part_body(xml), doc, media, retention);
+                    let mut discard = crate::preserve::PreservedParagraphMap::new();
+                    let (blocks, _) = parse_body_blocks(
+                        extract_part_body(xml),
+                        doc,
+                        media,
+                        retention,
+                        &mut discard,
+                    );
                     if let Some(section) = doc.sections.first_mut() {
                         let hf = if blocks.is_empty() {
                             tw_model::HeaderFooter {

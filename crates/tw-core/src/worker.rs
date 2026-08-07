@@ -4,10 +4,9 @@ use crate::snapshot::{
     document_plain_text, document_properties_json, snapshot_from_pages, SinglePageSnapshot,
     SnapshotBuffer,
 };
-use crossbeam_channel::{Receiver, Sender, TrySendError};
+use crossbeam_channel::{Sender, TrySendError};
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::thread::{self, JoinHandle};
 use tw_edit::{paste, Command, EditSession};
 use tw_layout::LayoutEngine;
 use tw_model::NodeId;
@@ -21,11 +20,7 @@ pub const STARTUP_REQUEST_ID: u64 = 0;
 /// caller, so it can never satisfy (or steal) a pending edit correlation.
 pub const BACKGROUND_REQUEST_ID: u64 = u64::MAX;
 
-/// How long the worker sleeps between retries while correlation acks are still
-/// queued behind a full event channel.
-const EVENT_DRAIN_POLL: std::time::Duration = std::time::Duration::from_millis(2);
-
-/// Bounded command queue depth (session blocks on `send` when full).
+/// Bounded command queue depth (the session applies backpressure when full).
 pub const COMMAND_QUEUE_CAPACITY: usize = 512;
 
 /// Bounded worker → session event channel; overflow uses drop-oldest backpressure.
@@ -212,39 +207,6 @@ impl BridgeEvent {
     }
 }
 
-pub struct WorkerHandle {
-    pub cmd_tx: Sender<QueuedCommand>,
-    pub event_rx: Receiver<BridgeEvent>,
-    join: Option<JoinHandle<()>>,
-}
-
-impl WorkerHandle {
-    pub fn spawn(snapshot: Arc<SnapshotBuffer>, layout_cache: crate::SharedLayoutCache) -> Self {
-        let (cmd_tx, cmd_rx) = crossbeam_channel::bounded(COMMAND_QUEUE_CAPACITY);
-        let (event_tx, event_rx) = crossbeam_channel::bounded(EVENT_CHANNEL_CAPACITY);
-
-        let join = thread::spawn(move || {
-            worker_loop(cmd_rx, event_tx, snapshot, layout_cache);
-        });
-
-        Self {
-            cmd_tx,
-            event_rx,
-            join: Some(join),
-        }
-    }
-
-    pub fn shutdown(&mut self) {
-        let _ = self.cmd_tx.send(QueuedCommand {
-            request_id: STARTUP_REQUEST_ID,
-            inner: BridgeCommand::Shutdown,
-        });
-        if let Some(join) = self.join.take() {
-            let _ = join.join();
-        }
-    }
-}
-
 /// What the next layout pass should do.
 enum Relayout<'a> {
     Full,
@@ -253,59 +215,149 @@ enum Relayout<'a> {
     Forward,
 }
 
-fn worker_loop(
-    cmd_rx: Receiver<QueuedCommand>,
-    event_tx: Sender<BridgeEvent>,
+struct RebuildOutcome {
+    version: u64,
+    rebuilt_pages: Vec<u32>,
+    ready_page: u32,
+}
+
+/// Whether the driver should keep feeding commands to the core.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Flow {
+    Continue,
+    Shutdown,
+}
+
+/// The engine itself: document, layout, snapshots and outbound events.
+///
+/// The core owns no thread and no scheduling policy. It exposes one step of work
+/// at a time ([`WorkerCore::execute`], [`WorkerCore::run_background_chunk`],
+/// [`WorkerCore::flush_events`]) so that an executor can run it on a dedicated OS
+/// thread (`ThreadedExecutor`) or on the caller's thread (`InlineExecutor`).
+pub(crate) struct WorkerCore {
+    events: EventPublisher,
+    session: EditSession,
+    format_ctx: FormatContext,
+    layout: LayoutEngine,
     snapshot: Arc<SnapshotBuffer>,
     layout_cache: crate::SharedLayoutCache,
-) {
-    let mut events = EventPublisher::new(event_tx);
-    let mut session = EditSession::new();
-    let mut format_ctx = FormatContext::new_document();
-    let mut layout = LayoutEngine::new();
-    let mut version: u64 = 0;
-    let mut current_page: u32 = 0;
-    let mut cached_pages: Vec<Arc<SinglePageSnapshot>> = Vec::new();
+    version: u64,
+    current_page: u32,
+    cached_pages: Vec<Arc<SinglePageSnapshot>>,
+    /// A non-edit command pulled off the queue while batching consecutive edits;
+    /// the driver must hand it back before reading the queue again.
+    pending: Option<QueuedCommand>,
+}
 
-    struct RebuildOutcome {
-        version: u64,
-        rebuilt_pages: Vec<u32>,
-        ready_page: u32,
+impl WorkerCore {
+    /// Builds the engine, lays out the empty document and publishes the startup
+    /// `DocumentOpened` event under [`STARTUP_REQUEST_ID`].
+    pub(crate) fn new(
+        event_tx: Sender<BridgeEvent>,
+        snapshot: Arc<SnapshotBuffer>,
+        layout_cache: crate::SharedLayoutCache,
+    ) -> Self {
+        let mut core = Self {
+            events: EventPublisher::new(event_tx),
+            session: EditSession::new(),
+            format_ctx: FormatContext::new_document(),
+            #[cfg(target_arch = "wasm32")]
+            layout: LayoutEngine::with_injected_fonts(),
+            #[cfg(not(target_arch = "wasm32"))]
+            layout: LayoutEngine::new(),
+            snapshot,
+            layout_cache,
+            version: 0,
+            current_page: 0,
+            cached_pages: Vec::new(),
+            pending: None,
+        };
+        core.rebuild(Relayout::Full)
+            .expect("full rebuild always produces a layout");
+        let page_count = core.layout.page_count() as u32;
+        core.events.send(BridgeEvent::DocumentOpened {
+            request_id: STARTUP_REQUEST_ID,
+            page_count,
+        });
+        core
     }
 
-    let rebuild = |session: &EditSession,
-                   layout: &mut LayoutEngine,
-                   version: &mut u64,
-                   current_page: u32,
-                   relayout: Relayout<'_>,
-                   cached_pages: &mut Vec<Arc<SinglePageSnapshot>>|
-     -> Option<RebuildOutcome> {
+    /// Command deferred by edit batching, if any.
+    pub(crate) fn take_pending(&mut self) -> Option<QueuedCommand> {
+        self.pending.take()
+    }
+
+    /// Push queued events into the channel. Returns whether progress was made.
+    pub(crate) fn flush_events(&mut self) -> bool {
+        self.events.flush()
+    }
+
+    /// True while events or correlation acks are still waiting for channel space.
+    pub(crate) fn has_backlog(&self) -> bool {
+        self.events.has_backlog()
+    }
+
+    /// True while a page-capped incremental pass still owes a forward reflow.
+    pub(crate) fn has_pending_reflow(&self) -> bool {
+        self.layout.has_pending_reflow()
+    }
+
+    /// Inject a host-provided font face into this engine's shaper (inline / wasm).
+    pub(crate) fn register_face(
+        &mut self,
+        spec: &tw_layout::FontFaceSpec,
+        data: Vec<u8>,
+    ) -> Result<tw_layout::FontId, tw_layout::FontRegistrationError> {
+        self.layout.register_face(spec, data)
+    }
+
+    /// Run one chunk of background forward relayout and publish its repaint under
+    /// [`BACKGROUND_REQUEST_ID`]. Returns whether the chunk made progress; a
+    /// caller must treat `false` as "the engine is done" rather than retrying.
+    pub(crate) fn run_background_chunk(&mut self) -> bool {
+        let Some(outcome) = self.rebuild(Relayout::Forward) else {
+            return false;
+        };
+        if !outcome.rebuilt_pages.is_empty() {
+            self.events.send(BridgeEvent::DisplayListReady {
+                request_id: BACKGROUND_REQUEST_ID,
+                page: outcome.ready_page,
+                version: outcome.version,
+            });
+        }
+        true
+    }
+
+    fn rebuild(&mut self, relayout: Relayout<'_>) -> Option<RebuildOutcome> {
         let doc_layout = match relayout {
             Relayout::Nodes(nodes) if !nodes.is_empty() => {
-                layout.invalidate_nodes(&session.document, nodes);
-                layout.layout_document(&session.document)
+                self.layout.invalidate_nodes(&self.session.document, nodes);
+                self.layout.layout_document(&self.session.document)
             }
-            Relayout::Forward => layout.continue_layout(&session.document)?,
+            Relayout::Forward => self.layout.continue_layout(&self.session.document)?,
             _ => {
-                layout.invalidate_all();
-                layout.layout_document(&session.document)
+                self.layout.invalidate_all();
+                self.layout.layout_document(&self.session.document)
             }
         };
-        *version += 1;
-        let text = document_plain_text(&session.document);
-        let read_only = session.document.settings.read_only;
-        let relayout_start = layout.relayout_start_page() as usize;
-        let is_incremental = layout.last_pass_incremental();
+        self.version += 1;
+        let version = self.version;
+        let current_page = self.current_page;
+        let text = document_plain_text(&self.session.document);
+        let read_only = self.session.document.settings.read_only;
+        let relayout_start = self.layout.relayout_start_page() as usize;
+        let is_incremental = self.layout.last_pass_incremental();
 
         let mut rebuilt_pages = Vec::new();
         let new_len = doc_layout.pages.len();
 
         // An incremental pass leaves page indices stable, so only the pages the
         // engine reported dirty (plus any pages the document grew by) can differ.
-        if is_incremental && !cached_pages.is_empty() {
-            cached_pages.truncate(new_len);
-            let carried_over = cached_pages.len();
-            let mut targets: Vec<usize> = layout
+        if is_incremental && !self.cached_pages.is_empty() {
+            self.cached_pages.truncate(new_len);
+            let carried_over = self.cached_pages.len();
+            let mut targets: Vec<usize> = self
+                .layout
                 .dirty_pages()
                 .iter()
                 .map(|&page| page as usize)
@@ -317,11 +369,11 @@ fn worker_loop(
 
             for idx in targets {
                 let page = &doc_layout.pages[idx];
-                let list = DisplayListBuilder::from_page_without_atlas(page, *version);
+                let list = DisplayListBuilder::from_page_without_atlas(page, version);
                 let bytes = DisplayListBuilder::to_page_bytes(&list);
                 if idx < carried_over
                     && DisplayListBuilder::page_bytes_match_content(
-                        &cached_pages[idx].bytes,
+                        &self.cached_pages[idx].bytes,
                         &bytes,
                     )
                 {
@@ -330,25 +382,25 @@ fn worker_loop(
                     continue;
                 }
                 let snapshot = Arc::new(SinglePageSnapshot {
-                    version: *version,
+                    version,
                     bytes: Arc::new(bytes),
                     page_width: page.width,
                     page_height: page.height,
                 });
-                if idx < cached_pages.len() {
-                    cached_pages[idx] = snapshot;
+                if idx < self.cached_pages.len() {
+                    self.cached_pages[idx] = snapshot;
                 } else {
-                    cached_pages.push(snapshot);
+                    self.cached_pages.push(snapshot);
                 }
                 rebuilt_pages.push(idx as u32);
             }
         } else {
-            cached_pages.clear();
-            cached_pages.reserve(new_len);
+            self.cached_pages.clear();
+            self.cached_pages.reserve(new_len);
             for (idx, page) in doc_layout.pages.iter().enumerate() {
-                let list = DisplayListBuilder::from_page_without_atlas(page, *version);
-                cached_pages.push(Arc::new(SinglePageSnapshot {
-                    version: *version,
+                let list = DisplayListBuilder::from_page_without_atlas(page, version);
+                self.cached_pages.push(Arc::new(SinglePageSnapshot {
+                    version,
                     bytes: Arc::new(DisplayListBuilder::to_page_bytes(&list)),
                     page_width: page.width,
                     page_height: page.height,
@@ -357,21 +409,23 @@ fn worker_loop(
             }
         }
 
-        let atlas = layout.atlas();
+        let atlas = self.layout.atlas();
         let atlas_generation = atlas.generation;
         let atlas_width = atlas.width;
         let atlas_height = atlas.height;
         let atlas_bytes = Arc::new(DisplayListBuilder::atlas_to_bytes(atlas, atlas_generation));
 
-        let page_count = cached_pages.len().max(1) as u32;
-        let props_json = document_properties_json(&session.document, page_count);
+        let page_count = self.cached_pages.len().max(1) as u32;
+        let props_json = document_properties_json(&self.session.document, page_count);
         let page_index = current_page.min(page_count.saturating_sub(1));
 
-        if is_incremental && !cached_pages.is_empty() {
-            let updated: Vec<Arc<SinglePageSnapshot>> =
-                rebuilt_pages.iter().map(|&i| cached_pages[i as usize].clone()).collect();
-            snapshot.publish_incremental(
-                *version,
+        if is_incremental && !self.cached_pages.is_empty() {
+            let updated: Vec<Arc<SinglePageSnapshot>> = rebuilt_pages
+                .iter()
+                .map(|&i| self.cached_pages[i as usize].clone())
+                .collect();
+            self.snapshot.publish_incremental(
+                version,
                 page_index,
                 page_count,
                 &rebuilt_pages,
@@ -385,14 +439,12 @@ fn worker_loop(
                 read_only,
             );
         } else {
-            let pages: Vec<SinglePageSnapshot> = cached_pages
-                .iter()
-                .map(|p| (**p).clone())
-                .collect();
-            snapshot.publish(snapshot_from_pages(
+            let pages: Vec<SinglePageSnapshot> =
+                self.cached_pages.iter().map(|p| (**p).clone()).collect();
+            self.snapshot.publish(snapshot_from_pages(
                 pages,
                 page_index,
-                *version,
+                version,
                 atlas_generation,
                 atlas_width,
                 atlas_height,
@@ -406,21 +458,21 @@ fn worker_loop(
         // A forward pass only moves layout, never the document, so the cache can
         // keep the Arc it already holds instead of paying for a deep clone per chunk.
         let doc_arc = match relayout {
-            Relayout::Forward => layout_cache.read().document_snapshot(),
-            _ => Arc::new(session.document.clone()),
+            Relayout::Forward => self.layout_cache.read().document_snapshot(),
+            _ => Arc::new(self.session.document.clone()),
         };
         {
-            let mut cache = layout_cache.write();
+            let mut cache = self.layout_cache.write();
             if is_incremental {
                 cache.update_from_session_incremental(
-                    layout,
+                    &self.layout,
                     Arc::clone(&doc_arc),
-                    *version,
+                    version,
                     page_count,
-                    layout.has_pending_reflow(),
+                    self.layout.has_pending_reflow(),
                 );
             } else {
-                cache.update_from_session(layout, doc_arc);
+                cache.update_from_session(&self.layout, doc_arc);
             }
         }
         // Prefer the visible page when it was part of this pass so the caller's
@@ -434,169 +486,108 @@ fn worker_loop(
                 .unwrap_or_else(|| relayout_start.min(page_count.saturating_sub(1) as usize) as u32)
         };
         Some(RebuildOutcome {
-            version: *version,
+            version,
             rebuilt_pages,
             ready_page,
         })
-    };
+    }
 
-    version = rebuild(
-        &session,
-        &mut layout,
-        &mut version,
-        current_page,
-        Relayout::Full,
-        &mut cached_pages,
-    )
-    .expect("full rebuild always produces a layout")
-    .version;
-    let page_count = layout.page_count() as u32;
-    events.send(BridgeEvent::DocumentOpened {
-        request_id: STARTUP_REQUEST_ID,
-        page_count,
-    });
-
-    let mut pending: Option<QueuedCommand> = None;
-
-    'commands: loop {
-        let queued = match pending.take() {
-            Some(queued) => Some(queued),
-            None => loop {
-                // Anything the caller sent preempts background work, so the queue
-                // is drained first and re-checked after every unit of idle work.
-                match cmd_rx.try_recv() {
-                    Ok(queued) => break Some(queued),
-                    Err(crossbeam_channel::TryRecvError::Disconnected) => break None,
-                    Err(crossbeam_channel::TryRecvError::Empty) => {}
-                }
-                if events.flush() {
-                    continue;
-                }
-                if layout.has_pending_reflow() {
-                    if let Some(outcome) = rebuild(
-                        &session,
-                        &mut layout,
-                        &mut version,
-                        current_page,
-                        Relayout::Forward,
-                        &mut cached_pages,
-                    ) {
-                        version = outcome.version;
-                        if !outcome.rebuilt_pages.is_empty() {
-                            events.send(BridgeEvent::DisplayListReady {
-                                request_id: BACKGROUND_REQUEST_ID,
-                                page: outcome.ready_page,
-                                version,
-                            });
-                        }
-                    }
-                    continue;
-                }
-                if events.has_backlog() {
-                    // Correlation acks are still queued behind a full channel; wake
-                    // periodically to retry instead of sleeping until the next command.
-                    match cmd_rx.recv_timeout(EVENT_DRAIN_POLL) {
-                        Ok(queued) => break Some(queued),
-                        Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
-                        Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break None,
-                    }
-                }
-                match cmd_rx.recv() {
-                    Ok(queued) => break Some(queued),
-                    Err(_) => break None,
-                }
-            },
-        };
-        let Some(QueuedCommand {
+    /// Run one command to completion, emitting its events.
+    ///
+    /// `next_command` is a non-blocking source of further queued commands, used
+    /// only to batch consecutive `ApplyEdit`s into a single transaction and
+    /// layout pass. A non-edit command pulled from it is stashed in
+    /// [`WorkerCore::take_pending`] instead of being consumed.
+    pub(crate) fn execute(
+        &mut self,
+        queued: QueuedCommand,
+        next_command: &mut dyn FnMut() -> Option<QueuedCommand>,
+    ) -> Flow {
+        let QueuedCommand {
             request_id: req_id,
             inner: cmd,
-        }) = queued
-        else {
-            break 'commands;
-        };
+        } = queued;
 
         match cmd {
             BridgeCommand::NewDocument => {
-                session = EditSession::new();
-                format_ctx = FormatContext::new_document();
-                current_page = 0;
-                version = rebuild(
-                    &session,
-                    &mut layout,
-                    &mut version,
-                    current_page,
-                    Relayout::Full,
-                    &mut cached_pages,
-                )
-                .expect("full rebuild always produces a layout")
-                .version;
-                let page_count = layout.page_count() as u32;
-                events.send(BridgeEvent::DocumentOpened { request_id: req_id, page_count });
+                self.session = EditSession::new();
+                self.format_ctx = FormatContext::new_document();
+                self.current_page = 0;
+                self.rebuild(Relayout::Full)
+                    .expect("full rebuild always produces a layout");
+                let page_count = self.layout.page_count() as u32;
+                self.events.send(BridgeEvent::DocumentOpened {
+                    request_id: req_id,
+                    page_count,
+                });
             }
             BridgeCommand::OpenDocument { data, path_hint } => {
                 match import_document_bundle(&data, path_hint.as_deref()) {
                     Ok(bundle) => {
-                        format_ctx = FormatContext::from_bundle(bundle.clone(), path_hint);
-                        session = EditSession::from_document(bundle.document);
-                        current_page = 0;
-                        version = rebuild(
-                    &session,
-                    &mut layout,
-                    &mut version,
-                    current_page,
-                    Relayout::Full,
-                    &mut cached_pages,
-                )
-                .expect("full rebuild always produces a layout")
-                .version;
-                        let page_count = layout.page_count() as u32;
-                        events.send(BridgeEvent::DocumentOpened { request_id: req_id, page_count });
+                        self.format_ctx = FormatContext::from_bundle(bundle.clone(), path_hint);
+                        self.session = EditSession::from_document(bundle.document);
+                        self.current_page = 0;
+                        self.rebuild(Relayout::Full)
+                            .expect("full rebuild always produces a layout");
+                        let page_count = self.layout.page_count() as u32;
+                        self.events.send(BridgeEvent::DocumentOpened {
+                            request_id: req_id,
+                            page_count,
+                        });
                     }
                     Err(e) => {
-                        events.send(BridgeEvent::Error {
+                        self.events.send(BridgeEvent::Error {
                             request_id: req_id,
                             message: e.to_string(),
                         });
                     }
                 }
             }
-            BridgeCommand::SaveDocument => match export_document(&session.document, &format_ctx) {
-                Ok(data) => {
-                    events.send(BridgeEvent::DocumentSaved { request_id: req_id, data });
-                }
-                Err(e) => {
-                    events.send(BridgeEvent::Error {
-                        request_id: req_id,
-                        message: e.to_string(),
-                    });
-                }
-            },
-            BridgeCommand::SaveDocumentAs { format } => {
-                format_ctx.save_format = format;
-                match export_document(&session.document, &format_ctx) {
+            BridgeCommand::SaveDocument => {
+                match export_document(&self.session.document, &self.format_ctx) {
                     Ok(data) => {
-                        events.send(BridgeEvent::DocumentSaved { request_id: req_id, data });
+                        self.events.send(BridgeEvent::DocumentSaved {
+                            request_id: req_id,
+                            data,
+                        });
                     }
                     Err(e) => {
-                        events.send(BridgeEvent::Error {
+                        self.events.send(BridgeEvent::Error {
                             request_id: req_id,
                             message: e.to_string(),
                         });
                     }
                 }
-            },
+            }
+            BridgeCommand::SaveDocumentAs { format } => {
+                self.format_ctx.save_format = format;
+                match export_document(&self.session.document, &self.format_ctx) {
+                    Ok(data) => {
+                        self.events.send(BridgeEvent::DocumentSaved {
+                            request_id: req_id,
+                            data,
+                        });
+                    }
+                    Err(e) => {
+                        self.events.send(BridgeEvent::Error {
+                            request_id: req_id,
+                            message: e.to_string(),
+                        });
+                    }
+                }
+            }
             BridgeCommand::SpellCheckDocument => {
                 let checker = tw_spell::SpellChecker::english();
-                let text = document_plain_text(&session.document);
+                let text = document_plain_text(&self.session.document);
                 let issues = checker.check_text(&text);
                 let words: Vec<String> = issues.into_iter().map(|i| i.word).collect();
-                events.send(BridgeEvent::SpellCheckResult {
+                self.events.send(BridgeEvent::SpellCheckResult {
                     request_id: req_id,
                     misspellings: words,
                 });
-            },
+            }
             BridgeCommand::ToggleTrackChanges { enabled } => {
-                session.document.settings.track_changes_enabled = enabled;
+                self.session.document.settings.track_changes_enabled = enabled;
             }
             BridgeCommand::PasteHtml {
                 run_id,
@@ -604,32 +595,24 @@ fn worker_loop(
                 html,
             } => match tw_html::import(&html) {
                 Ok(doc) => {
-                    if paste::paste_fragment_at(&mut session, run_id, offset, &doc).is_ok() {
-                        format_ctx.mark_document_modified();
-                        version = rebuild(
-                    &session,
-                    &mut layout,
-                    &mut version,
-                    current_page,
-                    Relayout::Full,
-                    &mut cached_pages,
-                )
-                .expect("full rebuild always produces a layout")
-                .version;
-                        events.send(BridgeEvent::DisplayListReady {
+                    if paste::paste_fragment_at(&mut self.session, run_id, offset, &doc).is_ok() {
+                        self.format_ctx.mark_document_modified();
+                        self.rebuild(Relayout::Full)
+                            .expect("full rebuild always produces a layout");
+                        self.events.send(BridgeEvent::DisplayListReady {
                             request_id: req_id,
-                            page: current_page,
-                            version,
+                            page: self.current_page,
+                            version: self.version,
                         });
                     } else {
-                        events.send(BridgeEvent::Error {
+                        self.events.send(BridgeEvent::Error {
                             request_id: req_id,
                             message: "paste HTML failed".into(),
                         });
                     }
                 }
                 Err(err) => {
-                    events.send(BridgeEvent::Error {
+                    self.events.send(BridgeEvent::Error {
                         request_id: req_id,
                         message: err.to_string(),
                     });
@@ -641,33 +624,31 @@ fn worker_loop(
                 bytes,
             } => match tw_docx::import(&bytes) {
                 Ok(result) => {
-                    if paste::paste_fragment_at(&mut session, run_id, offset, &result.document).is_ok()
+                    if paste::paste_fragment_at(
+                        &mut self.session,
+                        run_id,
+                        offset,
+                        &result.document,
+                    )
+                    .is_ok()
                     {
-                        format_ctx.mark_document_modified();
-                        version = rebuild(
-                    &session,
-                    &mut layout,
-                    &mut version,
-                    current_page,
-                    Relayout::Full,
-                    &mut cached_pages,
-                )
-                .expect("full rebuild always produces a layout")
-                .version;
-                        events.send(BridgeEvent::DisplayListReady {
+                        self.format_ctx.mark_document_modified();
+                        self.rebuild(Relayout::Full)
+                            .expect("full rebuild always produces a layout");
+                        self.events.send(BridgeEvent::DisplayListReady {
                             request_id: req_id,
-                            page: current_page,
-                            version,
+                            page: self.current_page,
+                            version: self.version,
                         });
                     } else {
-                        events.send(BridgeEvent::Error {
+                        self.events.send(BridgeEvent::Error {
                             request_id: req_id,
                             message: "paste DOCX fragment failed".into(),
                         });
                     }
                 }
                 Err(err) => {
-                    events.send(BridgeEvent::Error {
+                    self.events.send(BridgeEvent::Error {
                         request_id: req_id,
                         message: err.to_string(),
                     });
@@ -676,7 +657,7 @@ fn worker_loop(
             BridgeCommand::ApplyEdit { command } => {
                 let mut commands = vec![command];
                 let mut request_ids = vec![req_id];
-                while let Ok(next) = cmd_rx.try_recv() {
+                while let Some(next) = next_command() {
                     match next {
                         QueuedCommand {
                             request_id: batch_id,
@@ -686,7 +667,7 @@ fn worker_loop(
                             request_ids.push(batch_id);
                         }
                         other => {
-                            pending = Some(other);
+                            self.pending = Some(other);
                             break;
                         }
                     }
@@ -694,7 +675,7 @@ fn worker_loop(
 
                 let mut apply_error = None;
                 let mut affected_nodes: Vec<NodeId> = Vec::new();
-                let mut tx = session.begin_transaction(None);
+                let mut tx = self.session.begin_transaction(None);
                 for command in commands {
                     match tx.apply(command) {
                         Ok(result) => {
@@ -709,34 +690,28 @@ fn worker_loop(
 
                 if let Some(e) = apply_error {
                     if let Err(abort_err) = tx.abort() {
-                        events.send(BridgeEvent::Error {
+                        self.events.send(BridgeEvent::Error {
                             request_id: req_id,
                             message: abort_err.to_string(),
                         });
-                        continue;
+                        return Flow::Continue;
                     }
-                    format_ctx.mark_document_modified();
-                    let outcome = rebuild(
-                        &session,
-                        &mut layout,
-                        &mut version,
-                        current_page,
-                        if affected_nodes.is_empty() {
+                    self.format_ctx.mark_document_modified();
+                    let outcome = self
+                        .rebuild(if affected_nodes.is_empty() {
                             Relayout::Full
                         } else {
                             Relayout::Nodes(affected_nodes.as_slice())
-                        },
-                        &mut cached_pages,
-                    )
-                    .expect("edit rebuild always produces a layout");
-                    version = outcome.version;
+                        })
+                        .expect("edit rebuild always produces a layout");
+                    let version = outcome.version;
                     let ready_page = outcome.ready_page;
                     for batch_id in &request_ids {
-                        events.send(BridgeEvent::Error {
+                        self.events.send(BridgeEvent::Error {
                             request_id: *batch_id,
                             message: e.to_string(),
                         });
-                        events.send(BridgeEvent::DisplayListReady {
+                        self.events.send(BridgeEvent::DisplayListReady {
                             request_id: *batch_id,
                             page: ready_page,
                             version,
@@ -744,24 +719,18 @@ fn worker_loop(
                     }
                 } else {
                     tx.commit();
-                    format_ctx.mark_document_modified();
-                    let outcome = rebuild(
-                        &session,
-                        &mut layout,
-                        &mut version,
-                        current_page,
-                        if affected_nodes.is_empty() {
+                    self.format_ctx.mark_document_modified();
+                    let outcome = self
+                        .rebuild(if affected_nodes.is_empty() {
                             Relayout::Full
                         } else {
                             Relayout::Nodes(affected_nodes.as_slice())
-                        },
-                        &mut cached_pages,
-                    )
-                    .expect("edit rebuild always produces a layout");
-                    version = outcome.version;
+                        })
+                        .expect("edit rebuild always produces a layout");
+                    let version = outcome.version;
                     let ready_page = outcome.ready_page;
                     for batch_id in request_ids {
-                        events.send(BridgeEvent::DisplayListReady {
+                        self.events.send(BridgeEvent::DisplayListReady {
                             request_id: batch_id,
                             page: ready_page,
                             version,
@@ -771,12 +740,16 @@ fn worker_loop(
             }
             BridgeCommand::ExportPdf => {
                 let exporter = tw_pdf::DisplayListPdfExporter;
-                match exporter.export(&session.document, &tw_pdf::PdfExportOptions::default()) {
+                match exporter.export(&self.session.document, &tw_pdf::PdfExportOptions::default())
+                {
                     Ok(data) => {
-                        events.send(BridgeEvent::DocumentSaved { request_id: req_id, data });
+                        self.events.send(BridgeEvent::DocumentSaved {
+                            request_id: req_id,
+                            data,
+                        });
                     }
                     Err(e) => {
-                        events.send(BridgeEvent::Error {
+                        self.events.send(BridgeEvent::Error {
                             request_id: req_id,
                             message: e.to_string(),
                         });
@@ -784,78 +757,63 @@ fn worker_loop(
                 }
             }
             BridgeCommand::SetCurrentPage { page } => {
-                current_page = page;
-                snapshot.set_current_page(page);
-                let snap = snapshot.read();
-                events.send(BridgeEvent::DisplayListReady {
+                self.current_page = page;
+                self.snapshot.set_current_page(page);
+                let snap = self.snapshot.read();
+                self.events.send(BridgeEvent::DisplayListReady {
                     request_id: req_id,
                     page: snap.page_index,
                     version: snap.version,
                 });
             }
-            BridgeCommand::Undo => match session.undo() {
+            BridgeCommand::Undo => match self.session.undo() {
                 Ok(Some(_)) => {
-                    version = rebuild(
-                    &session,
-                    &mut layout,
-                    &mut version,
-                    current_page,
-                    Relayout::Full,
-                    &mut cached_pages,
-                )
-                .expect("full rebuild always produces a layout")
-                .version;
-                    events.send(BridgeEvent::DisplayListReady {
+                    self.rebuild(Relayout::Full)
+                        .expect("full rebuild always produces a layout");
+                    self.events.send(BridgeEvent::DisplayListReady {
                         request_id: req_id,
-                        page: current_page,
-                        version,
+                        page: self.current_page,
+                        version: self.version,
                     });
                 }
                 Ok(None) => {
-                    events.send(BridgeEvent::Error {
+                    self.events.send(BridgeEvent::Error {
                         request_id: req_id,
                         message: "nothing to undo".into(),
                     });
                 }
                 Err(e) => {
-                    events.send(BridgeEvent::Error {
+                    self.events.send(BridgeEvent::Error {
                         request_id: req_id,
                         message: e.to_string(),
                     });
                 }
             },
-            BridgeCommand::Redo => match session.redo() {
+            BridgeCommand::Redo => match self.session.redo() {
                 Ok(Some(_)) => {
-                    version = rebuild(
-                    &session,
-                    &mut layout,
-                    &mut version,
-                    current_page,
-                    Relayout::Full,
-                    &mut cached_pages,
-                )
-                .expect("full rebuild always produces a layout")
-                .version;
-                    events.send(BridgeEvent::DisplayListReady {
+                    self.rebuild(Relayout::Full)
+                        .expect("full rebuild always produces a layout");
+                    self.events.send(BridgeEvent::DisplayListReady {
                         request_id: req_id,
-                        page: current_page,
-                        version,
+                        page: self.current_page,
+                        version: self.version,
                     });
                 }
                 Ok(None) => {
-                    events.send(BridgeEvent::Error {
+                    self.events.send(BridgeEvent::Error {
                         request_id: req_id,
                         message: "nothing to redo".into(),
                     });
                 }
                 Err(e) => {
-                    events.send(BridgeEvent::Error {
+                    self.events.send(BridgeEvent::Error {
                         request_id: req_id,
                         message: e.to_string(),
                     });
                 }
             },
-            BridgeCommand::Shutdown => break,
+            BridgeCommand::Shutdown => return Flow::Shutdown,
         }
+        Flow::Continue
     }
 }

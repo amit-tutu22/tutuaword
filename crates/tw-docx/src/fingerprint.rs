@@ -9,7 +9,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use tw_model::{Block, Document, Paragraph, RunContent};
+use tw_model::{Block, Document, NumberingCatalog, Paragraph, RunContent, StyleSheet};
 
 pub fn document_fingerprint(doc: &Document) -> u64 {
     let mut hasher = DefaultHasher::new();
@@ -30,6 +30,30 @@ pub fn document_fingerprint(doc: &Document) -> u64 {
         format.footer_text.hash(&mut hasher);
         hash_blocks(&section.blocks, &mut hasher);
     }
+    hasher.finish()
+}
+
+/// Content hash of a single paragraph for within-part preservation.
+pub fn paragraph_fingerprint(para: &Paragraph) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    hash_paragraph(para, &mut hasher);
+    hasher.finish()
+}
+
+/// Tier B fingerprint for the numbering catalog.
+pub fn numbering_fingerprint(catalog: &NumberingCatalog) -> u64 {
+    fingerprint_json(catalog)
+}
+
+/// Tier B fingerprint for the style sheet.
+pub fn styles_fingerprint(styles: &StyleSheet) -> u64 {
+    fingerprint_json(styles)
+}
+
+fn fingerprint_json<T: serde::Serialize>(value: &T) -> u64 {
+    let json = serde_json::to_string(value).unwrap_or_default();
+    let mut hasher = DefaultHasher::new();
+    json.hash(&mut hasher);
     hasher.finish()
 }
 

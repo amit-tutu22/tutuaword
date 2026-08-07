@@ -58,6 +58,22 @@ impl FormatContext {
             }
         }
     }
+
+    /// Tier B: force `word/numbering.xml` to be re-serialized on the next save.
+    pub fn mark_numbering_modified(&mut self) {
+        if let Some(pkg) = &mut self.docx_package {
+            pkg.mark_modified("word/numbering.xml".into());
+            pkg.source_numbering_fingerprint = None;
+        }
+    }
+
+    /// Tier B: force `word/styles.xml` to be re-serialized when a serializer exists.
+    pub fn mark_styles_modified(&mut self) {
+        if let Some(pkg) = &mut self.docx_package {
+            pkg.mark_modified("word/styles.xml".into());
+            pkg.source_styles_fingerprint = None;
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -124,8 +140,10 @@ pub fn import_document_bundle(
                 tw_docx::DocxError::PasswordProtected => ImportError::PasswordProtected,
                 other => ImportError::Docx(other),
             })?;
+            let mut document = result.document;
+            tw_render::normalize_document_images(&mut document);
             Ok(ImportBundle {
-                document: result.document,
+                document,
                 source_format: format,
                 docx_package: Some(result.package),
                 odt_package: None,

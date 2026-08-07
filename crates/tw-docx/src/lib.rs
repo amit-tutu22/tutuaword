@@ -6,13 +6,13 @@ pub type PartName = String;
 
 mod export;
 mod encryption;
-mod fingerprint;
-mod image_convert;
+pub mod fingerprint;
 mod import;
 mod media;
 mod numbering;
 mod opc;
 mod paragraph;
+mod preserve;
 mod properties;
 pub mod retention;
 mod styles;
@@ -32,6 +32,11 @@ pub struct DocxPackage {
     /// Fingerprint of the document as imported. Passthrough export is only
     /// safe while the document still matches it.
     pub source_fingerprint: Option<u64>,
+    /// Fingerprints of Tier B catalogs at import time (R3.3).
+    pub source_numbering_fingerprint: Option<u64>,
+    pub source_styles_fingerprint: Option<u64>,
+    /// Unedited paragraph XML preserved for within-part round-trip (R3.3).
+    pub preserved_paragraphs: preserve::PreservedParagraphMap,
 }
 
 impl DocxPackage {
@@ -66,6 +71,9 @@ impl DocxPackage {
             modified_parts: HashSet::new(),
             original_bytes: None,
             source_fingerprint: None,
+            source_numbering_fingerprint: None,
+            source_styles_fingerprint: None,
+            preserved_paragraphs: preserve::PreservedParagraphMap::new(),
         }
     }
 }

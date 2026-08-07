@@ -8,6 +8,11 @@ license.workspace = true
 [dependencies]
 tw-layout = { path = "../tw-layout" }
 tw-shape = { path = "../tw-shape" }
+tw-model = { path = "../tw-model" }
+# R3.3: vector rasterization lives in the render layer, not tw-docx.
+resvg = { version = "0.44", default-features = false, features = ["text", "raster-images"] }
+usvg = { version = "0.44", default-features = false, features = ["text"] }
+tiny-skia = "0.11"
 
 [dev-dependencies]
 tw-model = { path = "../tw-model" }

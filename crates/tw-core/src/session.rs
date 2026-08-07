@@ -1,12 +1,13 @@
+use crate::executor::{EngineExecutor, InlineExecutor};
 use crate::import::DetectedFormat;
 use crate::layout_cache::{new_shared_layout_cache, SharedLayoutCache};
 use crate::snapshot::SnapshotBuffer;
-use crate::worker::{BridgeCommand, BridgeEvent, QueuedCommand, WorkerHandle, STARTUP_REQUEST_ID};
+use crate::worker::{BridgeCommand, BridgeEvent, QueuedCommand, STARTUP_REQUEST_ID};
 use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tw_edit::{
     bullet_list_command_for_caret, heading1_command_for_caret, insert_image_command,
     insert_page_break_command_for, insert_table_command, normal_style_command_for_caret,
@@ -34,26 +35,69 @@ pub enum WaitOutcome {
 pub struct Session {
     snapshot: Arc<SnapshotBuffer>,
     layout_cache: SharedLayoutCache,
-    worker: WorkerHandle,
+    executor: Box<dyn EngineExecutor>,
     pending_events: Mutex<VecDeque<BridgeEvent>>,
     event_observer: StdMutex<Option<EventObserver>>,
     next_request_id: AtomicU64,
     /// External [`Session::pump_events`] calls, used only to diagnose a host that
     /// installed an observer and then never pumped.
     pump_calls: AtomicU64,
+    /// Only a clock-bounded (threaded) wait can time out without making progress.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     unpumped_warning_emitted: AtomicBool,
     pub doc_id: DocId,
 }
 
 impl Session {
+    /// Session with the platform-default executor: a worker thread on native
+    /// targets, an inline (driven) engine on `wasm32`.
     pub fn new() -> Self {
+        #[cfg(target_arch = "wasm32")]
+        {
+            Self::new_inline()
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            Self::new_threaded()
+        }
+    }
+
+    /// Session whose engine owns a dedicated OS thread (native only).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn new_threaded() -> Self {
+        Self::with_executor(|snapshot, layout_cache| {
+            Box::new(crate::executor::ThreadedExecutor::spawn(
+                snapshot,
+                layout_cache,
+            ))
+        })
+    }
+
+    /// Session with no worker thread: commands run on the caller's thread when
+    /// the host drives the engine.
+    ///
+    /// Available on every target, not just `wasm32`, so the web execution model
+    /// is exercised by native tests. See [`Session::drive`] for how a host makes
+    /// such a session progress.
+    pub fn new_inline() -> Self {
+        Self::with_executor(|snapshot, layout_cache| {
+            Box::new(InlineExecutor::new(snapshot, layout_cache))
+        })
+    }
+
+    /// Session driven by a caller-supplied executor. The closure receives the
+    /// snapshot buffer and layout cache the session will read from.
+    pub fn with_executor<F>(build_executor: F) -> Self
+    where
+        F: FnOnce(Arc<SnapshotBuffer>, SharedLayoutCache) -> Box<dyn EngineExecutor>,
+    {
         let snapshot = Arc::new(SnapshotBuffer::new());
         let layout_cache = new_shared_layout_cache();
-        let worker = WorkerHandle::spawn(snapshot.clone(), layout_cache.clone());
+        let executor = build_executor(snapshot.clone(), layout_cache.clone());
         Self {
             snapshot,
             layout_cache,
-            worker,
+            executor,
             pending_events: Mutex::new(VecDeque::new()),
             event_observer: StdMutex::new(None),
             next_request_id: AtomicU64::new(1),
@@ -61,6 +105,23 @@ impl Session {
             unpumped_warning_emitted: AtomicBool::new(false),
             doc_id: 1,
         }
+    }
+
+    /// Run outstanding engine work on the calling thread; returns the number of
+    /// work units performed (commands, event flushes, background reflow chunks).
+    ///
+    /// No-op returning `0` for a threaded session. For an inline session this is
+    /// the *only* thing that makes the engine progress, and `0` means the engine
+    /// is idle: no further events can appear until another command is submitted.
+    /// [`Session::pump_events`] drives and then delivers, so a host on a frame
+    /// timer normally calls that instead.
+    pub fn drive(&self) -> usize {
+        self.executor.drive()
+    }
+
+    /// True when the engine only progresses while the host drives it (inline).
+    pub fn requires_drive(&self) -> bool {
+        self.executor.requires_drive()
     }
 
     /// Forward every worker event to the host (or tests) before buffering it for
@@ -71,6 +132,8 @@ impl Session {
     /// pushes into a channel and moves on. A host that installs an observer and
     /// then waits for events without calling [`Session::pump_events`] will observe
     /// no events at all, and every correlated wait will run to its full timeout.
+    /// On an inline session the stakes are higher still: nothing *executes* the
+    /// command either until the host pumps.
     ///
     /// Call `pump_events` on a timer or frame callback for as long as the observer
     /// is installed. The blocking helpers drain as a side effect of waiting, which
@@ -88,7 +151,7 @@ impl Session {
             .clone();
         let mut pending = self.pending_events.lock();
         let mut forwarded = 0;
-        while let Ok(event) = self.worker.event_rx.try_recv() {
+        while let Some(event) = self.executor.try_next_event() {
             if let Some(ref forward) = observer {
                 forward(event.clone());
             }
@@ -109,8 +172,13 @@ impl Session {
     ///
     /// Required, not optional, for any host that installs an event observer -- see
     /// [`Session::set_event_observer`].
+    ///
+    /// On an inline session this is also what *runs* the engine: it drives every
+    /// queued command (plus one background reflow chunk) before delivering, which
+    /// is why the FFI/Dart timer pump is the natural host driver on web.
     pub fn pump_events(&self) -> usize {
         self.pump_calls.fetch_add(1, Ordering::Relaxed);
+        let _ = self.executor.drive();
         self.drain_events()
     }
 
@@ -118,6 +186,7 @@ impl Session {
     /// and nothing ever pumped is almost certainly the unpumped-host mistake, not a
     /// slow worker. Say so once, on stderr, rather than letting the host rediscover
     /// it as an unexplained multi-second hang.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     fn warn_if_never_pumped(&self) {
         if self.pump_calls.load(Ordering::Relaxed) != 0 {
             return;
@@ -150,9 +219,9 @@ impl Session {
             request_id,
             inner: command,
         };
-        // Block until the worker accepts the command (bounded queue backpressure).
-        // Returns None only if the worker channel is disconnected (shutdown).
-        self.worker.cmd_tx.send(queued).ok().map(|_| request_id)
+        // The executor applies backpressure on a full queue (blocking on the
+        // threaded path, draining inline). None only when the engine has shut down.
+        self.executor.submit(queued).then_some(request_id)
     }
 
     pub fn apply(&self, command: Command) -> Option<u64> {
@@ -196,27 +265,65 @@ impl Session {
     }
 
     /// Returns the next buffered or freshly received event (any request id).
+    ///
+    /// Drives an inline engine first, so a host can poll without ever blocking.
     pub fn poll_event(&self) -> Option<BridgeEvent> {
+        let _ = self.executor.drive();
         let _ = self.drain_events();
         self.pending_events.lock().pop_front()
     }
 
+    fn take_response(&self, request_id: u64) -> Option<BridgeEvent> {
+        let mut pending = self.pending_events.lock();
+        let index = pending
+            .iter()
+            .position(|event| event.request_id() == request_id)?;
+        Some(pending.remove(index).expect("event index"))
+    }
+
     /// Wait until an event with `request_id` arrives, buffering unrelated events.
+    ///
+    /// On a threaded session this waits up to `timeout` for the worker thread. On
+    /// an inline session there is no other thread to wait *for*, so the wait
+    /// drives the engine instead: it runs queued work until the response appears
+    /// or the engine reports itself idle, and `timeout` is ignored. That keeps
+    /// the call bounded by work rather than by a clock, which matters because
+    /// `Instant::now` is not usable on `wasm32-unknown-unknown`.
     pub fn wait_for_response(&self, request_id: u64, timeout: Duration) -> WaitOutcome {
-        let deadline = Instant::now() + timeout;
-        let started = Instant::now();
+        if self.executor.requires_drive() {
+            return self.wait_for_response_driven(request_id);
+        }
+        self.wait_for_response_blocking(request_id, timeout)
+    }
+
+    /// Correlated wait for an inline engine: drive, check, repeat until idle.
+    fn wait_for_response_driven(&self, request_id: u64) -> WaitOutcome {
         loop {
             let _ = self.drain_events();
-            {
-                let mut pending = self.pending_events.lock();
-                if let Some(index) = pending
-                    .iter()
-                    .position(|event| event.request_id() == request_id)
-                {
-                    return WaitOutcome::Matched(pending.remove(index).expect("event index"));
-                }
+            if let Some(event) = self.take_response(request_id) {
+                return WaitOutcome::Matched(event);
             }
-            if Instant::now() >= deadline {
+            if self.executor.drive() == 0 {
+                // Idle engine: nothing further can arrive without new input.
+                let _ = self.drain_events();
+                return match self.take_response(request_id) {
+                    Some(event) => WaitOutcome::Matched(event),
+                    None => WaitOutcome::Timeout,
+                };
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn wait_for_response_blocking(&self, request_id: u64, timeout: Duration) -> WaitOutcome {
+        let started = std::time::Instant::now();
+        let deadline = started + timeout;
+        loop {
+            let _ = self.drain_events();
+            if let Some(event) = self.take_response(request_id) {
+                return WaitOutcome::Matched(event);
+            }
+            if std::time::Instant::now() >= deadline {
                 self.warn_if_never_pumped();
                 return WaitOutcome::Timeout;
             }
@@ -226,6 +333,13 @@ impl Session {
                 std::thread::sleep(Duration::from_millis(1));
             }
         }
+    }
+
+    /// No threaded executor exists on `wasm32`, so this is unreachable there;
+    /// it stays compilable (and sleep-free) by deferring to the driven wait.
+    #[cfg(target_arch = "wasm32")]
+    fn wait_for_response_blocking(&self, request_id: u64, _timeout: Duration) -> WaitOutcome {
+        self.wait_for_response_driven(request_id)
     }
 
     pub fn get_display_list_bytes(&self) -> Arc<crate::snapshot::PageSnapshot> {
@@ -260,6 +374,29 @@ impl Session {
             snap.atlas_height,
             snap.atlas_bytes.clone(),
         )
+    }
+
+    /// Plain text of the current document snapshot (for hosts without display-list parsing).
+    pub fn document_text(&self) -> String {
+        self.get_display_list_bytes().document_text.clone()
+    }
+
+    /// Width of the first laid-out line on a page, or `0` when unknown.
+    pub fn first_line_width(&self, page: u32) -> f32 {
+        self.layout_cache.read().first_line_width(page)
+    }
+
+    /// Inject a font face for inline / wasm sessions. Threaded native sessions
+    /// return [`FontRegistrationError::RegistrationNotSupported`].
+    pub fn register_face(
+        &self,
+        spec: &tw_layout::FontFaceSpec,
+        data: Vec<u8>,
+    ) -> Result<tw_layout::FontId, tw_layout::FontRegistrationError> {
+        match self.executor.register_face(spec, data) {
+            Some(result) => result,
+            None => Err(tw_layout::FontRegistrationError::RegistrationNotSupported),
+        }
     }
 
     pub fn set_current_page(&self, page: u32) -> Option<u64> {
@@ -413,15 +550,43 @@ impl Session {
         self.layout_cache.read().is_page_stale(page)
     }
 
+    /// Wait for any event. Inline sessions drive the engine instead of sleeping,
+    /// returning `None` once the engine is idle rather than burning `timeout_ms`.
     pub fn wait_for_event(&self, timeout_ms: u64) -> Option<BridgeEvent> {
-        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
-        while Instant::now() < deadline {
+        if self.executor.requires_drive() {
+            return self.wait_for_event_driven();
+        }
+        self.wait_for_event_blocking(timeout_ms)
+    }
+
+    fn wait_for_event_driven(&self) -> Option<BridgeEvent> {
+        loop {
+            let _ = self.drain_events();
+            if let Some(event) = self.pending_events.lock().pop_front() {
+                return Some(event);
+            }
+            if self.executor.drive() == 0 {
+                let _ = self.drain_events();
+                return self.pending_events.lock().pop_front();
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn wait_for_event_blocking(&self, timeout_ms: u64) -> Option<BridgeEvent> {
+        let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms);
+        while std::time::Instant::now() < deadline {
             if let Some(event) = self.poll_event() {
                 return Some(event);
             }
             std::thread::sleep(Duration::from_millis(5));
         }
         None
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn wait_for_event_blocking(&self, _timeout_ms: u64) -> Option<BridgeEvent> {
+        self.wait_for_event_driven()
     }
 
     /// Wait for the worker startup `DocumentOpened` event (`STARTUP_REQUEST_ID`).
@@ -432,7 +597,7 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        self.worker.shutdown();
+        self.executor.shutdown();
     }
 }
 

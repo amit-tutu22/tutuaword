@@ -474,6 +474,35 @@ fn script_scale(format: &tw_model::CharFormat) -> (f32, f32) {
     }
 }
 
+/// A line with no glyphs, used when no face is available to shape with.
+fn blank_line(
+    para: &Paragraph,
+    x: f32,
+    baseline_y: f32,
+    size: f32,
+) -> super::types::TextLine {
+    let ascent = size;
+    let descent = size * 0.25;
+    super::types::TextLine {
+        y: baseline_y,
+        x,
+        width: 0.0,
+        ascent,
+        descent,
+        line_height: (ascent + descent).max(size * 1.2),
+        glyphs: Vec::new(),
+        paragraph_id: para.id,
+        run_map: para
+            .runs
+            .first()
+            .map(|run| vec![(x, x, run.id, 0)])
+            .unwrap_or_default(),
+        list_marker: None,
+        justify_stops: Vec::new(),
+        decorations: Vec::new(),
+    }
+}
+
 fn shape_line(
     shaper: &mut TextShaper,
     atlas: &mut GlyphAtlas,
@@ -488,14 +517,18 @@ fn shape_line(
     font_id: Option<tw_shape::FontId>,
     default_color: u32,
 ) -> (super::types::TextLine, f32) {
-    let fid = font_id.or_else(|| shaper.default_font()).unwrap();
+    let default_size = para.runs.first().and_then(|r| r.format.font_size).unwrap_or(12.0);
+    let Some(fid) = font_id.or_else(|| shaper.default_font()) else {
+        // No face at all — a host that has registered no fonts yet. The document
+        // still paginates against nominal metrics; it just has nothing to draw.
+        return (blank_line(para, x, baseline_y, default_size), 0.0);
+    };
     let mut cursor_x = x;
     let mut glyphs = Vec::new();
     let mut run_map = Vec::new();
     let line_end_byte = line_start_byte + line_text.len();
 
     let segments = run_segments_for_range(para, line_start_byte, line_end_byte);
-    let default_size = para.runs.first().and_then(|r| r.format.font_size).unwrap_or(12.0);
     let mut line_ascent = 0.0f32;
     let mut line_descent = 0.0f32;
     let mut line_gap = 0.0f32;

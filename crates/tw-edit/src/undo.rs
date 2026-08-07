@@ -1,5 +1,5 @@
 use crate::{apply, can_coalesce_insert, Command, DocRange, EditError, EditResult};
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 use tw_model::Document;
 
 /// One undo/redo step — may contain multiple coalesced or transactional commands.
@@ -75,7 +75,7 @@ impl EditSessionInner {
         }
     }
 
-    /// Test hook: override the coalescing clock (defaults to `Instant::now()`).
+    /// Test hook: override the coalescing clock (defaults to a monotonic instant).
     #[doc(hidden)]
     pub fn set_test_clock(&mut self, now: Instant) {
         self.test_clock = Some(now);

@@ -236,6 +236,15 @@ impl LayoutCache {
     pub fn page_count(&self) -> u32 {
         self.page_count.max(1)
     }
+
+    /// Width of the first laid-out line on a page, if layout has run.
+    pub fn first_line_width(&self, page: u32) -> f32 {
+        self.line_maps
+            .get(&page)
+            .and_then(|map| map.lines.first())
+            .map(|line| line.width)
+            .unwrap_or(0.0)
+    }
 }
 
 impl Default for LayoutCache {

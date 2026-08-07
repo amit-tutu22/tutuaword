@@ -110,6 +110,30 @@ pub fn unmapped_corpus_tags(
     out
 }
 
+/// OOXML `w:*` element counts in a document part (for round-trip gates).
+pub fn element_counts_from_xml(xml: &str) -> HashMap<String, usize> {
+    let mut report = ImportRetentionReport::new();
+    scan_ooxml_elements(xml, &mut report);
+    report.encountered.clone()
+}
+
+/// Tags whose counts dropped after a round-trip (Tier A retention gate).
+pub fn tier_a_tags_lost(
+    before: &HashMap<String, usize>,
+    after: &HashMap<String, usize>,
+    tier_a: &[&str],
+) -> Vec<String> {
+    let mut lost = Vec::new();
+    for tag in tier_a {
+        let prev = before.get(*tag).copied().unwrap_or(0);
+        let next = after.get(*tag).copied().unwrap_or(0);
+        if next < prev {
+            lost.push(format!("{tag}: {prev} -> {next}"));
+        }
+    }
+    lost
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

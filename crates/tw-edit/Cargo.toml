@@ -11,6 +11,8 @@ tw-text = { path = "../tw-text" }
 thiserror = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+# Portable monotonic clock: `std::time::Instant::now` panics on wasm32-unknown-unknown.
+web-time = "1.1"
 
 [dev-dependencies]
 serde_json = { workspace = true }

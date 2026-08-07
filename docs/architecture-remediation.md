@@ -319,18 +319,86 @@ Status: **Done**
 
 ## R3 — Platform and fidelity
 
-**Goal:** Honest multi-platform posture; Word fidelity gates; collaboration-ready foundations.
+**Goal:** Honest multi-platform posture; Word fidelity gates. *(CRDT / F20 collaboration is tracked separately in [crdt-program.md](crdt-program.md).)*
 
 ### R3.1 Executor abstraction (web)
 
-| Task | Action |
-|------|--------|
-| `EngineExecutor` trait | `ThreadedExecutor` (native), `InlineExecutor` (WASM) |
-| `tw-core` | No direct `std::thread::spawn` in session constructor |
-| CI | `cargo check --target wasm32-unknown-unknown -p tw-wasm` |
-| Fonts | Byte-slice font provider; no `fontdb/fs` on WASM |
+| Task | Action | Status |
+|------|--------|--------|
+| `EngineExecutor` trait | `ThreadedExecutor` (native), `InlineExecutor` (WASM) | **Done** |
+| `tw-core` | No direct `std::thread::spawn` in session constructor | **Done** |
+| CI | `cargo check --target wasm32-unknown-unknown -p tw-wasm` | Pending (`tw-core` and `tw-shape` check clean) |
+| Fonts | Byte-slice font provider; no `fontdb/fs` on WASM | **Done** |
 
 **Exit:** `tw-wasm` compiles in CI; smoke test opens bytes in JS test harness.
+
+#### Execution model
+
+`Session` owns the protocol — commands in, correlated events out — but no longer
+owns the thread the engine runs on. That is a policy behind `EngineExecutor`:
+
+| | `ThreadedExecutor` | `InlineExecutor` |
+|---|---|---|
+| Constructor | `Session::new_threaded()` (native default) | `Session::new_inline()` (default on `wasm32`) |
+| Engine location | dedicated OS thread, blocking `recv` when idle | the caller's thread; no thread at all |
+| `submit` backpressure | blocking `send` on the 512-deep queue | queues, and drives the engine once the queue reaches 512 |
+| `drive()` | `0` — the worker thread does the work | runs every queued command, flushes the event backlog, then one background reflow chunk |
+| Correlated waits | sleep until the deadline | drive until the response lands or the engine reports itself idle |
+
+`ThreadedExecutor` is `#[cfg]`-compiled out on `wasm32`, so a web build contains
+no reachable `std::thread::spawn` or `std::thread::sleep` — verified against the
+emitted `wasm32` rlib, which carries neither instantiation while the native one
+carries both.
+
+**Driving an inline session.** Nothing runs until the host drives it, and
+`Session::pump_events` is the driver: it executes queued work and then delivers
+events to the observer, which is exactly what the FFI/Dart timer pump already
+does. `poll_event`, `wait_for_response` and `wait_for_event` drive as well, so a
+correlated wait cannot deadlock. Those waits are bounded by *work* rather than by
+a clock, because `Instant::now` is unusable on `wasm32-unknown-unknown`: an
+inline `wait_for_response` ignores its `timeout` and returns `Timeout` as soon as
+the engine goes idle without having produced the response.
+
+**Background reflow without an idle thread.** The worker thread ran forward
+relayout chunks whenever the command channel was empty. Inline, "idle" is
+redefined as *the end of a drive*: once a drive has emptied the command queue it
+runs exactly one chunk. Preemption is preserved — a command queued before the
+chunk is always served first — and one chunk per drive keeps a frame-timer host
+responsive while successive pumps walk the pending window to zero. A host that
+stops pumping freezes catch-up instead of getting it in the background;
+`is_page_stale` keeps reporting the truth throughout.
+
+Regression coverage is `crates/tw-core/tests/r3_inline_executor.rs` — 12 tests on
+the native host, each behind a watchdog so a re-introduced block fails CI rather
+than hanging it.
+
+**Known gap:** `tw-edit`'s undo coalescing clock (`UndoStack::now` →
+`Instant::now`) sits on the `ApplyEdit` path and panics on
+`wasm32-unknown-unknown`. Compilation is unaffected; the first edit at runtime is
+not. This needs a platform clock abstraction before a JS smoke test can type.
+
+#### Fonts
+
+`FontDatabase::empty()` / `TextShaper::with_injected_fonts()` /
+`LayoutEngine::with_injected_fonts()` build an engine whose only faces come from
+`register_face(&FontFaceSpec, bytes)` or `register_font_data(bytes)`. The
+system-font constructors (`new()`) are unchanged, so native behaviour and every
+existing caller are untouched.
+
+`fontdb`'s `fs` feature is dropped on `wasm32` through a target-specific
+dependency in `crates/tw-shape/Cargo.toml`, which deletes `load_system_fonts`,
+`Source::File`, and `Source::SharedFile` from the build. A filesystem font path
+on the web is a compile error rather than a silent runtime miss.
+
+An unregistered family resolves through family → Office aliases → theme minor
+font → any registered face in the nearest style. With no faces at all, layout
+emits glyph-free lines instead of panicking. Details and the minimum font set a
+web host must supply are in [layout-engine.md](architecture/layout-engine.md).
+
+Covered by `crates/tw-shape/tests/injected_fonts.rs` and
+`crates/tw-layout/tests/injected_font_layout.rs`; the latter lays out a document
+from injected bytes alone and asserts real advances and glyph ids. CI still needs
+`cargo check -p tw-shape --target wasm32-unknown-unknown`.
 
 ### R3.2 Platform CI matrix
 
@@ -350,16 +418,9 @@ Status: **Done**
 | Within-part preserve | Token-preserving transforms for modified `document.xml` (Terra finding) |
 | Vector in model | Move `resvg` rasterization out of `tw-docx` into `tw-render` |
 
-### R3.4 CRDT foundations (before F20)
+### R3.4 CRDT / collaboration
 
-| Task | Action |
-|------|--------|
-| Operation metadata | `origin: Local \| Remote`, `op_id`, transaction boundaries in `Command` |
-| Position model | Prototype CRDT text positions; stop using bare `(run_id, usize)` for collab |
-| Vertical slice | Two clients, paragraph text + bold, merge via `yrs` |
-| Undo model | Document selective/local undo semantics; inverse-stack insufficient for collab |
-
-**Exit:** ADR-0009 marked **Partial** with working 2-client demo.
+**Moved to [crdt-program.md](crdt-program.md).** Not part of R3 remediation exit criteria. Implement with F20 (Wave W5, Stage S4).
 
 ### R3.5 Accessibility (F21 prep)
 
@@ -385,7 +446,7 @@ Status: **Done**
 - Wire F04+ ribbon tabs before R2.4 decomposition
 - Claim web/mobile support in marketing or README
 - Expand `BridgeCommand` with new shortcut variants
-- Build F20 collaboration on current `tw-crdt` stub
+- Build F20 collaboration on the current `tw-crdt` stub — see [crdt-program.md](crdt-program.md)
 
 ---
 

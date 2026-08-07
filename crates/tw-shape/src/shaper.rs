@@ -1,4 +1,6 @@
-use crate::{FontDatabase, FontId, GlyphRasterizer, RasterizedGlyph};
+use crate::{
+    FontDatabase, FontFaceSpec, FontId, FontRegistrationError, GlyphRasterizer, RasterizedGlyph,
+};
 use rustybuzz::{Direction, Feature, UnicodeBuffer};
 use rustybuzz::ttf_parser::Tag;
 use tw_model::CharFormat;
@@ -40,11 +42,45 @@ impl Default for TextShaper {
 }
 
 impl TextShaper {
+    /// A shaper over the operating system's installed fonts.
     pub fn new() -> Self {
+        Self::with_fonts(FontDatabase::new())
+    }
+
+    /// A shaper with no faces at all: the host registers every face it wants
+    /// from bytes via [`TextShaper::register_face`]. Nothing on this path scans
+    /// the OS or touches the filesystem, which is the only arrangement that
+    /// works on the web.
+    pub fn with_injected_fonts() -> Self {
+        Self::with_fonts(FontDatabase::empty())
+    }
+
+    pub fn with_fonts(fonts: FontDatabase) -> Self {
         Self {
-            fonts: FontDatabase::new(),
+            fonts,
             rasterizer: GlyphRasterizer::new(),
         }
+    }
+
+    /// See [`FontDatabase::register_face`].
+    pub fn register_face(
+        &mut self,
+        spec: &FontFaceSpec,
+        data: impl Into<Vec<u8>>,
+    ) -> Result<FontId, FontRegistrationError> {
+        self.fonts.register_face(spec, data)
+    }
+
+    /// See [`FontDatabase::register_font_data`].
+    pub fn register_font_data(
+        &mut self,
+        data: impl Into<Vec<u8>>,
+    ) -> Result<Vec<FontId>, FontRegistrationError> {
+        self.fonts.register_font_data(data)
+    }
+
+    pub fn fonts(&self) -> &FontDatabase {
+        &self.fonts
     }
 
     pub fn fonts_mut(&mut self) -> &mut FontDatabase {

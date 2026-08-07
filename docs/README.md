@@ -23,15 +23,16 @@ Read these documents in order if you are new to the project:
 15. [Testing Strategy](testing-strategy.md) — golden images, round-trip corpus, benchmarks
 16. [Risk Mitigation](risk-mitigation.md) — Word-compatibility risks, staging (S0–S5), residual risk (wins on conflicts)
 17. [Architecture Remediation](architecture-remediation.md) — R0–R3 fix plan when code diverges from ADRs (blocks F04+ until R1 exits)
-18. [Long-Tail Gaps](long-tail-gaps.md) — partial/peripheral features not yet built (PDF fonts, Hunspell, parsers, plugins, AI)
-19. [UI Functionality Audit](ui-functionality-audit.md) — ribbon/menu wiring vs engine; P0/P1/P2 control status
+18. [CRDT Program](crdt-program.md) — collaboration / F20 implementation plan (separate from R3 remediation)
+19. [Long-Tail Gaps](long-tail-gaps.md) — partial/peripheral features not yet built (PDF fonts, Hunspell, parsers, plugins, AI)
+20. [UI Functionality Audit](ui-functionality-audit.md) — ribbon/menu wiring vs engine; P0/P1/P2 control status
 
 ### Later Phases (interface specs only)
 
-19. [AI Platform](architecture/ai-platform.md)
-20. [Collaboration](architecture/collaboration.md)
-21. [Plugins](architecture/plugins.md)
-22. [Security](architecture/security.md)
+21. [AI Platform](architecture/ai-platform.md)
+22. [Collaboration](architecture/collaboration.md) — interface spec; implementation plan in [CRDT Program](crdt-program.md)
+23. [Plugins](architecture/plugins.md)
+24. [Security](architecture/security.md)
 
 ### Architecture Decision Records
 

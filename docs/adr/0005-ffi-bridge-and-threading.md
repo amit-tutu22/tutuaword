@@ -61,3 +61,5 @@ Invalidation: page-granular — a keystroke re-layouts only the affected page.
 ## WASM Exception
 
 Web platform (Phase 1): no `SharedArrayBuffer` requirement. Layout runs synchronously after each command. Acceptable because web is not the primary target and WASM threading is available in Phase 2.
+
+Implemented in R3.1 as `EngineExecutor`: `Session::new()` selects `ThreadedExecutor` (a worker thread, the model above) on native targets and `InlineExecutor` on `wasm32`. The inline engine owns no thread and executes queued commands on the caller's thread when the host drives it, normally via `Session::pump_events` on a timer or frame callback. `ThreadedExecutor` is compiled out on `wasm32`, so no `std::thread::spawn` or `std::thread::sleep` is reachable in a web build. See [architecture-remediation.md](../architecture-remediation.md) R3.1 for the drive contract and how background forward relayout is scheduled without an idle thread.

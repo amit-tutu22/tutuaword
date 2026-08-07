@@ -53,13 +53,19 @@ pub fn export_docx(doc: &Document, package: &DocxPackage) -> Result<Vec<u8>, Doc
         .insert("word/document.xml".into(), document_xml.into_bytes());
     pkg.mark_modified("word/document.xml".into());
 
-    let numbering_xml = crate::numbering::serialize_numbering_xml(&doc.settings.numbering);
-    if !numbering_xml.is_empty() {
-        pkg.parts
-            .insert("word/numbering.xml".into(), numbering_xml.into_bytes());
-        pkg.mark_modified("word/numbering.xml".into());
-        ensure_numbering_content_type(&mut pkg);
-        ensure_numbering_relationship(&mut pkg);
+    let numbering_changed = package
+        .source_numbering_fingerprint
+        .map(|f| f != crate::fingerprint::numbering_fingerprint(&doc.settings.numbering))
+        .unwrap_or(true);
+    if numbering_changed {
+        let numbering_xml = crate::numbering::serialize_numbering_xml(&doc.settings.numbering);
+        if !numbering_xml.is_empty() {
+            pkg.parts
+                .insert("word/numbering.xml".into(), numbering_xml.into_bytes());
+            pkg.mark_modified("word/numbering.xml".into());
+            ensure_numbering_content_type(&mut pkg);
+            ensure_numbering_relationship(&mut pkg);
+        }
     }
 
     media.commit(&mut pkg);
@@ -109,7 +115,7 @@ fn serialize_document_xml(doc: &Document, source: &DocxPackage, media: &mut Medi
     let last = doc.sections.len().saturating_sub(1);
     for (index, section) in doc.sections.iter().enumerate() {
         for block in &section.blocks {
-            body.push_str(&serialize_block(block, doc, media, &mut revision_ids));
+            body.push_str(&serialize_block(block, doc, source, media, &mut revision_ids));
         }
         let sect_pr = serialize_section_properties(&section.format, original_sect_pr.as_deref());
         if index == last {
@@ -132,12 +138,13 @@ fn serialize_document_xml(doc: &Document, source: &DocxPackage, media: &mut Medi
 fn serialize_block(
     block: &Block,
     doc: &Document,
+    package: &DocxPackage,
     media: &mut MediaWriter,
     revision_ids: &mut RevisionIdAllocator,
 ) -> String {
     match block {
-        Block::Paragraph(para) => serialize_paragraph(para, doc, revision_ids),
-        Block::Table(table) => serialize_table(table, doc, media, revision_ids),
+        Block::Paragraph(para) => serialize_paragraph(para, doc, package, revision_ids),
+        Block::Table(table) => serialize_table(table, doc, package, media, revision_ids),
         Block::ImageBlock(image) => serialize_image_paragraph(image, media),
         Block::ShapeBlock(shape) => serialize_shape_paragraph(shape),
         _ => String::from("<w:p/>"),
@@ -149,8 +156,14 @@ fn serialize_block(
 fn serialize_paragraph(
     para: &Paragraph,
     doc: &Document,
+    package: &DocxPackage,
     revision_ids: &mut RevisionIdAllocator,
 ) -> String {
+    if let Some(preserved) = package.preserved_paragraphs.get(&para.id) {
+        if preserved.fingerprint == crate::fingerprint::paragraph_fingerprint(para) {
+            return preserved.xml.clone();
+        }
+    }
     let mut xml = String::from("<w:p>");
     xml.push_str(&serialize_paragraph_properties(para, doc));
     for run in &para.runs {
@@ -487,6 +500,7 @@ fn toggle(tag: &str, value: Option<bool>) -> String {
 fn serialize_table(
     table: &Table,
     doc: &Document,
+    package: &DocxPackage,
     media: &mut MediaWriter,
     revision_ids: &mut RevisionIdAllocator,
 ) -> String {
@@ -511,7 +525,7 @@ fn serialize_table(
     xml.push_str("</w:tblGrid>");
 
     for row in &table.rows {
-        xml.push_str(&serialize_table_row(row, widths, doc, media, revision_ids));
+        xml.push_str(&serialize_table_row(row, widths, doc, package, media, revision_ids));
     }
     xml.push_str("</w:tbl>");
     xml
@@ -538,6 +552,7 @@ fn serialize_table_row(
     row: &TableRow,
     widths: &[f32],
     doc: &Document,
+    package: &DocxPackage,
     media: &mut MediaWriter,
     revision_ids: &mut RevisionIdAllocator,
 ) -> String {
@@ -558,7 +573,7 @@ fn serialize_table_row(
             .take(span)
             .copied()
             .sum::<f32>();
-        xml.push_str(&serialize_table_cell(cell, width, doc, media, revision_ids));
+        xml.push_str(&serialize_table_cell(cell, width, doc, package, media, revision_ids));
         column += span;
     }
     xml.push_str("</w:tr>");
@@ -569,6 +584,7 @@ fn serialize_table_cell(
     cell: &TableCell,
     width: f32,
     doc: &Document,
+    package: &DocxPackage,
     media: &mut MediaWriter,
     revision_ids: &mut RevisionIdAllocator,
 ) -> String {
@@ -578,7 +594,7 @@ fn serialize_table_cell(
     let mut has_paragraph = false;
     for block in &cell.blocks {
         has_paragraph |= matches!(block, Block::Paragraph(_));
-        xml.push_str(&serialize_block(block, doc, media, revision_ids));
+        xml.push_str(&serialize_block(block, doc, package, media, revision_ids));
     }
     // A cell must end with a paragraph or Word treats the file as corrupt.
     if !has_paragraph {

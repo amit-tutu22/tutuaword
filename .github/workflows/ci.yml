@@ -6,7 +6,8 @@ on:
   pull_request:
 
 jobs:
-  rust:
+  # R3.2 Linux: full Rust suite + libtw_ffi.so
+  linux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,10 +36,11 @@ jobs:
           cargo test -p tw-core --test r1_forward_relayout
       - name: R0.2 event correlation under backpressure gate
         run: cargo test -p tw-core --test r1_event_correlation_backpressure
-      - name: R1.4 async FFI gate
+      - name: R1.4 async FFI gate (Rust)
         run: |
           bash scripts/build-ffi.sh
-          cd app && flutter test test/r14_async_ffi_test.dart test/r02_autosave_isolation_test.dart --concurrency=1
+          bash scripts/verify-ffi-artifact.sh
+          cargo test -p tw-ffi --test r1_async_document_exports -- --test-threads=1
       - name: R2.1 document model vocabulary gate
         run: cargo test -p tw-docx --test r2_document_model_vocabulary
       - name: R2.2 single text storage gate
@@ -52,15 +54,10 @@ jobs:
             echo "BridgeCommand edit shortcuts must not appear in production code"
             exit 1
           fi
-      - name: R2.5 FFI consolidation gate
-        run: |
-          cargo test -p tw-ffi --test r2_5_ffi_consolidation -- --test-threads=1
-          bash scripts/build-ffi.sh
-          cd app && flutter test test/r25_ffi_consolidation_test.dart --concurrency=1
+      - name: R2.5 FFI consolidation gate (Rust)
+        run: cargo test -p tw-ffi --test r2_5_ffi_consolidation -- --test-threads=1
       - name: R2.6 undo transactions gate
         run: cargo test -p tw-edit --test r2_6_undo_transactions
-      - name: P1-7 async document exports gate
-        run: cargo test -p tw-ffi --test r1_async_document_exports -- --test-threads=1
       - name: Stale-page hit test gate
         run: cargo test -p tw-ffi --test r1_stale_page_hit_tests -- --test-threads=1
       - name: Event callback re-entrancy gate
@@ -72,17 +69,90 @@ jobs:
         run: cargo test -p tw-core --release -- i_f02_s1_typing_latency i_r1_typing --nocapture
       - name: DOCX corpus + Tier A numbering/styles gates
         run: cargo test -p tw-docx --test corpus_render --test tier_a_numbering_styles --test numbering_and_revisions
+      - name: R3.3 DOCX fidelity gate
+        run: cargo test -p tw-docx --test r3_docx_fidelity
+      - name: R3.2 Linux libtw_ffi.so gate
+        run: |
+          bash scripts/build-ffi.sh
+          bash scripts/verify-ffi-artifact.sh
 
-  flutter:
+  # R3.2 macOS: workspace build + libtw_ffi.dylib + Flutter tests
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: R3.2 macOS workspace build
+        run: cargo build --workspace --release
+      - name: R3.2 macOS libtw_ffi.dylib gate
+        run: |
+          bash scripts/build-ffi.sh
+          bash scripts/verify-ffi-artifact.sh
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: R3.2 macOS Flutter test
+        working-directory: app
+        run: flutter test --concurrency=1
+
+  # R3.2 Windows: workspace cross-check + tw_ffi.dll
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: R3.2 Windows workspace check
+        run: cargo check --workspace
+      - name: R3.2 Windows tw_ffi.dll gate
+        shell: bash
+        run: |
+          bash scripts/build-ffi.sh
+          bash scripts/verify-ffi-artifact.sh
+
+  # R3.2 WASM: wasm32 compile + inline executor + smoke test (R3.1 exit gate)
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: R3.2 wasm32 compile gate
+        run: |
+          cargo check -p tw-wasm --target wasm32-unknown-unknown
+          cargo check -p tw-wasm --target wasm32-unknown-unknown --features wasm-bindgen
+      - name: R3.1 inline executor gate
+        run: cargo test -p tw-core --test r3_inline_executor
+      - name: R3.1 wasm smoke test
+        run: |
+          cargo install wasm-bindgen-cli --version 0.2.126 --locked
+          bash scripts/wasm-smoke.sh
+
+  flutter-linux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+      - uses: dtolnay/rust-toolchain@stable
+      - name: R1.4 async FFI gate (Flutter)
+        run: |
+          bash scripts/build-ffi.sh
+          bash scripts/verify-ffi-artifact.sh
+          cd app && flutter test test/r14_async_ffi_test.dart test/r02_autosave_isolation_test.dart --concurrency=1
+      - name: R2.5 FFI consolidation gate (Flutter)
+        run: cd app && flutter test test/r25_ffi_consolidation_test.dart --concurrency=1
       - name: R2.4 editor decomposition gate
         run: |
           bash scripts/build-ffi.sh
+          bash scripts/verify-ffi-artifact.sh
           lines=$(wc -l < app/lib/editor/editor_controller.dart)
           test "$lines" -lt 800
           cd app && flutter test test/r24_controller_decomposition_test.dart test/editor_controller_test.dart --concurrency=1

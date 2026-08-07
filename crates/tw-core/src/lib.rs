@@ -1,4 +1,5 @@
 mod bundle;
+mod executor;
 mod import;
 mod layout_cache;
 mod session;
@@ -15,7 +16,10 @@ pub use import::{
 pub use layout_cache::{LayoutCache, SharedLayoutCache, new_shared_layout_cache};
 pub use session::*;
 pub use snapshot::*;
+pub use executor::{EngineExecutor, InlineExecutor};
+#[cfg(not(target_arch = "wasm32"))]
+pub use executor::ThreadedExecutor;
 pub use worker::{
-    BridgeCommand, BridgeEvent, QueuedCommand, WorkerHandle, BACKGROUND_REQUEST_ID,
-    COMMAND_QUEUE_CAPACITY, EVENT_CHANNEL_CAPACITY, STARTUP_REQUEST_ID,
+    BridgeCommand, BridgeEvent, QueuedCommand, BACKGROUND_REQUEST_ID, COMMAND_QUEUE_CAPACITY,
+    EVENT_CHANNEL_CAPACITY, STARTUP_REQUEST_ID,
 };

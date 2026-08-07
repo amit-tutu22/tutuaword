@@ -467,6 +467,9 @@ class NativeEngine {
     if (Platform.isLinux) {
       return DynamicLibrary.open('libtw_ffi.so');
     }
+    if (Platform.isAndroid) {
+      return DynamicLibrary.open('libtw_ffi.so');
+    }
     if (Platform.isWindows) {
       return DynamicLibrary.open('tw_ffi.dll');
     }

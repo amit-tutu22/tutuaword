@@ -1,6 +1,6 @@
 //! R2.6 exit gate: undo transactions, coalescing, and total inverse.
 
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 use tw_edit::{
     apply, Command, DocPosition, DocRange, EditError, EditSession, TransactionGuard,
 };

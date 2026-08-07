@@ -1,6 +1,6 @@
 use crate::undo::{EditSessionInner, TransactionGuard};
 use crate::{Command, DocRange, EditError, EditResult};
-use std::time::Duration;
+use web_time::{Duration, Instant};
 use tw_model::Document;
 
 pub struct EditSession {
@@ -28,7 +28,7 @@ impl EditSession {
 
     /// Test hook: override the coalescing clock (defaults to `Instant::now()`).
     #[doc(hidden)]
-    pub fn set_test_clock(&mut self, now: std::time::Instant) {
+    pub fn set_test_clock(&mut self, now: Instant) {
         self.inner.set_test_clock(now);
     }
 

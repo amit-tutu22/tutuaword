@@ -23,7 +23,7 @@ copy_lib() {
   echo "Built $lib (copied to app/macos/Runner/Frameworks/ and app/)"
 }
 
-for name in libtw_ffi.dylib libtw_ffi.so; do
+for name in libtw_ffi.dylib libtw_ffi.so tw_ffi.dll; do
   LIB="$TARGET_DIR/release/$name"
   if [[ -f "$LIB" ]]; then
     copy_lib "$LIB"

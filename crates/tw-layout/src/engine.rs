@@ -8,7 +8,7 @@ use tw_model::{
     Block, BreakType, Document, NodeId, Paragraph, Run, RunContent, SectionFormat,
     format_list_marker,
 };
-use tw_shape::{GlyphAtlas, TextShaper};
+use tw_shape::{FontFaceSpec, FontId, FontRegistrationError, GlyphAtlas, TextShaper};
 
 /// Maximum pages to synchronously reflow during incremental layout (R1.1).
 const MAX_INCREMENTAL_REFLOW_PAGES: usize = 3;
@@ -103,9 +103,24 @@ impl Default for LayoutEngine {
 }
 
 impl LayoutEngine {
+    /// A layout engine over the operating system's installed fonts.
     pub fn new() -> Self {
+        Self::with_shaper(TextShaper::new())
+    }
+
+    /// A layout engine whose only fonts are the ones the host registers from
+    /// bytes with [`LayoutEngine::register_face`]. No system font scan, no
+    /// filesystem — the web path.
+    ///
+    /// A document laid out before any face is registered paginates normally but
+    /// produces lines with no glyphs; it does not panic.
+    pub fn with_injected_fonts() -> Self {
+        Self::with_shaper(TextShaper::with_injected_fonts())
+    }
+
+    pub fn with_shaper(shaper: TextShaper) -> Self {
         Self {
-            shaper: TextShaper::new(),
+            shaper,
             atlas: GlyphAtlas::default(),
             page_cache: HashMap::new(),
             line_maps: HashMap::new(),
@@ -121,6 +136,40 @@ impl LayoutEngine {
             last_relayout_pages: 0,
             last_relayout_start_page: 0,
         }
+    }
+
+    /// Registers a face from host-supplied bytes. See
+    /// [`tw_shape::FontDatabase::register_face`].
+    ///
+    /// Cached layout is discarded: a newly resolvable family changes metrics on
+    /// pages that were laid out without it.
+    pub fn register_face(
+        &mut self,
+        spec: &FontFaceSpec,
+        data: impl Into<Vec<u8>>,
+    ) -> Result<FontId, FontRegistrationError> {
+        let font = self.shaper.register_face(spec, data)?;
+        self.invalidate_all();
+        Ok(font)
+    }
+
+    /// Registers every face in `data` under the names in the font file. See
+    /// [`tw_shape::FontDatabase::register_font_data`].
+    pub fn register_font_data(
+        &mut self,
+        data: impl Into<Vec<u8>>,
+    ) -> Result<Vec<FontId>, FontRegistrationError> {
+        let fonts = self.shaper.register_font_data(data)?;
+        self.invalidate_all();
+        Ok(fonts)
+    }
+
+    pub fn shaper(&self) -> &TextShaper {
+        &self.shaper
+    }
+
+    pub fn shaper_mut(&mut self) -> &mut TextShaper {
+        &mut self.shaper
     }
 
     pub fn invalidate_all(&mut self) {

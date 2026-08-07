@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 use tw_model::{CharFormat, NodeId, NumberingRef, ParaFormat, Revision, StyleId};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
