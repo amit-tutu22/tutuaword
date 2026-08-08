@@ -167,17 +167,17 @@ fn run_char_offset_in_paragraph(
     run_id: NodeId,
     offset_in_run: usize,
 ) -> Result<usize, EditError> {
-    let (si, bi, ri) = doc
+    let loc = doc
         .find_run_location(run_id)
         .ok_or(EditError::RunNotFound(run_id))?;
     let para = doc
-        .paragraph_at(si, bi)
+        .paragraph_at_loc(loc)
         .ok_or(EditError::RunNotFound(run_id))?;
     let mut total = 0usize;
     for (i, run) in para.runs.iter().enumerate() {
-        if i < ri {
+        if i < loc.run_index {
             total += run_char_len(run);
-        } else if i == ri {
+        } else if i == loc.run_index {
             total += offset_in_run;
             break;
         }
@@ -190,11 +190,11 @@ fn char_position_in_paragraph(
     anchor_run: NodeId,
     char_offset: usize,
 ) -> Result<(NodeId, usize), EditError> {
-    let (si, bi, _) = doc
+    let loc = doc
         .find_run_location(anchor_run)
         .ok_or(EditError::RunNotFound(anchor_run))?;
     let para = doc
-        .paragraph_at(si, bi)
+        .paragraph_at_loc(loc)
         .ok_or(EditError::RunNotFound(anchor_run))?;
     let mut remaining = char_offset;
     for run in &para.runs {

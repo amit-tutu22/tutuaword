@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:tutuaword/bridge/command_codec.dart';
 import 'package:tutuaword/bridge/document_properties.dart';
 import 'package:tutuaword/bridge/engine_types.dart';
@@ -233,6 +234,22 @@ class WasmEngine {
       return _invoke('caret_format_json', [runId]) as String?;
     } catch (_) {
       return null;
+    }
+  }
+
+  String? fetchSectionFormat({String? caretRunId}) {
+    try {
+      return _invoke('get_section_format_json', [caretRunId ?? '']) as String?;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String? fetchDocumentOutline() {
+    try {
+      return _invoke('document_outline_json', []) as String?;
+    } catch (_) {
+      return '[]';
     }
   }
 
@@ -521,6 +538,86 @@ class WasmEngine {
             [caretRunId ?? ''],
           ));
 
+  Future<bool> insertSectionBreakAtAsync({String? caretRunId}) =>
+      enqueueEdit(() => _enqueueNamed(
+            'insert_section_break',
+            [caretRunId ?? ''],
+          ));
+
+  Future<bool> ensureHeaderFooterAsync({
+    String? caretRunId,
+    required bool isHeader,
+    int pageIndex = 0,
+  }) =>
+      enqueueEdit(() => _enqueueNamed(
+            'ensure_header_footer',
+            [caretRunId ?? '', isHeader, pageIndex],
+          ));
+
+  String? fetchHeaderFooterSeedRun({
+    String? caretRunId,
+    required bool isHeader,
+    int pageIndex = 0,
+  }) {
+    try {
+      return _invoke('header_footer_seed_run', [
+        caretRunId ?? '',
+        isHeader,
+        pageIndex,
+      ]) as String?;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  bool fetchEvenAndOddHeadersEnabled() {
+    try {
+      return _invoke('even_and_odd_headers_enabled', const []) as bool? ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> setEvenAndOddHeadersAsync({required bool enabled}) =>
+      enqueueEdit(() => _enqueueNamed('set_even_and_odd_headers', [enabled]));
+
+  bool fetchHeaderFooterLinked({
+    String? caretRunId,
+    required bool isHeader,
+    int pageIndex = 0,
+  }) {
+    try {
+      return _invoke('header_footer_linked', [
+        caretRunId ?? '',
+        isHeader,
+        pageIndex,
+      ]) as bool? ??
+          false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> setHeaderFooterLinkAsync({
+    String? caretRunId,
+    required bool isHeader,
+    required bool linked,
+    int pageIndex = 0,
+  }) =>
+      enqueueEdit(() => _enqueueNamed('set_header_footer_link', [
+            caretRunId ?? '',
+            isHeader,
+            pageIndex,
+            linked,
+          ]));
+
+  Future<bool> insertFieldAsync({
+    required String runId,
+    required int offset,
+    required String fieldType,
+  }) =>
+      enqueueEdit(() => _enqueueNamed('insert_field', [runId, offset, fieldType]));
+
   bool setCurrentPageIndex(int page) =>
       _enqueueNamed('set_current_page', [page]) == 0;
 
@@ -530,17 +627,175 @@ class WasmEngine {
   Future<bool> applyNormalStyleAtAsync({String? caretRunId}) =>
       enqueueEdit(() => _enqueueNamed('apply_normal_style', [caretRunId ?? '']));
 
+  Future<bool> applyParagraphStyleAsync({
+    String? caretRunId,
+    required String styleName,
+  }) =>
+      enqueueEdit(() => _enqueueNamed('apply_paragraph_style', [caretRunId ?? '', styleName]));
+
+  Future<bool> applyDocumentThemeAsync({required String themeName}) =>
+      enqueueEdit(() => _enqueueNamed('apply_document_theme', [themeName]));
+
+  Future<bool> applySectionFormatJsonAsync({
+    required String formatJson,
+    String? caretRunId,
+  }) =>
+      enqueueEdit(
+        () => _enqueueNamed('apply_section_format', [formatJson, caretRunId ?? '']),
+      );
+
   Future<bool> applyBulletListStyleAsync({String? caretRunId}) =>
       enqueueEdit(() => _enqueueNamed('apply_bullet_list', [caretRunId ?? '']));
 
   Future<bool> applyNumberedListStyleAsync({String? caretRunId}) =>
       enqueueEdit(() => _enqueueNamed('apply_numbered_list', [caretRunId ?? '']));
 
+  Future<bool> adjustListLevelAsync({String? caretRunId, required int delta}) =>
+      enqueueEdit(() => _enqueueNamed('adjust_list_level', [caretRunId ?? '', delta]));
+
+  Future<bool> restartNumberingAsync({String? caretRunId}) =>
+      enqueueEdit(() => _enqueueNamed('restart_numbering', [caretRunId ?? '']));
+
+  Future<bool> continueNumberingAsync({String? caretRunId}) =>
+      enqueueEdit(() => _enqueueNamed('continue_numbering', [caretRunId ?? '']));
+
   Future<bool> insertTableBlockAsync(int rows, int cols) =>
       enqueueEdit(() => _enqueueNamed('insert_table', [rows, cols]));
 
+  Future<bool> deleteTableRowAsync({String? caretRunId}) =>
+      enqueueEdit(() => _enqueueNamed('delete_table_row', [caretRunId ?? '']));
+
+  Future<bool> deleteTableColumnAsync({String? caretRunId}) =>
+      enqueueEdit(() => _enqueueNamed('delete_table_column', [caretRunId ?? '']));
+
+  Future<bool> mergeTableCellsAsync({String? caretRunId}) =>
+      enqueueEdit(() => _enqueueNamed('merge_table_cells', [caretRunId ?? '']));
+
+  Future<bool> splitTableCellAsync({String? caretRunId}) =>
+      enqueueEdit(() => _enqueueNamed('split_table_cell', [caretRunId ?? '']));
+
+  Future<bool> setTableBorderAsync({
+    String? caretRunId,
+    required double width,
+    required Color color,
+  }) =>
+      enqueueEdit(() => _enqueueNamed('set_table_border', [
+            caretRunId ?? '',
+            width,
+            color.red,
+            color.green,
+            color.blue,
+            (color.a * 255).round(),
+          ]));
+
+  Future<bool> setTableCellShadingAsync({
+    String? caretRunId,
+    Color? shading,
+  }) =>
+      enqueueEdit(() => _enqueueNamed('set_table_cell_shading', [
+            caretRunId ?? '',
+            shading == null ? -1 : shading.red,
+            shading?.green ?? 0,
+            shading?.blue ?? 0,
+            shading == null ? 0 : (shading.a * 255).round(),
+          ]));
+
+  Future<bool> resizeTableColumnAsync({
+    String? caretRunId,
+    required double width,
+  }) =>
+      enqueueEdit(() => _enqueueNamed('resize_table_column', [
+            caretRunId ?? '',
+            width,
+          ]));
+
+  Future<bool> autofitTableAsync({String? caretRunId}) =>
+      enqueueEdit(() => _enqueueNamed('autofit_table', [caretRunId ?? '']));
+
+  Future<bool> sortTableRowsAsync({String? caretRunId, required bool ascending}) =>
+      enqueueEdit(() => _enqueueNamed('sort_table_rows', [caretRunId ?? '', ascending]));
+
+  Future<bool> insertNestedTableAsync({
+    String? caretRunId,
+    required int rows,
+    required int cols,
+  }) =>
+      enqueueEdit(() => _enqueueNamed('insert_nested_table', [caretRunId ?? '', rows, cols]));
+
+  Future<bool> insertTableSumFieldAsync({String? caretRunId}) =>
+      enqueueEdit(() => _enqueueNamed('insert_table_sum_field', [caretRunId ?? '']));
+
   Future<bool> insertImageBlockAsync(double width, double height) =>
       enqueueEdit(() => _enqueueNamed('insert_image', [width, height]));
+
+  Future<bool> insertShapeBlockAsync(int shapeType) =>
+      enqueueEdit(() => _enqueueNamed('insert_shape', [shapeType]));
+
+  Future<bool> insertTextBoxAsync() =>
+      enqueueEdit(() => _enqueueNamed('insert_text_box', []));
+
+  Future<bool> insertWordArtAsync(String text) =>
+      enqueueEdit(() => _enqueueNamed('insert_word_art', [text]));
+
+  Future<bool> insertDiagramAsync() =>
+      enqueueEdit(() => _enqueueNamed('insert_diagram', []));
+
+  Future<bool> insertChartAsync() =>
+      enqueueEdit(() => _enqueueNamed('insert_chart', []));
+
+  Future<bool> insertImageBytesAsync(Uint8List bytes, String mimeType) =>
+      enqueueEdit(() => _enqueueNamed('insert_image_bytes', [bytes, mimeType]));
+
+  Future<bool> setImageSizeAsync(String imageId, double width, double height) =>
+      enqueueEdit(() => _enqueueNamed('set_image_size', [imageId, width, height]));
+
+  Future<bool> replaceImageBytesAsync(
+    String imageId,
+    Uint8List bytes,
+    String mimeType,
+  ) =>
+      enqueueEdit(() => _enqueueNamed('replace_image_bytes', [imageId, bytes, mimeType]));
+
+  Future<bool> setImageWrapAsync(String imageId, int wrap) =>
+      enqueueEdit(() => _enqueueNamed('set_image_wrap', [imageId, wrap]));
+
+  Future<bool> setImageAnchorAsync(
+    String imageId,
+    double x,
+    double y, {
+    int originX = 0,
+    int originY = 0,
+  }) =>
+      enqueueEdit(
+        () => _enqueueNamed('set_image_anchor', [imageId, x, y, originX, originY]),
+      );
+
+  Future<bool> setImageTransformAsync(
+    String imageId, {
+    double rotationDeg = 0,
+    double cropLeft = 0,
+    double cropTop = 0,
+    double cropRight = 0,
+    double cropBottom = 0,
+    double opacity = 1,
+  }) =>
+      enqueueEdit(
+        () => _enqueueNamed('set_image_transform', [
+          imageId,
+          rotationDeg,
+          cropLeft,
+          cropTop,
+          cropRight,
+          cropBottom,
+          opacity,
+        ]),
+      );
+
+  Future<bool> insertImageCaptionAsync(String imageId) =>
+      enqueueEdit(() => _enqueueNamed('insert_image_caption', [imageId]));
+
+  Future<bool> compressImageAsync(String imageId, int quality) =>
+      enqueueEdit(() => _enqueueNamed('compress_image', [imageId, quality]));
 
   Future<bool> undoEditAsync() => enqueueEdit(() => _enqueueNamed('undo', []));
 

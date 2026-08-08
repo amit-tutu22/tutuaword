@@ -2,6 +2,34 @@ import 'package:flutter/material.dart';
 import 'package:tutuaword/ui/ribbon_widgets.dart';
 import 'package:tutuaword/ui/word_theme.dart';
 
+/// Selection from the Word color palette — optional theme slot for theme-linked colors.
+class WordColorSelection {
+  const WordColorSelection(this.color, {this.themeSlot, this.themeVariant});
+
+  final Color color;
+  final String? themeSlot;
+  final int? themeVariant;
+
+  bool get isThemeColor => themeSlot != null && themeVariant != null;
+}
+
+/// Maps theme-color grid coordinates to engine theme slots (columns 0,1,4,5).
+WordColorSelection? themeColorSelectionForPicker({
+  required int column,
+  required int row,
+  required Color color,
+}) {
+  final slot = switch (column) {
+    0 => 'Background1',
+    1 => 'Text1',
+    4 => 'Accent1',
+    5 => 'Accent2',
+    _ => null,
+  };
+  if (slot == null) return null;
+  return WordColorSelection(color, themeSlot: slot, themeVariant: row.clamp(0, 5));
+}
+
 /// Office default theme accent colors (10 columns).
 const kWordThemeBaseColors = <Color>[
   Color(0xFFFFFFFF),
@@ -81,7 +109,7 @@ class WordColorPalettePanel extends StatelessWidget {
     this.clearLabel = 'No Color',
   });
 
-  final ValueChanged<Color> onColorSelected;
+  final ValueChanged<WordColorSelection> onColorSelected;
   final VoidCallback? onAutomatic;
   final VoidCallback? onClear;
   final Color automaticColor;
@@ -131,8 +159,8 @@ class WordColorPalettePanel extends StatelessWidget {
             ],
             _sectionLabel('Theme Colors'),
             const SizedBox(height: 4),
-            for (final row in themeGrid) ...[
-              _colorRow(row),
+            for (var rowIndex = 0; rowIndex < themeGrid.length; rowIndex++) ...[
+              _themeColorRow(themeGrid[rowIndex], rowIndex),
               const SizedBox(height: _cellGap),
             ],
             const SizedBox(height: 4),
@@ -140,7 +168,9 @@ class WordColorPalettePanel extends StatelessWidget {
             const SizedBox(height: 4),
             _sectionLabel('Standard Colors'),
             const SizedBox(height: 4),
-            _colorRow(kWordStandardColors),
+            _colorRow(kWordStandardColors, onSelected: (color) {
+              onColorSelected(WordColorSelection(color));
+            }),
           ],
         ),
       ),
@@ -161,7 +191,7 @@ class WordColorPalettePanel extends StatelessWidget {
     return Container(height: 1, color: WordTheme.groupDivider);
   }
 
-  Widget _colorRow(List<Color> colors) {
+  Widget _colorRow(List<Color> colors, {required ValueChanged<Color> onSelected}) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -170,7 +200,32 @@ class WordColorPalettePanel extends StatelessWidget {
           _ColorSwatch(
             color: colors[i],
             size: _cellSize,
-            onSelected: () => onColorSelected(colors[i]),
+            onSelected: () => onSelected(colors[i]),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _themeColorRow(List<Color> colors, int rowIndex) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var column = 0; column < colors.length; column++) ...[
+          if (column > 0) const SizedBox(width: _cellGap),
+          _ColorSwatch(
+            color: colors[column],
+            size: _cellSize,
+            onSelected: () {
+              final themed = themeColorSelectionForPicker(
+                column: column,
+                row: rowIndex,
+                color: colors[column],
+              );
+              onColorSelected(
+                themed ?? WordColorSelection(colors[column]),
+              );
+            },
           ),
         ],
       ],
@@ -312,7 +367,7 @@ class RibbonColorButton extends StatefulWidget {
   final IconData icon;
   final String tooltip;
   final Color barColor;
-  final ValueChanged<Color> onColorSelected;
+  final ValueChanged<WordColorSelection> onColorSelected;
   final VoidCallback? onAutomatic;
   final VoidCallback? onClear;
   final Color automaticColor;
@@ -344,9 +399,9 @@ class _RibbonColorButtonState extends State<RibbonColorButton> {
               top: panelBottom,
               child: WordColorPalettePanel(
                 automaticColor: widget.automaticColor,
-                onColorSelected: (color) {
+                onColorSelected: (selection) {
                   Navigator.of(dialogContext).pop();
-                  widget.onColorSelected(color);
+                  widget.onColorSelected(selection);
                 },
                 onAutomatic: widget.onAutomatic == null
                     ? null

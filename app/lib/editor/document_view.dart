@@ -5,7 +5,8 @@ import 'package:tutuaword/editor/display_list.dart';
 import 'package:tutuaword/editor/document_painter.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
 import 'package:tutuaword/editor/glyph_editor_surface.dart';
-import 'package:tutuaword/editor/page_navigator.dart';
+import 'package:tutuaword/editor/navigation_pane.dart';
+import 'package:tutuaword/editor/style_inspector_pane.dart';
 import 'package:tutuaword/editor/rulers.dart';
 import 'package:tutuaword/ui/word_theme.dart';
 
@@ -78,6 +79,12 @@ class _DocumentViewState extends State<DocumentView> {
       _buildingAtlas = false;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _ensureAtlasTexture(widget.controller.displayVersion);
+      });
+    }
+    final scrollPage = widget.controller.view.takeScrollRequest();
+    if (scrollPage != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _scrollToPage(scrollPage);
       });
     }
     if (mounted) setState(() {});
@@ -203,10 +210,11 @@ class _DocumentViewState extends State<DocumentView> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (controller.showNavigationPane)
-          PageNavigator(
+          NavigationPane(
             controller: controller,
             currentPage: controller.currentPage,
             onPageSelected: _scrollToPage,
+            onOutlineSelected: controller.jumpToOutlineEntry,
           ),
         Expanded(
           child: Container(
@@ -219,6 +227,8 @@ class _DocumentViewState extends State<DocumentView> {
                 : _buildCanvas(context, controller),
           ),
         ),
+        if (controller.showStyleInspector)
+          StyleInspectorPane(controller: controller),
       ],
     );
   }

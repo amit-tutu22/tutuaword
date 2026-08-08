@@ -15,14 +15,12 @@ class SelectionController extends ChangeNotifier {
   SelectionController({
     required EngineHost host,
     required this.onSelectionChanged,
-    this.pageMargin = 72.0,
     this.lineHeightFactor = 1.4,
     this.avgCharWidthFactor = 0.52,
   }) : _host = host;
 
   final EngineHost _host;
   final SelectionChangedCallback onSelectionChanged;
-  final double pageMargin;
   final double lineHeightFactor;
   final double avgCharWidthFactor;
 
@@ -47,6 +45,11 @@ class SelectionController extends ChangeNotifier {
   double get _fontSize => 11.0;
 
   DocumentEngine? get _engine => _host.engine;
+
+  double get _marginLeft => _host.marginLeft;
+  double get _marginTop => _host.marginTop;
+  double get _marginRight => _host.marginRight;
+  double get _marginBottom => _host.marginBottom;
 
   void reset() {
     _caretRunId = null;
@@ -95,7 +98,7 @@ class SelectionController extends ChangeNotifier {
   void _ensureGlyphCaret() {
     if (_engine == null || _caretRunId != null) return;
     _engine!.setCurrentPageIndex(0);
-    final result = _engine!.hitTestPage(0, pageMargin, pageMargin + _fontSize);
+    final result = _engine!.hitTestPage(0, _marginLeft, _marginTop + _fontSize);
     if (result == null) return;
     _caretRunId = result.runId;
     _caretOffset = result.charOffset;
@@ -104,7 +107,7 @@ class SelectionController extends ChangeNotifier {
       focus: DocPosition(runId: result.runId, offset: result.charOffset),
       page: 0,
     );
-    _caretGeometry = _engine!.caretGeometryAt(0, pageMargin, pageMargin + _fontSize);
+    _caretGeometry = _engine!.caretGeometryAt(0, _marginLeft, _marginTop + _fontSize);
   }
 
   (String, int, String, int)? formatRangeTuple() {
@@ -169,11 +172,11 @@ class SelectionController extends ChangeNotifier {
       if (_engine!.isPageStale(p)) continue;
       tail ??= _engine!.hitTestPage(
         p,
-        _host.pageWidth - pageMargin,
-        _host.pageHeight - pageMargin,
+        _host.pageWidth - _marginRight,
+        _host.pageHeight - _marginBottom,
       );
     }
-    tail ??= _engine!.hitTestPage(0, pageMargin, pageMargin + _fontSize);
+    tail ??= _engine!.hitTestPage(0, _marginLeft, _marginTop + _fontSize);
 
     if (tail != null) {
       _caretRunId = tail.runId;
@@ -190,8 +193,8 @@ class SelectionController extends ChangeNotifier {
         : null;
     _caretGeometry = geom ??
         CaretGeometry(
-          x: x.clamp(pageMargin, _host.pageWidth - pageMargin),
-          y: (y - _fontSize).clamp(pageMargin, _host.pageHeight - pageMargin),
+          x: x.clamp(_marginLeft, _host.pageWidth - _marginRight),
+          y: (y - _fontSize).clamp(_marginTop, _host.pageHeight - _marginBottom),
           height: _fontSize * lineHeightFactor,
         );
     _selectionRects = const [];
@@ -250,7 +253,7 @@ class SelectionController extends ChangeNotifier {
     }
     if (before == null) return;
     final nudge = delta > 0 ? 2.0 : -2.0;
-    final probeX = (before.x + nudge).clamp(pageMargin, _host.pageWidth - pageMargin);
+    final probeX = (before.x + nudge).clamp(_marginLeft, _host.pageWidth - _marginRight);
     if (extendSelection) {
       _moveGlyphCaretToHit(caretPage, probeX, before.y, extendSelection: true);
       return;
@@ -398,7 +401,7 @@ class SelectionController extends ChangeNotifier {
     if (_engine == null) return;
     ensureGlyphCaret();
     _host.refreshFromEngine();
-    final start = _engine!.hitTestPage(0, pageMargin, pageMargin + _fontSize);
+    final start = _engine!.hitTestPage(0, _marginLeft, _marginTop + _fontSize);
     final end = _engine!.fetchDocumentTailHit(0);
     if (start == null || end == null) return;
 
@@ -416,8 +419,8 @@ class SelectionController extends ChangeNotifier {
     );
     _caretGeometry = _engine!.caretAtPosition(0, end.runId, focusOffset) ??
         CaretGeometry(
-          x: _host.pageWidth - pageMargin,
-          y: _host.pageHeight - pageMargin,
+          x: _host.pageWidth - _marginRight,
+          y: _host.pageHeight - _marginBottom,
           height: _fontSize * lineHeightFactor,
         );
     _refreshSelectionRects();

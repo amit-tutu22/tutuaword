@@ -9,12 +9,25 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use tw_edit::{
-    bullet_list_command_for_caret, heading1_command_for_caret, insert_image_command,
-    insert_page_break_command_for, insert_table_command, normal_style_command_for_caret,
-    numbered_list_command_for_caret, Command, EditSession,
+    adjust_list_level_command_for_caret, autofit_table_command_for_caret,
+    bullet_list_command_for_caret,
+    continue_numbering_command_for_caret, delete_table_column_command_for_caret,
+    delete_table_row_command_for_caret, ensure_header_footer_command_for,
+    heading1_command_for_caret, insert_field_command_for, insert_image_bytes_command_for_caret,
+    insert_image_command, insert_shape_command, insert_text_box_command,
+    insert_word_art_command, insert_diagram_command, insert_chart_command, replace_image_bytes_command,
+    insert_nested_table_command_for_caret, insert_page_break_command_for,
+    insert_section_break_command_for, insert_table_command,
+    insert_table_sum_field_command_for_caret, merge_table_cells_right_command_for_caret,
+    numbered_list_command_for_caret, paragraph_style_command_for_caret,
+    resize_table_column_command_for_caret, restart_numbering_command_for_caret,
+    section_index_for_caret, set_header_footer_link_command_for,
+    set_table_border_command_for_caret, set_table_cell_shading_command_for_caret,
+    sort_table_rows_command_for_caret, split_table_cell_command_for_caret, Command,
+    EditSession,
 };
 use tw_layout::LayoutEngine;
-use tw_model::{Document, NodeId};
+use tw_model::{BorderSpec, Color, Document, FieldType, HeaderFooterType, NodeId};
 use tw_native::NativeFormat;
 use tw_render::DisplayListBuilder;
 
@@ -432,7 +445,56 @@ impl Session {
     }
 
     pub fn apply_normal_style_at(&self, caret_run_id: Option<tw_model::NodeId>) -> Option<u64> {
-        self.apply_from_document(|doc| normal_style_command_for_caret(doc, caret_run_id))
+        self.apply_paragraph_style_at(caret_run_id, "Normal")
+    }
+
+    pub fn apply_paragraph_style_at(
+        &self,
+        caret_run_id: Option<tw_model::NodeId>,
+        style_name: &str,
+    ) -> Option<u64> {
+        let name = style_name.to_string();
+        self.apply_from_document(|doc| {
+            paragraph_style_command_for_caret(doc, caret_run_id, &name)
+        })
+    }
+
+    pub fn apply_document_theme(&self, theme_name: &str) -> Option<u64> {
+        let name = theme_name.to_string();
+        self.apply(Command::SetDocumentTheme { theme_name: name })
+    }
+
+    pub fn apply_section_format(
+        &self,
+        section_index: usize,
+        format: tw_model::SectionFormat,
+    ) -> Option<u64> {
+        self.apply(Command::SetSectionFormat {
+            section_index,
+            format,
+        })
+    }
+
+    pub fn apply_section_format_at(
+        &self,
+        caret_run_id: Option<NodeId>,
+        format: tw_model::SectionFormat,
+    ) -> Option<u64> {
+        let cache = self.layout_cache.read();
+        let section_index = section_index_for_caret(cache.document(), caret_run_id);
+        drop(cache);
+        self.apply_section_format(section_index, format)
+    }
+
+    pub fn section_format_json(&self) -> Option<String> {
+        self.section_format_json_at(None)
+    }
+
+    pub fn section_format_json_at(&self, caret_run_id: Option<NodeId>) -> Option<String> {
+        let cache = self.layout_cache.read();
+        let section_index = section_index_for_caret(cache.document(), caret_run_id);
+        let format = cache.document().sections.get(section_index)?.format.clone();
+        serde_json::to_string(&format).ok()
     }
 
     pub fn apply_bullet_list(&self) -> Option<u64> {
@@ -451,12 +513,205 @@ impl Session {
         self.apply_from_document(|doc| numbered_list_command_for_caret(doc, caret_run_id))
     }
 
+    /// Promote (+1) or demote (−1) list level at the caret paragraph.
+    ///
+    /// Returns `None` when the caret is not in a list. Returns `Some(None)` when
+    /// already at the min/max level (no edit enqueued).
+    pub fn adjust_list_level_at(
+        &self,
+        caret_run_id: Option<tw_model::NodeId>,
+        delta: i32,
+    ) -> Option<Option<u64>> {
+        let cache = self.layout_cache.read();
+        let doc = cache.document();
+        let para_id = tw_edit::paragraph_id_from_caret(doc, caret_run_id)?;
+        let (si, bi) = doc.find_paragraph_location(para_id)?;
+        if doc.paragraph_at(si, bi)?.format.numbering.is_none() {
+            return None;
+        }
+        drop(cache);
+        match self.apply_from_document(|doc| {
+            adjust_list_level_command_for_caret(doc, caret_run_id, delta)
+        }) {
+            Some(request_id) => Some(Some(request_id)),
+            None => Some(None),
+        }
+    }
+
+    pub fn restart_numbering_at(&self, caret_run_id: Option<tw_model::NodeId>) -> Option<u64> {
+        self.apply_from_document(|doc| restart_numbering_command_for_caret(doc, caret_run_id))
+    }
+
+    pub fn continue_numbering_at(&self, caret_run_id: Option<tw_model::NodeId>) -> Option<u64> {
+        self.apply_from_document(|doc| continue_numbering_command_for_caret(doc, caret_run_id))
+    }
+
     pub fn insert_table(&self, rows: u32, cols: u32) -> Option<u64> {
         self.apply_from_document(|doc| insert_table_command(doc, rows, cols))
     }
 
+    pub fn delete_table_row_at(&self, caret_run_id: Option<NodeId>) -> Option<u64> {
+        self.apply_from_document(|doc| delete_table_row_command_for_caret(doc, caret_run_id))
+    }
+
+    pub fn delete_table_column_at(&self, caret_run_id: Option<NodeId>) -> Option<u64> {
+        self.apply_from_document(|doc| delete_table_column_command_for_caret(doc, caret_run_id))
+    }
+
+    pub fn merge_table_cells_at(&self, caret_run_id: Option<NodeId>) -> Option<u64> {
+        self.apply_from_document(|doc| merge_table_cells_right_command_for_caret(doc, caret_run_id))
+    }
+
+    pub fn split_table_cell_at(&self, caret_run_id: Option<NodeId>) -> Option<u64> {
+        self.apply_from_document(|doc| split_table_cell_command_for_caret(doc, caret_run_id))
+    }
+
+    pub fn set_table_border_at(
+        &self,
+        caret_run_id: Option<NodeId>,
+        border: Option<BorderSpec>,
+    ) -> Option<u64> {
+        self.apply_from_document(|doc| {
+            set_table_border_command_for_caret(doc, caret_run_id, border)
+        })
+    }
+
+    pub fn set_table_cell_shading_at(
+        &self,
+        caret_run_id: Option<NodeId>,
+        background: Option<Color>,
+    ) -> Option<u64> {
+        self.apply_from_document(|doc| {
+            set_table_cell_shading_command_for_caret(doc, caret_run_id, background)
+        })
+    }
+
+    pub fn resize_table_column_at(
+        &self,
+        caret_run_id: Option<NodeId>,
+        width: f32,
+    ) -> Option<u64> {
+        self.apply_from_document(|doc| {
+            resize_table_column_command_for_caret(doc, caret_run_id, width)
+        })
+    }
+
+    pub fn autofit_table_at(&self, caret_run_id: Option<NodeId>) -> Option<u64> {
+        self.apply_from_document(|doc| autofit_table_command_for_caret(doc, caret_run_id))
+    }
+
+    pub fn sort_table_rows_at(
+        &self,
+        caret_run_id: Option<NodeId>,
+        ascending: bool,
+    ) -> Option<u64> {
+        self.apply_from_document(|doc| {
+            sort_table_rows_command_for_caret(doc, caret_run_id, ascending)
+        })
+    }
+
+    pub fn insert_nested_table_at(
+        &self,
+        caret_run_id: Option<NodeId>,
+        rows: u32,
+        cols: u32,
+    ) -> Option<u64> {
+        self.apply_from_document(|doc| {
+            insert_nested_table_command_for_caret(doc, caret_run_id, rows, cols)
+        })
+    }
+
+    pub fn insert_table_sum_field_at(&self, caret_run_id: Option<NodeId>) -> Option<u64> {
+        self.apply_from_document(|doc| {
+            insert_table_sum_field_command_for_caret(doc, caret_run_id)
+        })
+    }
+
     pub fn insert_image(&self, width: f32, height: f32) -> Option<u64> {
         self.apply_from_document(|doc| insert_image_command(doc, width, height))
+    }
+
+    pub fn insert_shape(&self, shape_type: tw_model::ShapeKind) -> Option<u64> {
+        self.apply_from_document(|doc| insert_shape_command(doc, shape_type))
+    }
+
+    pub fn insert_text_box(&self) -> Option<u64> {
+        self.apply_from_document(insert_text_box_command)
+    }
+
+    pub fn insert_word_art(&self, text: String) -> Option<u64> {
+        self.apply_from_document(|doc| insert_word_art_command(doc, text))
+    }
+
+    pub fn insert_diagram(&self) -> Option<u64> {
+        self.apply_from_document(insert_diagram_command)
+    }
+
+    pub fn insert_chart(&self) -> Option<u64> {
+        self.apply_from_document(insert_chart_command)
+    }
+
+    pub fn insert_image_bytes(&self, bytes: Vec<u8>, mime_type: String) -> Option<u64> {
+        self.insert_image_bytes_at(bytes, mime_type, None)
+    }
+
+    pub fn insert_image_bytes_at(
+        &self,
+        bytes: Vec<u8>,
+        mime_type: String,
+        caret_run_id: Option<tw_model::NodeId>,
+    ) -> Option<u64> {
+        self.apply_from_document(|doc| {
+            insert_image_bytes_command_for_caret(doc, caret_run_id, bytes, mime_type)
+        })
+    }
+
+    pub fn set_image_size(&self, image_id: tw_model::NodeId, width: f32, height: f32) -> Option<u64> {
+        self.apply(Command::SetImageSize {
+            image_id,
+            width,
+            height,
+        })
+    }
+
+    pub fn replace_image_bytes(
+        &self,
+        image_id: tw_model::NodeId,
+        bytes: Vec<u8>,
+        mime_type: String,
+    ) -> Option<u64> {
+        self.apply(replace_image_bytes_command(image_id, bytes, mime_type))
+    }
+
+    pub fn set_image_wrap(&self, image_id: tw_model::NodeId, wrap: tw_model::TextWrap) -> Option<u64> {
+        self.apply(Command::SetImageWrap { image_id, wrap })
+    }
+
+    pub fn set_image_anchor(
+        &self,
+        image_id: tw_model::NodeId,
+        anchor: tw_model::ImageAnchor,
+    ) -> Option<u64> {
+        self.apply(Command::SetImageAnchor { image_id, anchor })
+    }
+
+    pub fn set_image_transform(
+        &self,
+        image_id: tw_model::NodeId,
+        transform: tw_model::ImageTransform,
+    ) -> Option<u64> {
+        self.apply(Command::SetImageTransform {
+            image_id,
+            transform,
+        })
+    }
+
+    pub fn insert_image_caption(&self, image_id: tw_model::NodeId) -> Option<u64> {
+        self.apply(Command::InsertImageCaption { image_id })
+    }
+
+    pub fn compress_image(&self, image_id: tw_model::NodeId, quality: u8) -> Option<u64> {
+        self.apply(Command::CompressImage { image_id, quality })
     }
 
     pub fn insert_page_break(&self) -> Option<u64> {
@@ -465,6 +720,92 @@ impl Session {
 
     pub fn insert_page_break_at(&self, caret_run_id: Option<tw_model::NodeId>) -> Option<u64> {
         self.apply_from_document(|doc| insert_page_break_command_for(doc, caret_run_id))
+    }
+
+    pub fn insert_section_break(&self) -> Option<u64> {
+        self.insert_section_break_at(None)
+    }
+
+    pub fn insert_section_break_at(&self, caret_run_id: Option<tw_model::NodeId>) -> Option<u64> {
+        self.apply_from_document(|doc| insert_section_break_command_for(doc, caret_run_id))
+    }
+
+    pub fn ensure_header_footer_at(
+        &self,
+        caret_run_id: Option<NodeId>,
+        is_header: bool,
+        page_index: Option<u32>,
+    ) -> Option<u64> {
+        self.apply_from_document(|doc| {
+            ensure_header_footer_command_for(doc, caret_run_id, is_header, page_index)
+        })
+    }
+
+    pub fn set_even_and_odd_headers(&self, enabled: bool) -> Option<u64> {
+        self.apply(Command::SetEvenAndOddHeaders { enabled })
+    }
+
+    pub fn header_footer_seed_run_at(
+        &self,
+        caret_run_id: Option<NodeId>,
+        is_header: bool,
+        page_index: Option<u32>,
+    ) -> Option<NodeId> {
+        let doc = self.document();
+        let section_index = section_index_for_caret(&doc, caret_run_id);
+        let page_index = page_index.unwrap_or(0);
+        let section = doc.sections.get(section_index)?;
+        let is_first = section_index == 0 && page_index == 0;
+        let hf_type = HeaderFooterType::for_page_layout(
+            page_index + 1,
+            is_first,
+            section.format.different_first_page,
+            doc.settings.even_and_odd_headers,
+        );
+        doc.header_footer_seed_run(section_index, is_header, hf_type)
+    }
+
+    pub fn header_footer_linked_at(
+        &self,
+        caret_run_id: Option<NodeId>,
+        is_header: bool,
+        page_index: Option<u32>,
+    ) -> bool {
+        let doc = self.document();
+        let section_index = section_index_for_caret(&doc, caret_run_id);
+        let page_index = page_index.unwrap_or(0);
+        let Some(section) = doc.sections.get(section_index) else {
+            return false;
+        };
+        let is_first = section_index == 0 && page_index == 0;
+        let hf_type = HeaderFooterType::for_page_layout(
+            page_index + 1,
+            is_first,
+            section.format.different_first_page,
+            doc.settings.even_and_odd_headers,
+        );
+        doc.header_footer_linked(section_index, is_header, hf_type)
+    }
+
+    pub fn set_header_footer_link_at(
+        &self,
+        caret_run_id: Option<NodeId>,
+        is_header: bool,
+        page_index: Option<u32>,
+        linked: bool,
+    ) -> Option<u64> {
+        self.apply_from_document(|doc| {
+            set_header_footer_link_command_for(doc, caret_run_id, is_header, page_index, linked)
+        })
+    }
+
+    pub fn insert_field_at(
+        &self,
+        run_id: NodeId,
+        offset: usize,
+        field_type: FieldType,
+    ) -> Option<u64> {
+        self.apply(insert_field_command_for(run_id, offset, field_type))
     }
 
     pub fn paste_html_at(&self, run_id: tw_model::NodeId, offset: usize, html: Vec<u8>) -> Option<u64> {
@@ -524,20 +865,50 @@ impl Session {
     }
 
     pub fn caret_format_json(&self, run_id: tw_model::NodeId) -> Option<String> {
-        let (char_format, para_format, style_name) =
-            self.layout_cache.read().format_at(run_id)?;
+        let cache = self.layout_cache.read();
+        let (char_format, para_format, style_name) = cache.format_at(run_id)?;
+        let inspector_summary =
+            tw_model::style_inspector_at(cache.document(), run_id).map(|s| s.display());
         #[derive(serde::Serialize)]
         struct CaretFormatResponse {
             char_format: tw_model::CharFormat,
             para_format: tw_model::ParaFormat,
             style_name: Option<String>,
+            inspector_summary: Option<String>,
         }
         serde_json::to_string(&CaretFormatResponse {
             char_format,
             para_format,
             style_name,
+            inspector_summary,
         })
         .ok()
+    }
+
+    pub fn document_outline_json(&self) -> Option<String> {
+        #[derive(serde::Serialize)]
+        struct OutlineEntryResponse {
+            paragraph_id: tw_model::NodeId,
+            level: u8,
+            text: String,
+            run_id: tw_model::NodeId,
+            page: u32,
+        }
+
+        let entries = self
+            .layout_cache
+            .read()
+            .document_outline_with_pages()
+            .into_iter()
+            .map(|(entry, page)| OutlineEntryResponse {
+                paragraph_id: entry.paragraph_id,
+                level: entry.level,
+                text: entry.text,
+                run_id: entry.run_id,
+                page,
+            })
+            .collect::<Vec<_>>();
+        serde_json::to_string(&entries).ok()
     }
 
     pub fn layout_page_count(&self) -> u32 {

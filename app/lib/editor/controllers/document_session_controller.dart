@@ -164,9 +164,9 @@ class DocumentSessionController extends ChangeNotifier {
   Future<bool> tryRecoverAutosave() async {
     final snapshot = await _sessionStore.readAutosave();
     if (snapshot == null) return false;
-    final path = snapshot.sourcePath ?? 'Recovered Draft.twdoc';
+    final openPath = _autosaveOpenPath(snapshot);
     if (_host.engine != null &&
-        _host.engine!.openDocumentBytes(snapshot.bytes, path: path) == 0) {
+        _host.engine!.openDocumentBytes(snapshot.bytes, path: openPath) == 0) {
       _currentPath = snapshot.sourcePath;
       _view.reset();
       _host.engine!.setCurrentPageIndex(0);
@@ -182,7 +182,7 @@ class DocumentSessionController extends ChangeNotifier {
       onSessionChanged();
       return true;
     }
-    _host.setDocumentText(DocumentReader.extractText(snapshot.bytes, path: path));
+    _host.setDocumentText(DocumentReader.extractText(snapshot.bytes, path: openPath));
     _host.clearDisplayCaches();
     _currentPath = snapshot.sourcePath;
     _syncSavedGeneration();
@@ -258,6 +258,8 @@ class DocumentSessionController extends ChangeNotifier {
         dialogTitle: 'Open document',
         type: FileType.custom,
         allowedExtensions: kSupportedOpenExtensions,
+        // 12.x defaults allowMultiple to true; we open one document at a time.
+        allowMultiple: false,
         withData: useInMemoryBytes,
       );
       if (result == null || result.files.isEmpty) {
@@ -377,35 +379,15 @@ class DocumentSessionController extends ChangeNotifier {
         notifyListeners();
         return;
       }
-      if (Platform.isAndroid || Platform.isIOS) {
-        final path = await FilePicker.saveFile(
-          dialogTitle: 'Export PDF',
-          fileName: 'document.pdf',
-          type: FileType.custom,
-          allowedExtensions: ['pdf'],
-          bytes: bytes,
-        );
-        _statusText = path == null ? 'PDF export cancelled' : 'PDF exported';
-        notifyListeners();
-        return;
-      }
       final path = await FilePicker.saveFile(
         dialogTitle: 'Export PDF',
         fileName: 'document.pdf',
         type: FileType.custom,
         allowedExtensions: ['pdf'],
+        bytes: bytes,
       );
-      if (path == null) {
-        _statusText = 'PDF export cancelled';
-        notifyListeners();
-        return;
-      }
-      final outPath = path.endsWith('.pdf') ? path : '$path.pdf';
-      final ok = await exportPdfToPath(outPath);
-      if (!ok) {
-        _statusText = 'PDF export failed';
-        notifyListeners();
-      }
+      _statusText = path == null ? 'PDF export cancelled' : 'PDF exported';
+      notifyListeners();
     } catch (e) {
       _statusText = 'PDF export failed: $e';
       notifyListeners();
@@ -466,34 +448,12 @@ class DocumentSessionController extends ChangeNotifier {
         onSessionChanged();
         return;
       }
-      if (Platform.isAndroid || Platform.isIOS) {
-        final path = await FilePicker.saveFile(
-          dialogTitle: dialogTitle,
-          fileName: p.basename(suggestedPath),
-          type: FileType.custom,
-          allowedExtensions: [defaultExtension],
-          bytes: bytes,
-        );
-        if (path == null) {
-          _statusText = 'Save cancelled';
-          notifyListeners();
-          return;
-        }
-        final outPath = path.endsWith('.$ext') ? path : '$path.$ext';
-        _currentPath = outPath;
-        await _recordRecentPath(outPath);
-        await _sessionStore.clearAutosave();
-        _syncSavedGeneration();
-        _statusText = 'Saved';
-        notifyListeners();
-        onSessionChanged();
-        return;
-      }
       final path = await FilePicker.saveFile(
         dialogTitle: dialogTitle,
         fileName: p.basename(suggestedPath),
         type: FileType.custom,
         allowedExtensions: [defaultExtension],
+        bytes: bytes,
       );
       if (path == null) {
         _statusText = 'Save cancelled';
@@ -501,7 +461,6 @@ class DocumentSessionController extends ChangeNotifier {
         return;
       }
       final outPath = path.endsWith('.$ext') ? path : '$path.$ext';
-      await writeBytesToPath(outPath, bytes);
       _currentPath = outPath;
       await _recordRecentPath(outPath);
       await _sessionStore.clearAutosave();
@@ -513,6 +472,16 @@ class DocumentSessionController extends ChangeNotifier {
       _statusText = 'Save failed: $e';
       notifyListeners();
     }
+  }
+
+  /// Autosave bytes are always written in [AutosaveSnapshot.format] (twdoc),
+  /// even when [AutosaveSnapshot.sourcePath] still ends in `.docx`.
+  String _autosaveOpenPath(AutosaveSnapshot snapshot) {
+    final format = snapshot.format.trim().toLowerCase();
+    if (format.isNotEmpty) {
+      return 'Recovered Draft.$format';
+    }
+    return snapshot.sourcePath ?? 'Recovered Draft.twdoc';
   }
 
   String? _extensionFromPath(String? path) {
@@ -660,12 +629,21 @@ class DocumentSessionController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> applyEngineStyle(Future<bool> Function() action, String status) async {
+  Future<void> applyEngineStyle(
+    Future<bool> Function() action,
+    String status, {
+    bool full = false,
+  }) async {
     if (_host.engine == null) return;
-    final edit = _host.performNativeEdit(action, dirtyPage: _selection.caretPage);
+    final edit = _host.performNativeEdit(
+      action,
+      dirtyPage: full ? null : _selection.caretPage,
+      full: full,
+    );
     if (await edit) {
       _statusText = status;
       markDocumentDirty();
+      _formatting.syncFromCaret();
       notifyListeners();
       onSessionChanged();
     }

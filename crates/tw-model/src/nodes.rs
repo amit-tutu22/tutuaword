@@ -6,8 +6,8 @@ use crate::image::ImageBlock;
 use crate::revision::Revision;
 use crate::table::Table;
 use crate::vocabulary::{
-    BookmarkAnchor, CommentRef, FieldData, FootnoteRef, HeaderFooter, HeaderFooterType,
-    HyperlinkTarget, InlineImageRef, ShapeBlock,
+    BookmarkAnchor, CommentRef, FieldData, FootnoteRef, HeaderFooter, HeaderFooterLinks,
+    HeaderFooterType, HyperlinkTarget, InlineImageRef, ShapeBlock,
 };
 use serde::{Deserialize, Serialize};
 
@@ -225,6 +225,12 @@ pub struct Section {
     pub headers: HashMap<HeaderFooterType, HeaderFooter>,
     #[serde(default)]
     pub footers: HashMap<HeaderFooterType, HeaderFooter>,
+    /// When true for a variant, this section uses the previous section's header band.
+    #[serde(default)]
+    pub header_links: HeaderFooterLinks,
+    /// When true for a variant, this section uses the previous section's footer band.
+    #[serde(default)]
+    pub footer_links: HeaderFooterLinks,
     pub blocks: Vec<Block>,
 }
 
@@ -235,6 +241,8 @@ impl Section {
             format: SectionFormat::default(),
             headers: HashMap::new(),
             footers: HashMap::new(),
+            header_links: HeaderFooterLinks::default(),
+            footer_links: HeaderFooterLinks::default(),
             blocks: vec![Block::Paragraph(Paragraph::new())],
         }
     }
@@ -267,22 +275,38 @@ impl Section {
 
     /// Header blocks for layout: typed map first, then legacy format fields.
     pub fn header_for_layout(&self, kind: HeaderFooterType) -> Option<&HeaderFooter> {
-        self.headers
-            .get(&kind)
-            .or_else(|| {
-                if kind == HeaderFooterType::Default
-                    && (!self.format.header_blocks.is_empty() || self.format.header_text.is_some())
-                {
-                    None
-                } else {
-                    None
-                }
-            })
+        self.resolve_header(kind)
     }
 
     /// Footer blocks for layout: typed map first, then legacy format fields.
     pub fn footer_for_layout(&self, kind: HeaderFooterType) -> Option<&HeaderFooter> {
-        self.footers.get(&kind)
+        self.resolve_footer(kind)
+    }
+
+    /// Resolve a header variant, falling back to Default when the specific band is empty.
+    pub fn resolve_header(&self, kind: HeaderFooterType) -> Option<&HeaderFooter> {
+        if let Some(hf) = self.headers.get(&kind) {
+            if !hf.blocks.is_empty() || hf.plain_text.is_some() {
+                return Some(hf);
+            }
+        }
+        if kind != HeaderFooterType::Default {
+            return self.resolve_header(HeaderFooterType::Default);
+        }
+        None
+    }
+
+    /// Resolve a footer variant, falling back to Default when the specific band is empty.
+    pub fn resolve_footer(&self, kind: HeaderFooterType) -> Option<&HeaderFooter> {
+        if let Some(hf) = self.footers.get(&kind) {
+            if !hf.blocks.is_empty() || hf.plain_text.is_some() {
+                return Some(hf);
+            }
+        }
+        if kind != HeaderFooterType::Default {
+            return self.resolve_footer(HeaderFooterType::Default);
+        }
+        None
     }
 }
 

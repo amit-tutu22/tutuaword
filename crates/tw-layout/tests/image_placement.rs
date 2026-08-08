@@ -1,7 +1,9 @@
 //! Floating images are positioned absolutely; inline images occupy the flow.
 
 use tw_layout::{LayoutBox, LayoutEngine};
-use tw_model::{AnchorOrigin, Block, Document, ImageAnchor, ImageBlock, Paragraph};
+use tw_model::{
+    AnchorOrigin, Block, Document, ImageAnchor, ImageBlock, Paragraph, TextWrap,
+};
 
 fn image_boxes(layout: &tw_layout::DocumentLayout) -> Vec<&tw_layout::ImageLayout> {
     layout
@@ -34,6 +36,27 @@ fn document_with(image: ImageBlock) -> Document {
         Block::Paragraph(Paragraph::with_text("Dear Parents,")),
     ];
     doc
+}
+
+fn document_with_wrap(image: ImageBlock, text: &str) -> Document {
+    let mut doc = Document::new();
+    doc.sections[0].blocks = vec![
+        Block::ImageBlock(image),
+        Block::Paragraph(Paragraph::with_text(text)),
+    ];
+    doc
+}
+
+fn first_text_line(layout: &tw_layout::DocumentLayout) -> &tw_layout::TextLine {
+    layout
+        .pages
+        .iter()
+        .flat_map(|p| &p.boxes)
+        .find_map(|b| match b {
+            LayoutBox::TextLine(line) => Some(line),
+            _ => None,
+        })
+        .expect("expected a text line")
 }
 
 #[test]
@@ -101,4 +124,39 @@ fn image_bytes_reach_the_layout_box() {
     let layout = engine.layout_document(&document_with(image));
 
     assert_eq!(image_boxes(&layout)[0].encoded.as_slice(), &[1, 2, 3, 4]);
+}
+
+#[test]
+fn u_f10_s3_square_wrap_reflow() {
+    let mut square = ImageBlock::placeholder(100.0, 80.0);
+    square.wrap = TextWrap::Square;
+    square.anchor = Some(ImageAnchor {
+        x: 0.0,
+        y: 0.0,
+        origin_x: AnchorOrigin::Column,
+        origin_y: AnchorOrigin::Column,
+    });
+
+    let text = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(4);
+    let mut engine = LayoutEngine::new();
+    let square_layout = engine.layout_document(&document_with_wrap(square, &text));
+    let inline_layout =
+        engine.layout_document(&document_with_wrap(ImageBlock::placeholder(100.0, 80.0), &text));
+
+    assert!(
+        first_line_y(&square_layout) < first_line_y(&inline_layout),
+        "square wrap should not push text below the inline image band",
+    );
+
+    let first_line = first_text_line(&square_layout);
+    let content_width = square_layout.pages[0].content_width;
+    assert!(
+        first_line.x > 72.0 + 100.0,
+        "text should start beside the image, got x={}",
+        first_line.x,
+    );
+    assert!(
+        first_line.width < content_width - 50.0,
+        "line beside image should be narrower than the full column",
+    );
 }

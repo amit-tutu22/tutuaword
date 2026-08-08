@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -104,6 +105,28 @@ LogicalKeyboardKey? logicalKeyForChar(String ch) {
   return ch == lower ? key : key; // shift handled by sendKeyEvent for uppercase
 }
 
+/// Reads mock engine caret `para_format` for ribbon integration tests.
+Map<String, dynamic> mockEngineParaFormat(MockDocumentEngine engine) {
+  final json = jsonDecode(engine.fetchCaretFormat(engine.defaultRunId)!)
+      as Map<String, dynamic>;
+  return json['para_format'] as Map<String, dynamic>;
+}
+
+/// Reads mock engine numbering ref, or null when not in a list.
+Map<String, dynamic>? mockEngineNumbering(MockDocumentEngine engine) {
+  final numbering = mockEngineParaFormat(engine)['numbering'];
+  return numbering is Map ? Map<String, dynamic>.from(numbering) : null;
+}
+
+/// Parsed document outline from the mock/real engine.
+List<Map<String, dynamic>> mockEngineOutline(MockDocumentEngine engine) {
+  final json = engine.fetchDocumentOutline();
+  if (json == null || json.isEmpty) return const [];
+  final decoded = jsonDecode(json);
+  if (decoded is! List) return const [];
+  return decoded.whereType<Map>().map(Map<String, dynamic>.from).toList();
+}
+
 /// Pumps a wide surface suitable for ribbon widget tests.
 Future<void> pumpWideRibbon(WidgetTester tester, Widget child) async {
   await tester.binding.setSurfaceSize(const Size(1400, 900));
@@ -168,5 +191,27 @@ Future<void> pumpTestDocumentView(
   await tester.pumpWidget(
     MaterialApp(home: Scaffold(body: DocumentView(controller: controller))),
   );
+  await tester.pumpAndSettle();
+}
+
+/// Pumps a ribbon tab inside a fixed-size surface (default phone-width).
+Future<void> pumpRibbonTab(
+  WidgetTester tester,
+  Widget tab, {
+  Size size = const Size(800, 120),
+}) async {
+  await tester.pumpWidget(
+    MaterialApp(
+      home: Scaffold(
+        body: SizedBox(width: size.width, height: size.height, child: tab),
+      ),
+    ),
+  );
+  await tester.pumpAndSettle();
+}
+
+/// Allows async [EditorController] section-format calls to finish in tests.
+Future<void> settleEngineStyle(WidgetTester tester) async {
+  await tester.pump(const Duration(milliseconds: 50));
   await tester.pumpAndSettle();
 }

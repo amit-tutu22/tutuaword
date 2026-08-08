@@ -3,6 +3,7 @@ mod access;
 pub mod run_text;
 mod block_ops;
 mod command;
+mod image_ops;
 pub mod command_json;
 pub mod command_builders;
 mod normalize;
@@ -19,7 +20,7 @@ pub use range::paragraph_id_for_run;
 pub use run_text::{run_char_len, run_char_len_by_id, run_slice, run_slice_by_id, run_with_id};
 
 use access::{with_paragraph_mut, with_run_mut};
-use tw_model::{Document, NodeId, NumberingRef, Revision, RevisionType, Run, StyleId};
+use tw_model::{CharFormat, Document, DocumentTheme, FieldData, FieldType, NodeId, NumberingRef, ParaFormat, Revision, RevisionType, Run, RunContent, StyleId, StyleSheetError, field_instruction, resolve_theme};
 
 pub fn apply(
     doc: &mut Document,
@@ -79,7 +80,81 @@ pub fn apply(
             after_block_id,
             width,
             height,
-        } => block_ops::insert_image(doc, *after_block_id, *width, *height)?,
+            data,
+        } => block_ops::insert_image(doc, *after_block_id, *width, *height, data.clone())?,
+        Command::SetImageSize {
+            image_id,
+            width,
+            height,
+        } => block_ops::set_image_size(doc, *image_id, *width, *height)?,
+        Command::ReplaceImageBytes { image_id, data } => {
+            block_ops::replace_image_bytes(doc, *image_id, data.clone())?
+        }
+        Command::SetImageWrap { image_id, wrap } => {
+            block_ops::set_image_wrap(doc, *image_id, *wrap)?
+        }
+        Command::SetImageAnchor { image_id, anchor } => {
+            block_ops::set_image_anchor(doc, *image_id, *anchor)?
+        }
+        Command::RestoreImageLayout {
+            image_id,
+            wrap,
+            anchor,
+        } => block_ops::restore_image_layout(doc, *image_id, *wrap, *anchor)?,
+        Command::SetImageTransform {
+            image_id,
+            transform,
+        } => block_ops::set_image_transform(doc, *image_id, *transform)?,
+        Command::InsertImageCaption { image_id } => {
+            block_ops::insert_image_caption(doc, *image_id)?
+        }
+        Command::RemoveImageCaption {
+            image_id,
+            caption_paragraph_id,
+        } => block_ops::remove_image_caption(doc, *image_id, *caption_paragraph_id)?,
+        Command::CompressImage { image_id, quality } => {
+            block_ops::compress_image(doc, *image_id, *quality)?
+        }
+        Command::InsertShape {
+            after_block_id,
+            shape_type,
+            width,
+            height,
+            style,
+        } => block_ops::insert_shape(
+            doc,
+            *after_block_id,
+            *shape_type,
+            *width,
+            *height,
+            style.clone(),
+        )?,
+        Command::InsertTextBox {
+            after_block_id,
+            width,
+            height,
+            style,
+        } => block_ops::insert_text_box(doc, *after_block_id, *width, *height, style.clone())?,
+        Command::InsertWordArt {
+            after_block_id,
+            text,
+            width,
+            height,
+        } => block_ops::insert_word_art(doc, *after_block_id, text.clone(), *width, *height)?,
+        Command::InsertDiagram {
+            after_block_id,
+            width,
+            height,
+        } => block_ops::insert_diagram(doc, *after_block_id, *width, *height)?,
+        Command::InsertChart {
+            after_block_id,
+            width,
+            height,
+        } => block_ops::insert_chart(doc, *after_block_id, *width, *height)?,
+        Command::SetChartData {
+            shape_id,
+            chart_data,
+        } => block_ops::set_chart_data(doc, *shape_id, chart_data.clone())?,
         Command::ApplyParagraphStyle {
             paragraph_id,
             style_name,
@@ -92,8 +167,76 @@ pub fn apply(
             paragraph_id,
             numbering,
         } => set_numbering(doc, *paragraph_id, *numbering)?,
+        Command::RestartNumbering { paragraph_id } => {
+            restart_numbering(doc, *paragraph_id)?
+        }
+        Command::ContinueNumbering { paragraph_id } => {
+            continue_numbering(doc, *paragraph_id)?
+        }
+        Command::CreateParagraphStyle {
+            name,
+            based_on_name,
+            char_format,
+            para_format,
+        } => create_paragraph_style(
+            doc,
+            name,
+            based_on_name.as_deref(),
+            char_format,
+            para_format,
+        )?,
+        Command::RenameParagraphStyle {
+            style_name,
+            new_name,
+        } => rename_paragraph_style(doc, style_name, new_name)?,
+        Command::DeleteParagraphStyle { style_id } => {
+            delete_paragraph_style(doc, *style_id)?
+        }
+        Command::RestoreParagraphStyle {
+            style,
+            ooxml_style_id,
+            paragraph_assignments,
+        } => restore_paragraph_style(doc, style.clone(), ooxml_style_id, paragraph_assignments)?,
+        Command::SetDocumentTheme { theme_name } => {
+            set_document_theme(doc, theme_name)?
+        }
+        Command::SetEvenAndOddHeaders { enabled } => {
+            set_even_and_odd_headers(doc, *enabled)?
+        }
+        Command::SetSectionFormat {
+            section_index,
+            format,
+        } => set_section_format(doc, *section_index, format.clone())?,
         Command::InsertPageBreak { after_block_id } => {
             block_ops::insert_page_break(doc, *after_block_id)?
+        }
+        Command::InsertSectionBreak { after_block_id } => {
+            block_ops::insert_section_break(doc, *after_block_id)?
+        }
+        Command::EnsureHeaderFooter {
+            section_index,
+            is_header,
+            hf_type,
+        } => block_ops::ensure_header_footer(doc, *section_index, *is_header, *hf_type)?,
+        Command::SetHeaderFooterLink {
+            section_index,
+            is_header,
+            hf_type,
+            linked,
+        } => block_ops::set_header_footer_link(
+            doc,
+            *section_index,
+            *is_header,
+            *hf_type,
+            *linked,
+        )?,
+        Command::InsertField {
+            run_id,
+            offset,
+            field_type,
+        } => insert_field(doc, *run_id, *offset, field_type.clone())?,
+        Command::MergeSection { section_index } => {
+            block_ops::merge_section(doc, *section_index)?
         }
         Command::MergeTableCells {
             table_id,
@@ -109,11 +252,96 @@ pub fn apply(
             *end_row,
             *end_col,
         )?,
+        Command::SplitTableCell { table_id, row, col } => {
+            block_ops::split_table_cell(doc, *table_id, *row, *col)?
+        }
         Command::ResizeTableColumn {
             table_id,
             column,
             width,
         } => block_ops::resize_table_column(doc, *table_id, *column, *width)?,
+        Command::SetTableBorder { table_id, border } => {
+            block_ops::set_table_border(doc, *table_id, border.clone())?
+        }
+        Command::SetTableCellShading {
+            table_id,
+            row,
+            col,
+            background,
+        } => block_ops::set_table_cell_shading(doc, *table_id, *row, *col, *background)?,
+        Command::AutoFitTable {
+            table_id,
+            target_width,
+        } => block_ops::autofit_table_to_width(doc, *table_id, *target_width)?,
+        Command::RestoreTableColumnWidths {
+            table_id,
+            column_widths,
+        } => block_ops::restore_table_column_widths(doc, *table_id, column_widths.clone())?,
+        Command::SortTableRows {
+            table_id,
+            column,
+            ascending,
+            skip_header,
+        } => block_ops::sort_table_rows(doc, *table_id, *column, *ascending, *skip_header)?,
+        Command::RestoreTableRowOrder { table_id, rows } => {
+            block_ops::restore_table_row_order(doc, *table_id, rows.clone())?
+        }
+        Command::InsertNestedTable {
+            table_id,
+            row,
+            col,
+            rows,
+            cols,
+        } => block_ops::insert_nested_table(doc, *table_id, *row, *col, *rows, *cols)?,
+        Command::RemoveTableCellBlock {
+            table_id,
+            row,
+            col,
+            block_index,
+        } => block_ops::remove_table_cell_block(
+            doc,
+            *table_id,
+            *row,
+            *col,
+            *block_index,
+        )?,
+        Command::InsertTableCellBlock {
+            table_id,
+            row,
+            col,
+            block_index,
+            block,
+        } => block_ops::insert_table_cell_block(
+            doc,
+            *table_id,
+            *row,
+            *col,
+            *block_index,
+            block.clone(),
+        )?,
+        Command::DeleteTableRow { table_id, row } => {
+            block_ops::delete_table_row(doc, *table_id, *row)?
+        }
+        Command::DeleteTableColumn { table_id, column } => {
+            block_ops::delete_table_column(doc, *table_id, *column)?
+        }
+        Command::RestoreTableRow {
+            table_id,
+            row,
+            row_data,
+        } => block_ops::restore_table_row(doc, *table_id, *row, row_data.clone())?,
+        Command::RestoreTableColumn {
+            table_id,
+            column,
+            cells,
+            column_width,
+        } => block_ops::restore_table_column(
+            doc,
+            *table_id,
+            *column,
+            cells.clone(),
+            *column_width,
+        )?,
         Command::SetTableCellSpan {
             table_id,
             row,
@@ -271,6 +499,85 @@ fn restore_revision_runs(
     })
 }
 
+fn insert_field(
+    doc: &mut Document,
+    run_id: NodeId,
+    offset: usize,
+    field_type: FieldType,
+) -> Result<EditResult, EditError> {
+    let loc = doc
+        .find_run_location(run_id)
+        .ok_or(EditError::RunNotFound(run_id))?;
+
+    if offset == 0 {
+        if let Some(para) = doc.paragraph_at_loc(loc) {
+            if let Some(run) = para.runs.get(loc.run_index) {
+                if matches!(&run.content, RunContent::Text(text) if text.is_empty()) {
+                    with_run_mut(doc, run_id, |run| {
+                        run.content = RunContent::Field(FieldData {
+                            field_type: field_type.clone(),
+                            instruction: Some(field_instruction(&field_type)),
+                            display_text: None,
+                        });
+                    })
+                    .ok_or(EditError::RunNotFound(run_id))?;
+                    return Ok(EditResult {
+                        affected_nodes: vec![run_id],
+                        created_node_id: Some(run_id),
+                        seed_run_id: Some(run_id),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+    }
+
+    let format = doc
+        .run_at(loc)
+        .ok_or(EditError::RunNotFound(run_id))?
+        .format
+        .clone();
+    let mut insert_at = loc.run_index;
+
+    if doc
+        .run_at(loc)
+        .is_some_and(|run| matches!(run.content, RunContent::Text(_)))
+    {
+        let char_len = run_char_len_by_id(doc, run_id);
+        if offset > 0 && offset < char_len {
+            split_run_at(doc, loc, run_id, offset)?;
+            insert_at = loc.run_index + 1;
+        } else if offset >= char_len {
+            insert_at = loc.run_index + 1;
+        }
+    }
+
+    let instruction = field_instruction(&field_type);
+    let field_run = Run {
+        id: NodeId::new(),
+        format,
+        content: RunContent::Field(FieldData {
+            field_type,
+            instruction: Some(instruction),
+            display_text: None,
+        }),
+        revision: None,
+    };
+    let field_id = field_run.id;
+
+    doc.paragraph_at_loc_mut(loc)
+        .ok_or(EditError::RunNotFound(run_id))?
+        .runs
+        .insert(insert_at, field_run);
+
+    Ok(EditResult {
+        affected_nodes: vec![field_id],
+        created_node_id: Some(field_id),
+        seed_run_id: Some(field_id),
+        ..Default::default()
+    })
+}
+
 fn insert_text(
     doc: &mut Document,
     run_id: NodeId,
@@ -364,7 +671,9 @@ fn delete_doc_range(
     let mut segments = Vec::new();
     for (si, section) in doc.sections.iter().enumerate() {
         for (bi, block) in section.blocks.iter().enumerate() {
-            if (si, bi) < (start_loc.0, start_loc.1) || (si, bi) > (end_loc.0, end_loc.1) {
+            if (si, tw_model::BlockZone::Body.sort_key(), bi) < start_loc.block_key()
+                || (si, tw_model::BlockZone::Body.sort_key(), bi) > end_loc.block_key()
+            {
                 continue;
             }
             let Some(para) = block.paragraph() else {
@@ -414,17 +723,17 @@ fn track_delete_range(
     end: usize,
 ) -> Result<EditResult, EditError> {
     let author = doc.settings.author_name.clone();
-    let (si, bi, _) = doc
+    let loc = doc
         .find_run_location(run_id)
         .ok_or(EditError::RunNotFound(run_id))?;
 
     let mut target = run_id;
     if start > 0 {
-        target = split_run_at(doc, si, bi, target, start)?;
+        target = split_run_at(doc, loc, run_id, start)?;
     }
     let delete_len = end - start;
     if delete_len < run_char_len_by_id(doc, target) {
-        split_run_at(doc, si, bi, target, delete_len)?;
+        let _ = split_run_at(doc, loc, target, delete_len)?;
     }
 
     with_run_mut(doc, target, |run| {
@@ -496,7 +805,7 @@ fn set_char_format(
         .ok_or(EditError::RunNotFound(run_id))?;
     }
 
-    let (si, bi, _) = doc
+    let loc = doc
         .find_run_location(run_id)
         .ok_or(EditError::RunNotFound(run_id))?;
 
@@ -504,12 +813,12 @@ fn set_char_format(
     // First split off the prefix; the returned id is the suffix starting at `start`.
     let mut target = run_id;
     if start > 0 {
-        target = split_run_at(doc, si, bi, run_id, start)?;
+        target = split_run_at(doc, loc, run_id, start)?;
     }
     // Then split off the tail beyond `end - start`.
     let slice_len = end - start;
     if slice_len < run_char_len_by_id(doc, target) {
-        let _ = split_run_at(doc, si, bi, target, slice_len)?;
+        let _ = split_run_at(doc, loc, target, slice_len)?;
     }
 
     with_run_mut(doc, target, |run| {
@@ -552,7 +861,9 @@ fn clear_char_format_fields(
 
     for (si, section) in doc.sections.iter().enumerate() {
         for (bi, block) in section.blocks.iter().enumerate() {
-            if (si, bi) < (start_loc.0, start_loc.1) || (si, bi) > (end_loc.0, end_loc.1) {
+            if (si, tw_model::BlockZone::Body.sort_key(), bi) < start_loc.block_key()
+                || (si, tw_model::BlockZone::Body.sort_key(), bi) > end_loc.block_key()
+            {
                 continue;
             }
             let Some(para) = block.paragraph() else {
@@ -571,6 +882,7 @@ fn clear_char_format_fields(
             let old = run.format.clone();
             if clear_color {
                 run.format.color = None;
+                run.format.theme_color = None;
             }
             if clear_highlight {
                 run.format.highlight = None;
@@ -617,11 +929,10 @@ fn set_char_format_range(
         .ok_or(EditError::RunNotFound(range.end.run_id))?;
 
     // Same paragraph — handle as one contiguous run span.
-    if start_loc.0 == end_loc.0 && start_loc.1 == end_loc.1 {
+    if start_loc.block_key() == end_loc.block_key() {
         return format_runs_in_paragraph(
             doc,
-            start_loc.0,
-            start_loc.1,
+            start_loc,
             &range.start,
             &range.end,
             format,
@@ -646,20 +957,20 @@ fn set_char_format_range(
             let Some(para) = block.paragraph() else {
                 continue;
             };
-            if (si, bi) == (start_loc.0, start_loc.1) {
+            let body_key = (si, tw_model::BlockZone::Body.sort_key(), bi);
+            if body_key == start_loc.block_key() {
                 let last = para.runs.last().ok_or(EditError::InvalidRange)?;
                 first_end = DocPosition {
                     run_id: last.id,
                     char_offset: run_char_len_by_id(doc, last.id),
                 };
-            } else if (si, bi) == (end_loc.0, end_loc.1) {
+            } else if body_key == end_loc.block_key() {
                 let first = para.runs.first().ok_or(EditError::InvalidRange)?;
                 last_start = DocPosition {
                     run_id: first.id,
                     char_offset: 0,
                 };
-            } else if (si, bi) > (start_loc.0, start_loc.1) && (si, bi) < (end_loc.0, end_loc.1)
-            {
+            } else if body_key > start_loc.block_key() && body_key < end_loc.block_key() {
                 middle.push((si, bi));
             }
         }
@@ -670,8 +981,7 @@ fn set_char_format_range(
 
     let partial = format_runs_in_paragraph(
         doc,
-        start_loc.0,
-        start_loc.1,
+        start_loc,
         &range.start,
         &first_end,
         format.clone(),
@@ -705,8 +1015,14 @@ fn set_char_format_range(
         };
         let partial = format_runs_in_paragraph(
             doc,
-            si,
-            bi,
+            tw_model::RunLocation {
+                section_index: si,
+                zone: tw_model::BlockZone::Body,
+                block_index: bi,
+                run_index: 0,
+                table_cell: None,
+                shape_paragraph: None,
+            },
             &mid_start,
             &mid_end,
             format.clone(),
@@ -718,8 +1034,7 @@ fn set_char_format_range(
 
     let partial = format_runs_in_paragraph(
         doc,
-        end_loc.0,
-        end_loc.1,
+        end_loc,
         &last_start,
         &range.end,
         format,
@@ -737,8 +1052,7 @@ fn set_char_format_range(
 
 fn format_runs_in_paragraph(
     doc: &mut Document,
-    si: usize,
-    bi: usize,
+    loc: tw_model::RunLocation,
     start: &DocPosition,
     end: &DocPosition,
     format: tw_model::CharFormat,
@@ -760,7 +1074,7 @@ fn format_runs_in_paragraph(
     if end.char_offset == 0 {
         // Empty selection into the end run — exclude it by walking to previous run.
         let para = doc
-            .paragraph_at(si, bi)
+            .paragraph_at_loc(loc)
             .ok_or(EditError::RunNotFound(end.run_id))?;
         let idx = para
             .runs
@@ -772,20 +1086,20 @@ fn format_runs_in_paragraph(
         }
         last_id = para.runs[idx - 1].id;
     } else if end.char_offset < run_char_len_by_id(doc, end.run_id) {
-        let _ = split_run_at(doc, si, bi, end.run_id, end.char_offset)?;
+        let _ = split_run_at(doc, loc, end.run_id, end.char_offset)?;
         // Prefix keeps end.run_id and is exactly what we want.
         last_id = end.run_id;
     }
 
     let mut first_id = start.run_id;
     if start.char_offset > 0 {
-        first_id = split_run_at(doc, si, bi, start.run_id, start.char_offset)?;
+        first_id = split_run_at(doc, loc, start.run_id, start.char_offset)?;
     } else if start.char_offset == 0 {
         first_id = start.run_id;
     }
 
     let para = doc
-        .paragraph_at_mut(si, bi)
+        .paragraph_at_loc_mut(loc)
         .ok_or(EditError::RunNotFound(start.run_id))?;
     let i0 = para
         .runs
@@ -823,13 +1137,12 @@ fn format_runs_in_paragraph(
 
 fn split_run_at(
     doc: &mut Document,
-    si: usize,
-    bi: usize,
+    loc: tw_model::RunLocation,
     run_id: NodeId,
     offset: usize,
 ) -> Result<NodeId, EditError> {
     let para = doc
-        .paragraph_at_mut(si, bi)
+        .paragraph_at_loc_mut(loc)
         .ok_or(EditError::RunNotFound(run_id))?;
     let idx = para
         .runs
@@ -980,7 +1293,7 @@ fn split_paragraph_at(
     run_id: NodeId,
     offset: usize,
 ) -> Result<EditResult, EditError> {
-    let (si, bi, _) = doc
+    let loc = doc
         .find_run_location(run_id)
         .ok_or(EditError::RunNotFound(run_id))?;
 
@@ -992,11 +1305,11 @@ fn split_paragraph_at(
     // Mid-run: split so the caret boundary is a run start.
     let mut first_moved_run = run_id;
     if offset > 0 && offset < run_len {
-        first_moved_run = split_run_at(doc, si, bi, run_id, offset)?;
+        first_moved_run = split_run_at(doc, loc, run_id, offset)?;
     } else if offset == run_len {
         // Caret at end of this run — move subsequent runs (or insert empty para).
         let para = doc
-            .paragraph_at(si, bi)
+            .paragraph_at_loc(loc)
             .ok_or(EditError::RunNotFound(run_id))?;
         let idx = para
             .runs
@@ -1008,10 +1321,19 @@ fn split_paragraph_at(
         } else {
             // End of paragraph → empty new paragraph after this one.
             let after_id = para.id;
-            let result = insert_paragraph(doc, after_id)?;
+            let result = insert_paragraph_in_zone(doc, loc, after_id)?;
             let new_para_id = result.created_node_id.unwrap();
             let new_run_id = doc
-                .paragraph_at(si, bi + 1)
+                .blocks_at(tw_model::RunLocation {
+                    section_index: loc.section_index,
+                    zone: loc.zone,
+                    block_index: loc.block_index + 1,
+                    run_index: 0,
+                    table_cell: None,
+                    shape_paragraph: None,
+                })
+                .and_then(|blocks| blocks.get(loc.block_index + 1))
+                .and_then(|b| b.paragraph())
                 .and_then(|p| p.runs.first().map(|r| r.id))
                 .ok_or(EditError::ParagraphNotFound(new_para_id))?;
             return Ok(EditResult {
@@ -1026,7 +1348,7 @@ fn split_paragraph_at(
     // offset == 0: move this run and everything after.
 
     let para = doc
-        .paragraph_at_mut(si, bi)
+        .paragraph_at_loc_mut(loc)
         .ok_or(EditError::RunNotFound(run_id))?;
     let move_from = para
         .runs
@@ -1059,16 +1381,41 @@ fn split_paragraph_at(
     };
     let new_para_id = new_para.id;
     let new_run_id = new_first_run.0;
+    let previous_paragraph_id = doc
+        .paragraph_at_loc(loc)
+        .map(|p| p.id)
+        .ok_or(EditError::RunNotFound(run_id))?;
 
-    doc.sections[si]
-        .blocks
-        .insert(bi + 1, tw_model::Block::Paragraph(new_para));
+    doc.blocks_at_mut(loc)
+        .ok_or(EditError::InvalidRange)?
+        .insert(loc.block_index + 1, tw_model::Block::Paragraph(new_para));
 
     Ok(EditResult {
         affected_nodes: vec![new_run_id, new_para_id],
         created_node_id: Some(new_para_id),
-        previous_paragraph_id: Some(doc.sections[si].blocks[bi].paragraph().unwrap().id),
+        previous_paragraph_id: Some(previous_paragraph_id),
         split_boundary: Some((run_id, offset)),
+        ..Default::default()
+    })
+}
+
+fn insert_paragraph_in_zone(
+    doc: &mut Document,
+    loc: tw_model::RunLocation,
+    after_id: NodeId,
+) -> Result<EditResult, EditError> {
+    let blocks = doc.blocks_at_mut(loc).ok_or(EditError::InvalidRange)?;
+    let insert_at = blocks
+        .iter()
+        .position(|b| b.paragraph().is_some_and(|p| p.id == after_id))
+        .ok_or(EditError::ParagraphNotFound(after_id))?
+        + 1;
+    let para = tw_model::Paragraph::new();
+    let new_id = para.id;
+    blocks.insert(insert_at, tw_model::Block::Paragraph(para));
+    Ok(EditResult {
+        affected_nodes: vec![new_id],
+        created_node_id: Some(new_id),
         ..Default::default()
     })
 }
@@ -1194,6 +1541,159 @@ fn apply_paragraph_style_by_id(
     .ok_or(EditError::ParagraphNotFound(paragraph_id))?
 }
 
+fn map_style_sheet_error(err: StyleSheetError) -> EditError {
+    match err {
+        StyleSheetError::BuiltinProtected(name) => EditError::BuiltinStyleProtected(name),
+        StyleSheetError::DuplicateName(name) => EditError::DuplicateStyleName(name),
+        StyleSheetError::NotFound(name) => EditError::StyleNotFound(name),
+    }
+}
+
+fn create_paragraph_style(
+    doc: &mut Document,
+    name: &str,
+    based_on_name: Option<&str>,
+    char_format: &CharFormat,
+    para_format: &ParaFormat,
+) -> Result<EditResult, EditError> {
+    let based_on = based_on_name
+        .map(|n| {
+            doc.styles
+                .find_style_by_name(n)
+                .map(|s| s.id)
+                .ok_or_else(|| EditError::StyleNotFound(n.to_string()))
+        })
+        .transpose()?;
+    let style_id = doc
+        .styles
+        .create_paragraph_style(
+            name.to_string(),
+            based_on,
+            char_format.clone(),
+            para_format.clone(),
+        )
+        .map_err(map_style_sheet_error)?;
+    Ok(EditResult {
+        created_style_id: Some(style_id),
+        ..Default::default()
+    })
+}
+
+fn rename_paragraph_style(
+    doc: &mut Document,
+    style_name: &str,
+    new_name: &str,
+) -> Result<EditResult, EditError> {
+    let style_id = doc
+        .styles
+        .find_style_by_name(style_name)
+        .map(|s| s.id)
+        .ok_or_else(|| EditError::StyleNotFound(style_name.to_string()))?;
+    let old_name = doc
+        .styles
+        .rename_paragraph_style(style_id, new_name.to_string())
+        .map_err(map_style_sheet_error)?;
+    Ok(EditResult {
+        style_renamed: Some((style_id, old_name)),
+        ..Default::default()
+    })
+}
+
+fn delete_paragraph_style(doc: &mut Document, style_id: StyleId) -> Result<EditResult, EditError> {
+    let style = doc
+        .styles
+        .paragraph_styles
+        .get(&style_id)
+        .cloned()
+        .ok_or_else(|| EditError::StyleNotFound(format!("{style_id:?}")))?;
+    let ooxml_id = doc
+        .styles
+        .ooxml_id_for(style_id)
+        .unwrap_or_else(|| style.name.replace(' ', ""));
+    let fallback = style.based_on.or_else(|| {
+        doc.styles.find_style_by_name("Normal").map(|s| s.id)
+    });
+    let mut usage_updates = Vec::new();
+    for para in doc.paragraphs_mut() {
+        if para.style_id == Some(style_id) {
+            usage_updates.push((para.id, para.style_id));
+            para.style_id = fallback;
+        }
+    }
+    let deleted = doc
+        .styles
+        .delete_paragraph_style(style_id)
+        .map_err(map_style_sheet_error)?;
+    Ok(EditResult {
+        deleted_style: Some(deleted),
+        deleted_style_ooxml_id: Some(ooxml_id),
+        style_usage_updates: Some(usage_updates),
+        ..Default::default()
+    })
+}
+
+fn restore_paragraph_style(
+    doc: &mut Document,
+    style: tw_model::ParagraphStyle,
+    ooxml_style_id: &str,
+    paragraph_assignments: &[(NodeId, StyleId)],
+) -> Result<EditResult, EditError> {
+    let style_id = style.id;
+    doc.styles
+        .ooxml_style_ids
+        .insert(ooxml_style_id.to_string(), style_id);
+    doc.styles.paragraph_styles.insert(style_id, style);
+    for (para_id, assigned_style) in paragraph_assignments {
+        if *assigned_style != style_id {
+            continue;
+        }
+        if let Some((si, bi)) = doc.find_paragraph_location(*para_id) {
+            if let Some(para) = doc.paragraph_at_mut(si, bi) {
+                para.style_id = Some(style_id);
+            }
+        }
+    }
+    Ok(EditResult::default())
+}
+
+fn set_document_theme(doc: &mut Document, theme_name: &str) -> Result<EditResult, EditError> {
+    let theme = DocumentTheme::by_name(theme_name)
+        .ok_or_else(|| EditError::ThemeNotFound(theme_name.to_string()))?;
+    let old_theme = doc.settings.theme.clone();
+    doc.settings.theme = theme;
+    resolve_theme(doc);
+    Ok(EditResult {
+        old_document_theme: Some(old_theme),
+        ..Default::default()
+    })
+}
+
+fn set_even_and_odd_headers(doc: &mut Document, enabled: bool) -> Result<EditResult, EditError> {
+    let old = doc.settings.even_and_odd_headers;
+    doc.settings.even_and_odd_headers = enabled;
+    Ok(EditResult {
+        old_even_and_odd_headers: Some(old),
+        ..Default::default()
+    })
+}
+
+fn set_section_format(
+    doc: &mut Document,
+    section_index: usize,
+    format: tw_model::SectionFormat,
+) -> Result<EditResult, EditError> {
+    let section = doc
+        .sections
+        .get_mut(section_index)
+        .ok_or(EditError::InvalidRange)?;
+    let old = section.format.clone();
+    section.format.apply_geometry(&format);
+    Ok(EditResult {
+        old_section_format: Some((section_index, old)),
+        ..Default::default()
+    })
+}
+
 fn find_in(haystack: &str, needle: &str, match_case: bool) -> Option<usize> {
     if needle.is_empty() {
         return None;
@@ -1241,7 +1741,9 @@ fn find_replace(
 
     for (si, section) in doc.sections.iter().enumerate() {
         for (bi, block) in section.blocks.iter().enumerate() {
-            if (si, bi) < (start_loc.0, start_loc.1) || (si, bi) > (end_loc.0, end_loc.1) {
+            if (si, tw_model::BlockZone::Body.sort_key(), bi) < start_loc.block_key()
+                || (si, tw_model::BlockZone::Body.sort_key(), bi) > end_loc.block_key()
+            {
                 continue;
             }
             let tw_model::Block::Paragraph(para) = block else {
@@ -1304,8 +1806,8 @@ fn find_replace(
 
 fn run_in_doc_range(
     run_id: NodeId,
-    start_loc: (usize, usize, usize),
-    end_loc: (usize, usize, usize),
+    start_loc: tw_model::RunLocation,
+    end_loc: tw_model::RunLocation,
     doc: &Document,
 ) -> bool {
     doc.find_run_location(run_id)
@@ -1338,7 +1840,9 @@ pub fn text_in_range(
     let mut out = String::new();
     for (si, section) in doc.sections.iter().enumerate() {
         for (bi, block) in section.blocks.iter().enumerate() {
-            if (si, bi) < (start_loc.0, start_loc.1) || (si, bi) > (end_loc.0, end_loc.1) {
+            if (si, tw_model::BlockZone::Body.sort_key(), bi) < start_loc.block_key()
+                || (si, tw_model::BlockZone::Body.sort_key(), bi) > end_loc.block_key()
+            {
                 continue;
             }
             let Some(para) = block.paragraph() else {
@@ -1396,9 +1900,22 @@ fn set_numbering(
     paragraph_id: NodeId,
     numbering: Option<NumberingRef>,
 ) -> Result<EditResult, EditError> {
+    let outline_from_numbering = numbering.and_then(|nr| {
+        tw_model::numbering_contributes_to_outline(doc, nr.numbering_id, nr.level)
+            .then_some(nr.level.min(8) as u8)
+    });
     with_paragraph_mut(doc, paragraph_id, |para| {
         let old = para.format.numbering;
         para.format.numbering = numbering;
+        if let Some(level) = outline_from_numbering {
+            para.format.outline_level = Some(level);
+        } else if numbering.is_none() {
+            if let Some(old_nr) = old {
+                if para.format.outline_level == Some(old_nr.level.min(8) as u8) {
+                    para.format.outline_level = None;
+                }
+            }
+        }
         Ok(EditResult {
             affected_nodes: vec![paragraph_id],
             old_numbering: Some(old),
@@ -1406,6 +1923,44 @@ fn set_numbering(
         })
     })
     .ok_or(EditError::ParagraphNotFound(paragraph_id))?
+}
+
+fn restart_numbering(doc: &mut Document, paragraph_id: NodeId) -> Result<EditResult, EditError> {
+    ensure_list_paragraph(doc, paragraph_id)?;
+    set_para_format(
+        doc,
+        paragraph_id,
+        tw_model::ParaFormat {
+            num_restart: Some(true),
+            ..Default::default()
+        },
+        true,
+    )
+}
+
+fn continue_numbering(doc: &mut Document, paragraph_id: NodeId) -> Result<EditResult, EditError> {
+    ensure_list_paragraph(doc, paragraph_id)?;
+    with_paragraph_mut(doc, paragraph_id, |para| {
+        let old = para.format.clone();
+        para.format.num_restart = None;
+        Ok(EditResult {
+            affected_nodes: vec![paragraph_id],
+            old_para_format: Some(old.clone()),
+            old_para_formats: vec![(paragraph_id, old)],
+            ..Default::default()
+        })
+    })
+    .ok_or(EditError::ParagraphNotFound(paragraph_id))?
+}
+
+fn ensure_list_paragraph(doc: &Document, paragraph_id: NodeId) -> Result<(), EditError> {
+    let (si, bi) = doc
+        .find_paragraph_location(paragraph_id)
+        .ok_or(EditError::ParagraphNotFound(paragraph_id))?;
+    if doc.paragraph_at(si, bi).unwrap().format.numbering.is_none() {
+        return Err(EditError::InvalidRange);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

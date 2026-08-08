@@ -9,7 +9,7 @@ use std::time::Duration;
 use tw_core::{BridgeEvent, Session, WaitOutcome, STARTUP_REQUEST_ID};
 use tw_edit::{command_from_json, Command, DocPosition, DocRange};
 use tw_layout::FontFaceSpec;
-use tw_model::{CharFormat, NodeId, ParaFormat};
+use tw_model::{CharFormat, FieldType, NodeId, ParaFormat, SectionFormat};
 use uuid::Uuid;
 
 static SESSION: Mutex<Option<Session>> = Mutex::new(None);
@@ -918,6 +918,258 @@ pub extern "C" fn tw_apply_heading1(caret_run_id_ptr: *const c_char) -> i32 {
 }
 
 #[no_mangle]
+pub extern "C" fn tw_apply_paragraph_style(
+    caret_run_id_ptr: *const c_char,
+    style_name_ptr: *const c_char,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let caret_run_id = parse_node_id(caret_run_id_ptr);
+            let Some(style_name) = parse_cstr(style_name_ptr) else {
+                return -2;
+            };
+            if style_name.is_empty() {
+                return -2;
+            }
+            let Some(request_id) = session.apply_paragraph_style_at(caret_run_id, &style_name)
+            else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_apply_document_theme(theme_name_ptr: *const c_char) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(theme_name) = parse_cstr(theme_name_ptr) else {
+                return -2;
+            };
+            if theme_name.is_empty() {
+                return -2;
+            }
+            let Some(request_id) = session.apply_document_theme(&theme_name) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_apply_section_format_json(
+    format_json_ptr: *const c_char,
+    caret_run_id_ptr: *const c_char,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(json) = parse_cstr(format_json_ptr) else {
+                return -2;
+            };
+            let format: SectionFormat = match serde_json::from_str(&json) {
+                Ok(f) => f,
+                Err(_) => return -3,
+            };
+            let caret_run_id = parse_node_id(caret_run_id_ptr);
+            let Some(request_id) = session.apply_section_format_at(caret_run_id, format) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_get_section_format_json(
+    caret_run_id_ptr: *const c_char,
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    guard_ffi(|| {
+        let guard = SESSION.lock();
+        let Some(session) = guard.as_ref() else {
+            return -1;
+        };
+        let caret_run_id = parse_node_id(caret_run_id_ptr);
+        let Some(json) = session.section_format_json_at(caret_run_id) else {
+            return -3;
+        };
+        transfer_bytes_to_caller(json.into_bytes(), out_ptr, out_len);
+        0
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_insert_section_break(caret_run_id_ptr: *const c_char) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let caret_run_id = parse_node_id(caret_run_id_ptr);
+            let Some(request_id) = session.insert_section_break_at(caret_run_id) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_ensure_header_footer(
+    caret_run_id_ptr: *const c_char,
+    is_header: i32,
+    page_index: i32,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let caret_run_id = parse_node_id(caret_run_id_ptr);
+            let page = if page_index < 0 {
+                None
+            } else {
+                Some(page_index as u32)
+            };
+            let Some(request_id) =
+                session.ensure_header_footer_at(caret_run_id, is_header != 0, page)
+            else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_set_even_and_odd_headers(enabled: i32) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(request_id) = session.set_even_and_odd_headers(enabled != 0) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_even_and_odd_headers_enabled() -> i32 {
+    guard_ffi(|| {
+        let guard = SESSION.lock();
+        let Some(session) = guard.as_ref() else {
+            return -1;
+        };
+        i32::from(session.document().settings.even_and_odd_headers)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_header_footer_seed_run(
+    caret_run_id_ptr: *const c_char,
+    is_header: i32,
+    page_index: i32,
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    guard_ffi(|| {
+        let guard = SESSION.lock();
+        let Some(session) = guard.as_ref() else {
+            return -1;
+        };
+        let caret_run_id = parse_node_id(caret_run_id_ptr);
+        let page = if page_index < 0 {
+            None
+        } else {
+            Some(page_index as u32)
+        };
+        let Some(run_id) =
+            session.header_footer_seed_run_at(caret_run_id, is_header != 0, page)
+        else {
+            return -3;
+        };
+        transfer_bytes_to_caller(run_id.to_string().into_bytes(), out_ptr, out_len);
+        0
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_header_footer_linked(
+    caret_run_id_ptr: *const c_char,
+    is_header: i32,
+    page_index: i32,
+) -> i32 {
+    guard_ffi(|| {
+        let guard = SESSION.lock();
+        let Some(session) = guard.as_ref() else {
+            return -1;
+        };
+        let caret_run_id = parse_node_id(caret_run_id_ptr);
+        let page = if page_index < 0 {
+            None
+        } else {
+            Some(page_index as u32)
+        };
+        i32::from(session.header_footer_linked_at(
+            caret_run_id,
+            is_header != 0,
+            page,
+        ))
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_set_header_footer_link(
+    caret_run_id_ptr: *const c_char,
+    is_header: i32,
+    page_index: i32,
+    linked: i32,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let caret_run_id = parse_node_id(caret_run_id_ptr);
+            let page = if page_index < 0 {
+                None
+            } else {
+                Some(page_index as u32)
+            };
+            let Some(request_id) = session.set_header_footer_link_at(
+                caret_run_id,
+                is_header != 0,
+                page,
+                linked != 0,
+            ) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_insert_field(
+    run_id_ptr: *const c_char,
+    offset: i32,
+    field_type_ptr: *const c_char,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(run_id) = parse_node_id(run_id_ptr) else {
+                return -3;
+            };
+            let Some(field_type) = parse_field_type(field_type_ptr) else {
+                return -3;
+            };
+            let Some(request_id) = session.insert_field_at(
+                run_id,
+                offset.max(0) as usize,
+                field_type,
+            ) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
 pub extern "C" fn tw_apply_normal_style(caret_run_id_ptr: *const c_char) -> i32 {
     guard_ffi(|| {
         with_session(|session| {
@@ -956,6 +1208,54 @@ pub extern "C" fn tw_apply_bullet_list(caret_run_id_ptr: *const c_char) -> i32 {
     })
 }
 
+/// Promote (+1) or demote (−1) the list level at the caret paragraph (F05.S2).
+///
+/// Returns `0` when an edit was enqueued, `1` when the level is unchanged (at
+/// min/max), `-4` when the paragraph is not in a list.
+#[no_mangle]
+pub extern "C" fn tw_adjust_list_level(caret_run_id_ptr: *const c_char, delta: i32) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let caret_run_id = parse_node_id(caret_run_id_ptr);
+            let Some(outcome) = session.adjust_list_level_at(caret_run_id, delta) else {
+                return -4;
+            };
+            let Some(request_id) = outcome else {
+                return 1;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+/// Restart list numbering at the caret paragraph (F05.S3).
+#[no_mangle]
+pub extern "C" fn tw_restart_numbering(caret_run_id_ptr: *const c_char) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let caret_run_id = parse_node_id(caret_run_id_ptr);
+            let Some(request_id) = session.restart_numbering_at(caret_run_id) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+/// Continue list numbering from the running counter (F05.S3).
+#[no_mangle]
+pub extern "C" fn tw_continue_numbering(caret_run_id_ptr: *const c_char) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let caret_run_id = parse_node_id(caret_run_id_ptr);
+            let Some(request_id) = session.continue_numbering_at(caret_run_id) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
 fn parse_node_id(ptr: *const c_char) -> Option<NodeId> {
     if ptr.is_null() {
         return None;
@@ -969,6 +1269,18 @@ fn parse_cstr(ptr: *const c_char) -> Option<String> {
         return None;
     }
     Some(unsafe { CStr::from_ptr(ptr) }.to_string_lossy().into_owned())
+}
+
+fn parse_field_type(ptr: *const c_char) -> Option<FieldType> {
+    let name = parse_cstr(ptr)?;
+    match name.to_ascii_lowercase().as_str() {
+        "page" => Some(FieldType::Page),
+        "numpages" => Some(FieldType::NumPages),
+        "date" => Some(FieldType::Date),
+        "time" => Some(FieldType::Time),
+        "tablesum" | "sum" => Some(FieldType::TableSumAbove),
+        _ => None,
+    }
 }
 
 /// Apply a character-format JSON delta over `[start, end)`.
@@ -1143,6 +1455,25 @@ pub extern "C" fn tw_get_caret_format(
             return -2;
         };
         let Some(json) = session.caret_format_json(run_id) else {
+            return -3;
+        };
+        transfer_bytes_to_caller(json.into_bytes(), out_ptr, out_len);
+        0
+    })
+}
+
+/// JSON array of outline entries: `{ paragraph_id, level, text, run_id, page }`.
+#[no_mangle]
+pub extern "C" fn tw_get_document_outline(
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    guard_ffi(|| {
+        let guard = SESSION.lock();
+        let Some(session) = guard.as_ref() else {
+            return -1;
+        };
+        let Some(json) = session.document_outline_json() else {
             return -3;
         };
         transfer_bytes_to_caller(json.into_bytes(), out_ptr, out_len);
@@ -1359,10 +1690,492 @@ pub extern "C" fn tw_insert_table(rows: u32, cols: u32) -> i32 {
 }
 
 #[no_mangle]
+pub extern "C" fn tw_delete_table_row(caret_run_id: *const std::os::raw::c_char) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let caret = parse_node_id(caret_run_id);
+            let Some(request_id) = session.delete_table_row_at(caret) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_delete_table_column(caret_run_id: *const std::os::raw::c_char) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let caret = parse_node_id(caret_run_id);
+            let Some(request_id) = session.delete_table_column_at(caret) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_merge_table_cells(caret_run_id: *const std::os::raw::c_char) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let caret = parse_node_id(caret_run_id);
+            let Some(request_id) = session.merge_table_cells_at(caret) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_split_table_cell(caret_run_id: *const std::os::raw::c_char) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let caret = parse_node_id(caret_run_id);
+            let Some(request_id) = session.split_table_cell_at(caret) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+/// Set table border at caret. `width` <= 0 clears the border (F09.S4).
+#[no_mangle]
+pub extern "C" fn tw_set_table_border(
+    caret_run_id: *const std::os::raw::c_char,
+    width: f32,
+    color_r: u8,
+    color_g: u8,
+    color_b: u8,
+    color_a: u8,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let caret = parse_node_id(caret_run_id);
+            let border = if width > 0.0 {
+                Some(tw_model::BorderSpec {
+                    width,
+                    color: tw_model::Color {
+                        r: color_r,
+                        g: color_g,
+                        b: color_b,
+                        a: color_a,
+                    },
+                })
+            } else {
+                None
+            };
+            let Some(request_id) = session.set_table_border_at(caret, border) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+/// Set cell shading at caret. Pass `color_r` < 0 to clear (F09.S4).
+#[no_mangle]
+pub extern "C" fn tw_set_table_cell_shading(
+    caret_run_id: *const std::os::raw::c_char,
+    color_r: i32,
+    color_g: u8,
+    color_b: u8,
+    color_a: u8,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let caret = parse_node_id(caret_run_id);
+            let background = if color_r < 0 {
+                None
+            } else {
+                Some(tw_model::Color {
+                    r: color_r as u8,
+                    g: color_g,
+                    b: color_b,
+                    a: color_a,
+                })
+            };
+            let Some(request_id) = session.set_table_cell_shading_at(caret, background) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_resize_table_column(
+    caret_run_id: *const std::os::raw::c_char,
+    width: f32,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let caret = parse_node_id(caret_run_id);
+            let Some(request_id) = session.resize_table_column_at(caret, width) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_autofit_table(caret_run_id: *const std::os::raw::c_char) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let caret = parse_node_id(caret_run_id);
+            let Some(request_id) = session.autofit_table_at(caret) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_sort_table_rows(
+    caret_run_id: *const std::os::raw::c_char,
+    ascending: bool,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let caret = parse_node_id(caret_run_id);
+            let Some(request_id) = session.sort_table_rows_at(caret, ascending) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_insert_nested_table(
+    caret_run_id: *const std::os::raw::c_char,
+    rows: u32,
+    cols: u32,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let caret = parse_node_id(caret_run_id);
+            let Some(request_id) = session.insert_nested_table_at(caret, rows, cols) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_insert_table_sum_field(caret_run_id: *const std::os::raw::c_char) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let caret = parse_node_id(caret_run_id);
+            let Some(request_id) = session.insert_table_sum_field_at(caret) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
 pub extern "C" fn tw_insert_image(width: f32, height: f32) -> i32 {
     guard_ffi(|| {
         with_session(|session| {
             let Some(request_id) = session.insert_image(width, height) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_insert_shape(shape_type: i32) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let kind = match shape_type {
+                0 => tw_model::ShapeKind::Rectangle,
+                1 => tw_model::ShapeKind::Line,
+                2 => tw_model::ShapeKind::Ellipse,
+                3 => tw_model::ShapeKind::TextBox,
+                4 => tw_model::ShapeKind::WordArt,
+                _ => tw_model::ShapeKind::Other,
+            };
+            let Some(request_id) = session.insert_shape(kind) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_insert_text_box() -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(request_id) = session.insert_text_box() else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_insert_word_art(text_ptr: *const c_char) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            if text_ptr.is_null() {
+                return -3;
+            }
+            let text = unsafe { CStr::from_ptr(text_ptr) }
+                .to_string_lossy()
+                .into_owned();
+            let Some(request_id) = session.insert_word_art(text) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_insert_diagram() -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(request_id) = session.insert_diagram() else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_insert_chart() -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(request_id) = session.insert_chart() else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_insert_image_bytes(
+    data: *const u8,
+    len: usize,
+    mime_ptr: *const c_char,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            if data.is_null() || len == 0 {
+                return -3;
+            }
+            let bytes = unsafe { std::slice::from_raw_parts(data, len) }.to_vec();
+            let mime = if mime_ptr.is_null() {
+                String::new()
+            } else {
+                unsafe { CStr::from_ptr(mime_ptr) }
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            let Some(request_id) = session.insert_image_bytes(bytes, mime) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_set_image_size(
+    image_id_ptr: *const c_char,
+    width: f32,
+    height: f32,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(image_id) = parse_node_id(image_id_ptr) else {
+                return -2;
+            };
+            if width <= 0.0 || height <= 0.0 {
+                return -3;
+            }
+            let Some(request_id) = session.set_image_size(image_id, width, height) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_replace_image_bytes(
+    image_id_ptr: *const c_char,
+    data: *const u8,
+    len: usize,
+    mime_ptr: *const c_char,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(image_id) = parse_node_id(image_id_ptr) else {
+                return -2;
+            };
+            if data.is_null() || len == 0 {
+                return -3;
+            }
+            let bytes = unsafe { std::slice::from_raw_parts(data, len) }.to_vec();
+            let mime = if mime_ptr.is_null() {
+                String::new()
+            } else {
+                unsafe { CStr::from_ptr(mime_ptr) }
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            let Some(request_id) = session.replace_image_bytes(image_id, bytes, mime) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_set_image_wrap(image_id_ptr: *const c_char, wrap: u8) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(image_id) = parse_node_id(image_id_ptr) else {
+                return -2;
+            };
+            let Some(wrap) = text_wrap_from_u8(wrap) else {
+                return -3;
+            };
+            let Some(request_id) = session.set_image_wrap(image_id, wrap) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_set_image_anchor(
+    image_id_ptr: *const c_char,
+    x: f32,
+    y: f32,
+    origin_x: u8,
+    origin_y: u8,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(image_id) = parse_node_id(image_id_ptr) else {
+                return -2;
+            };
+            let Some(origin_x) = anchor_origin_from_u8(origin_x) else {
+                return -3;
+            };
+            let Some(origin_y) = anchor_origin_from_u8(origin_y) else {
+                return -3;
+            };
+            let Some(request_id) = session.set_image_anchor(
+                image_id,
+                tw_model::ImageAnchor {
+                    x,
+                    y,
+                    origin_x,
+                    origin_y,
+                },
+            ) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+fn text_wrap_from_u8(value: u8) -> Option<tw_model::TextWrap> {
+    match value {
+        0 => Some(tw_model::TextWrap::Inline),
+        1 => Some(tw_model::TextWrap::Square),
+        2 => Some(tw_model::TextWrap::TopBottom),
+        3 => Some(tw_model::TextWrap::Behind),
+        4 => Some(tw_model::TextWrap::InFront),
+        _ => None,
+    }
+}
+
+fn anchor_origin_from_u8(value: u8) -> Option<tw_model::AnchorOrigin> {
+    match value {
+        0 => Some(tw_model::AnchorOrigin::Column),
+        1 => Some(tw_model::AnchorOrigin::Page),
+        2 => Some(tw_model::AnchorOrigin::Margin),
+        _ => None,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn tw_set_image_transform(
+    image_id_ptr: *const c_char,
+    rotation_deg: f32,
+    crop_left: f32,
+    crop_top: f32,
+    crop_right: f32,
+    crop_bottom: f32,
+    opacity: f32,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(image_id) = parse_node_id(image_id_ptr) else {
+                return -2;
+            };
+            let transform = tw_model::ImageTransform {
+                rotation_deg,
+                crop_left,
+                crop_top,
+                crop_right,
+                crop_bottom,
+                opacity,
+            };
+            let Some(request_id) = session.set_image_transform(image_id, transform) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_insert_image_caption(image_id_ptr: *const c_char) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(image_id) = parse_node_id(image_id_ptr) else {
+                return -2;
+            };
+            let Some(request_id) = session.insert_image_caption(image_id) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_compress_image(image_id_ptr: *const c_char, quality: u8) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(image_id) = parse_node_id(image_id_ptr) else {
+                return -2;
+            };
+            if quality == 0 {
+                return -3;
+            }
+            let Some(request_id) = session.compress_image(image_id, quality) else {
                 return -4;
             };
             finish_edit_enqueue(request_id)

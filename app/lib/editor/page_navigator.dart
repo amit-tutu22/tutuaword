@@ -17,7 +17,7 @@ class PageNavigator extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 120,
+      width: double.infinity,
       color: Theme.of(context).colorScheme.surfaceContainerHighest,
       child: ListView.builder(
         padding: const EdgeInsets.all(8),

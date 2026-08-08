@@ -7,14 +7,18 @@ class ViewController extends ChangeNotifier {
   bool _printPreview = false;
   bool _showRuler = false;
   bool _showNavigationPane = false;
+  bool _showStyleInspector = false;
   String _statusSuffix = '';
+  int? _scrollRequestPage;
 
   double get zoom => _zoom;
   int get currentPage => _currentPage;
   bool get printPreview => _printPreview;
   bool get showRuler => _showRuler;
   bool get showNavigationPane => _showNavigationPane;
+  bool get showStyleInspector => _showStyleInspector;
   String get statusSuffix => _statusSuffix;
+  int? get scrollRequestPage => _scrollRequestPage;
 
   void setStatusSuffix(String value) {
     _statusSuffix = value;
@@ -53,6 +57,22 @@ class ViewController extends ChangeNotifier {
   void toggleNavigationPane() {
     _showNavigationPane = !_showNavigationPane;
     notifyListeners();
+  }
+
+  void toggleStyleInspector() {
+    _showStyleInspector = !_showStyleInspector;
+    notifyListeners();
+  }
+
+  void requestScrollToPage(int page) {
+    _scrollRequestPage = page;
+    notifyListeners();
+  }
+
+  int? takeScrollRequest() {
+    final page = _scrollRequestPage;
+    _scrollRequestPage = null;
+    return page;
   }
 
   void reset() {

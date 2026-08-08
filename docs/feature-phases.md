@@ -252,7 +252,7 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 | `U-F03-S1-bold-merge-runs` | Unit | Adjacent same-format runs merge |
 | `I-F03-S1-font-size-caret-end` | Integration | Ribbon font size at run end applies |
 
-**Tests:** `crates/tw-edit/tests/f03_s1_core_formatting.rs`, `app/test/f03_s1_core_formatting_test.dart`
+**Tests:** `crates/tw-edit/tests/f03_s1_core_formatting.rs`, `app/test/f03_s1_core_formatting_test.dart`, `app/test/f03_s1_underline_test.dart`
 
 **Exit:** Met for B/I/U/font/size/strike/super/sub.
 
@@ -304,9 +304,9 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 | Capability | Status |
 |------------|--------|
 | Align L/C/R/J, indent | Implemented |
-| Line/para spacing, tabs | Partial |
-| Borders, shading | Missing |
-| keepNext, widow/orphan | Partial (layout; no UI) |
+| Line/para spacing, tabs | Partial (spacing + tab-stop UI done) |
+| Borders, shading | Implemented |
+| keepNext, widow/orphan | Implemented (layout + UI) |
 
 **Dependencies:** F07 (sections), F05 (list indents).
 
@@ -316,7 +316,7 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 |---------|------|------|
 | `I-F04-S1-alignment-buttons` | Integration | Home alignment updates layout |
 
-### F04.S2 — Spacing UI
+### F04.S2 — Spacing UI (complete)
 
 **Deliverables:** Line spacing single/1.5/double/exact; space before/after.
 
@@ -325,7 +325,11 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 | `U-F04-S2-line-rule-exact` | Unit | `w:lineRule` exact twips in layout |
 | `I-F04-S2-spacing-dialog` | Integration | Paragraph dialog applies spacing |
 
-### F04.S3 — Tab stops editor
+**Tests:** `crates/tw-layout/tests/f04_s2_line_rule_exact.rs`, `app/test/f04_s2_spacing_dialog_test.dart`
+
+**Exit:** Exact line rule fixes laid-out `line_height` in points; Home Paragraph Spacing dialog applies Single / 1.5 / Double / Exactly plus space before/after via `SetParaFormatRange`. Rust tests assert ±0.01 pt exact height and a 36 pt combined space delta; Flutter covers Double, Exactly, and 1.5× encoding.
+
+### F04.S3 — Tab stops editor (complete)
 
 **Deliverables:** UI to add/remove tab stops; Tab key uses stops (F02).
 
@@ -333,7 +337,11 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 |---------|------|------|
 | `U-F04-S3-custom-tab-stop` | Unit | `explicit_tab_stops.rs` layout test |
 
-### F04.S4 — Borders, shading, pagination flags
+**Tests:** `crates/tw-layout/tests/explicit_tab_stops.rs`, `app/test/f04_s3_tab_stops_dialog_test.dart`
+
+**Exit:** Explicit `ParaFormat.tab_stops` override the default tab grid in layout; Layout → Tabs dialog add/remove/clear applies via `SetParaFormatRange` (`Some([])` clears). Rust tests pin tab x within ±2 pt of the stop; Flutter asserts alignment round-trip.
+
+### F04.S4 — Borders, shading, pagination flags (complete)
 
 **Deliverables:** Para borders/shading on model + layout; keep/widow UI toggles.
 
@@ -341,6 +349,10 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 |---------|------|------|
 | `U-F04-S4-keep-together-no-split` | Unit | Layout keeps para on one page |
 | `U-F04-S4-widow-orphan` | Unit | Two-line para split respects widow |
+
+**Tests:** `crates/tw-layout/tests/f04_s4_pagination_flags.rs`, `app/test/f04_s4_borders_pagination_test.dart`
+
+**Exit:** Paragraph shading/borders emit `LayoutBox::Rect` before text lines; keep-together and widow/orphan pagination enforced with positive/negative controls; Home dialogs toggle pagination flags and borders/shading. Rust tests assert page-fill remainder, rect paint order, and four border strokes.
 
 ---
 
@@ -353,36 +365,48 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 | Capability | Status |
 |------------|--------|
 | Bullet / numbered | Implemented |
-| Multi-level, custom, restart | Partial |
-| Outline | Missing |
+| Multi-level, restart | Implemented |
+| Outline numbering | Implemented |
+| Custom | Partial |
+| Outline (F19 nav) | Partial |
+
+**Exit:** List level indents use ±0.01 pt position and ±2 pt hanging tolerances; restart markers reset counters with double-restart controls; numbered lists sync `outline_level` while bullets stay out of the outline; DOCX round-trips `numRestart` and `outlineLvl`; Flutter tests assert engine para format, non-list Tab fallback, max-level no-op, and outline navigation.
 
 ### F05.S1 — Basic lists (complete)
 
 | Test ID | Type | Spec |
 |---------|------|------|
 | `U-F05-S1-lvltext-roundtrip` | Unit | `tier_a_numbering_styles.rs` |
-| `I-F05-S1-bullet-toggle` | Integration | Home bullet list |
+| `I-F05-S1-bullet-toggle` | Integration | `f05_s1_bullet_toggle_test.dart` |
 
-### F05.S2 — Multi-level and Tab promote/demote
+### F05.S2 — Multi-level and Tab promote/demote (complete)
 
 **Deliverables:** Increase/decrease list level; Tab/Shift+Tab on list items.
 
 | Test ID | Type | Spec |
 |---------|------|------|
-| `U-F05-S2-level-indent` | Unit | Level 1 hanging indent layout |
-| `I-F05-S2-promote-demote` | Integration | Tab changes ilvl |
+| `U-F05-S2-level-indent` | Unit | `f05_s2_level_indent.rs` |
+| `I-F05-S2-promote-demote` | Integration | `f05_s2_promote_demote_test.dart` |
 
-### F05.S3 — Restart and continue numbering
+### F05.S3 — Restart and continue numbering (complete)
 
 **Deliverables:** Commands `RestartNumbering`, `ContinueNumbering`; DOCX `w:numRestart`.
 
 | Test ID | Type | Spec |
 |---------|------|------|
-| `U-F05-S3-restart-counter` | Unit | Counter resets at marker |
+| `U-F05-S3-restart-counter` | Unit | `f05_s3_restart_counter.rs` |
+| `I-F05-S3-restart-continue` | Integration | `f05_s3_restart_continue_test.dart` |
+| `U-F05-S3-list-restart-cmd` | Unit | `f05_s3_list_restart.rs` |
+| `U-F05-DOCX-list-props` | Unit | `f05_list_properties.rs` |
 
-### F05.S4 — Outline numbering
+### F05.S4 — Outline numbering (complete)
 
 **Deliverables:** Link to `outline_level` on para format; nav outline (F19).
+
+| Test ID | Type | Spec |
+|---------|------|------|
+| `U-F05-S4-outline-level` | Unit | `f05_s4_outline_level.rs` |
+| `I-F05-S4-outline-nav` | Integration | `f05_s4_outline_nav_test.dart` |
 
 ---
 
@@ -394,42 +418,55 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 | Capability | Status |
 |------------|--------|
-| Normal, Heading 1 | Implemented |
-| H2–9, Quote, Caption | Missing |
-| Custom, themes, inspector | Partial / Stub |
+| Normal, Heading 1–9, Quote, Caption | Implemented |
+| Custom styles (create/rename/delete, DOCX) | Implemented |
+| Themes (Design gallery) | Implemented |
+| Style inspector | Implemented |
 
-### F06.S1 — Built-in paragraph styles
+**Exit (S1):** Built-in paragraph styles ship in `StyleSheet::with_defaults` with Heading 2–9 chained via `based_on`; styles gallery applies resolved format through `applyParagraphStyle`; unit test verifies H3 inherits the H2→H1 chain.
+
+**Exit (S2):** User paragraph styles can be created, renamed, and deleted via edit commands; built-ins are protected; export regenerates `word/styles.xml` when the style catalog changes.
+
+**Exit (S3):** Built-in Office/Facet/Ion themes apply via Design tab; `resolve_theme_fonts` substitutes `+major*`/`+minor*` references; `resolve_theme_colors` re-resolves theme-linked run colors from accent/text/background slots; undo restores the prior theme name.
+
+**Exit (S4):** Styles Pane toggles a right-side inspector showing paragraph style plus direct character overrides at the caret (`Heading 1 + Bold direct`).
+
+### F06.S1 — Built-in paragraph styles (complete)
 
 **Deliverables:** Add H2–H9, Quote, Caption to `StyleSheet::with_defaults`; gallery entries.
 
 | Test ID | Type | Spec |
 |---------|------|------|
-| `U-F06-S1-resolve-based-on` | Unit | H3 inherits H2 chain |
-| `I-F06-S1-apply-heading-style` | Integration | Styles gallery applies size |
+| `U-F06-S1-resolve-based-on` | Unit | H3 inherits H2 chain — `f06_s1_builtin_styles.rs` |
+| `I-F06-S1-apply-heading-style` | Integration | Styles gallery applies size — `f06_s1_apply_heading_style_test.dart` |
 
-### F06.S2 — Custom styles
+### F06.S2 — Custom styles (complete)
 
 **Deliverables:** Create/rename/delete user styles; save in DOCX `styles.xml`.
 
 | Test ID | Type | Spec |
 |---------|------|------|
-| `U-F06-S2-custom-style-roundtrip` | Unit | Export/import custom style id |
+| `U-F06-S2-custom-style-roundtrip` | Unit | Export/import custom style id — `f06_s2_custom_style_roundtrip.rs`, `f06_s2_custom_styles.rs` |
 
-### F06.S3 — Themes
+### F06.S3 — Themes (complete)
 
 **Deliverables:** Apply document theme colors/fonts from Design tab.
 
 | Test ID | Type | Spec |
 |---------|------|------|
-| `U-F06-S3-theme-font-resolve` | Unit | `resolve_theme_fonts` |
+| `U-F06-S3-theme-font-resolve` | Unit | `resolve_theme_fonts` — `f06_s3_theme_font_resolve.rs`, `f06_s3_document_theme.rs` |
+| `U-F06-S3-theme-color-resolve` | Unit | Theme slot recolor on theme change — `f06_s3_theme_color_resolve.rs` |
+| `I-F06-S3-design-tab` | Integration | Design gallery applies theme — `f06_s3_design_theme_test.dart` |
+| `I-F06-S3-theme-color` | Integration | Theme accent color follows theme switch — `f06_s3_theme_color_test.dart` |
 
-### F06.S4 — Style inspector
+### F06.S4 — Style inspector (complete)
 
 **Deliverables:** Pane showing resolved format at caret (direct + style + defaults).
 
 | Test ID | Type | Spec |
 |---------|------|------|
-| `I-F06-S4-inspector-shows-source` | Integration | Toggle shows "Heading 1 + Bold direct" |
+| `U-F06-S4-inspector-shows-source` | Unit | Style vs direct labels — `f06_s4_style_inspector.rs` |
+| `I-F06-S4-inspector-shows-source` | Integration | Toggle shows "Heading 1 + Bold direct" — `f06_s4_style_inspector_test.dart` |
 
 ---
 
@@ -441,36 +478,58 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 | Capability | Status |
 |------------|--------|
-| Page break | Partial (wired) |
-| Margins, size, orientation, columns | Stub / Partial |
-| Watermark, line numbers | Missing / Stub |
+| Page break | Done (Insert tab) |
+| Section break (next page) | Done (F07.S2) |
+| Margins, size, orientation | Done (F07.S1) |
+| Columns | Done (F07.S3) |
+| Watermark, line numbers | Done (F07.S4) |
 
-### F07.S1 — Margins, size, orientation UI
+### F07.S1 — Margins, size, orientation UI (complete)
 
 **Deliverables:** Layout tab controls → `SectionFormat`.
 
 | Test ID | Type | Spec |
 |---------|------|------|
-| `U-F07-S1-landscape-swaps-dimensions` | Unit | Layout page width/height swap |
-| `I-F07-S1-margin-preset` | Integration | Narrow margin reflows text |
+| `U-F07-S1-landscape-swaps-dimensions` | Unit | Layout page width/height swap — `f07_s1_page_setup.rs` |
+| `U-F07-S1-set-section-format` | Unit | Margins undo — `f07_s1_section_format.rs` |
+| `I-F07-S1-margin-preset` | Integration | Narrow margin reflows text — `f07_s1_page_setup_test.dart` |
 
-### F07.S2 — Section and page breaks
+### F07.S2 — Section and page breaks (complete)
 
 **Deliverables:** Section break (next page); page break (done).
 
 | Test ID | Type | Spec |
 |---------|------|------|
-| `U-F07-S2-section-format-per-section` | Unit | Multi-section document model |
+| `U-F07-S2-section-format-per-section` | Unit | Multi-section document model — `f07_s2_section_break.rs`, `f07_s2_section_format_per_section.rs` |
+| `I-F07-S2-section-break` | Integration | Layout tab inserts section break — `f07_s2_section_break_test.dart` |
 
-### F07.S3 — Columns
+### F07.S3 — Columns (complete)
 
 **Deliverables:** 1–3 column layout in engine.
 
-### F07.S4 — Watermark, page color, line numbers
+| Test ID | Type | Spec |
+|---------|------|------|
+| `U-F07-S3-two-columns-balanced-flow` | Unit | Text flows column 1 then column 2 — `f07_s3_columns.rs` |
+| `U-F07-S3-three-columns-narrower-width` | Unit | Line width fits column — `f07_s3_columns.rs` |
+| `I-F07-S3-columns` | Integration | Layout tab applies Two columns — `f07_s3_columns_test.dart` |
+
+### F07.S4 — Watermark, page color, line numbers (complete)
 
 **Deliverables:** Background watermark rect; line number gutter.
 
 **Out of scope:** Full Word art watermark behind text (use F11/F10).
+
+| Test ID | Type | Spec |
+|---------|------|------|
+| `U-F07-S4-page-color-rect` | Unit | Full-page color rect — `f07_s4_page_decorations.rs` |
+| `U-F07-S4-watermark-background` | Unit | Watermark rect + text — `f07_s4_page_decorations.rs` |
+| `U-F07-S4-line-number-gutter` | Unit | One gutter label per body line — `f07_s4_page_decorations.rs` |
+| `U-F07-S4-line-numbers-continue` | Unit | Numbering continues on page 2 — `f07_s4_page_decorations.rs` |
+| `U-F07-S4-set-page-color-and-watermark` | Unit | Section format patch — `f07_s4_section_decorations.rs` |
+| `U-F07-S4-decorations-preserve-header` | Unit | Header text survives decoration patch — `f07_s4_section_decorations.rs` |
+| `I-F07-S4-watermark` | Integration | Design tab watermark apply/remove — `f07_s4_page_decorations_test.dart` |
+| `I-F07-S4-page-color` | Integration | Page color apply/clear — `f07_s4_page_decorations_test.dart` |
+| `I-F07-S4-line-numbers` | Integration | Layout tab line numbers toggle — `f07_s4_page_decorations_test.dart` |
 
 ---
 
@@ -483,11 +542,18 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 | Capability | Status |
 |------------|--------|
 | Import/layout HF blocks | Partial |
-| Insert UI, page fields | Stub / Missing |
+| Edit header/footer body | Done (F08.S1) |
+| Insert UI, page fields | Done (F08.S2) |
+| First page / odd-even | Done (F08.S3) |
+| Section-specific HF | Done (F08.S4) |
+
+**Exit (S1):** Insert→Header/Footer ensures a default band with an editable empty paragraph; `InsertText` targets header/footer runs via `RunLocation`; layout places header lines in the top margin band; `.twdoc` round-trip preserves typed header text.
+
+**Exit (S2):** `InsertField` stores PAGE/DATE field runs; layout evaluates them per page via `FieldEvalContext`; Insert→Page Number inserts a PAGE field at the caret.
 
 **Dependencies:** F07 (sections), F16 (PAGE field).
 
-### F08.S1 — Edit header/footer body
+### F08.S1 — Edit header/footer body (complete)
 
 **Deliverables:** Insert→Header/Footer opens editable region; layout reserves margin band.
 
@@ -496,7 +562,7 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 | `U-F08-S1-header-blocks-layout` | Unit | Header lines in `PageLayout` |
 | `I-F08-S1-edit-header` | Integration | Type in header survives save |
 
-### F08.S2 — Page number and date fields
+### F08.S2 — Page number and date fields (complete)
 
 **Deliverables:** Insert PAGE, DATE field codes; evaluate on layout.
 
@@ -504,13 +570,29 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 |---------|------|------|
 | `U-F08-S2-page-field-increments` | Unit | Page 2 shows "2" |
 
-### F08.S3 — First page / odd-even
+### F08.S3 — First page / odd-even (complete)
 
 **Deliverables:** Model flags; export `w:titlePg`, `w:evenAndOddHeaders`.
 
-### F08.S4 — Section-specific HF
+| Test ID | Type | Spec |
+|---------|------|------|
+| `U-F08-S3-first-page-header` | Unit | Page 1 uses First variant when `different_first_page` |
+| `U-F08-S3-odd-even-headers` | Unit | Odd/even pages use distinct header bands |
+| `U-F08-S3-export-flags` | Unit | DOCX round-trip preserves titlePg and evenAndOddHeaders |
+
+**Exit (S3):** `SectionFormat.different_first_page` and `DocumentSettings.even_and_odd_headers` drive layout variant selection; Insert tab toggles First Page / Odd & Even; export emits OOXML flags.
+
+### F08.S4 — Section-specific HF (complete)
 
 **Deliverables:** Per-section HF blocks linked/unlinked.
+
+| Test ID | Type | Spec |
+|---------|------|------|
+| `U-F08-S4-linked-inherits-previous` | Unit | Linked section 2 shows section 1 header |
+| `U-F08-S4-unlinked-distinct-header` | Unit | Unlinked section shows its own header |
+| `U-F08-S4-linked-export` | Unit | Linked section omits `w:headerReference` |
+
+**Exit (S4):** New sections default to link-to-previous; `SetHeaderFooterLink` toggles per variant; layout resolves headers through the link chain; opening a linked band auto-unlinks and copies content; export skips header refs for linked sections.
 
 ---
 
@@ -522,17 +604,27 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 | Capability | Status |
 |------------|--------|
-| Insert | Implemented |
-| Merge command | Partial (no UI) |
-| Delete row/col, split, sort, formulas | Missing |
+| Insert | Done (F09.S1) |
+| Delete row/column | Done (F09.S2) |
+| Merge / split cells | Done (F09.S3) |
+| Borders, shading, AutoFit | Done (F09.S4) |
+| Sort, formulas, nested | Done (F09.S5) |
 
 ### F09.S1 — Insert (complete)
 
+**Deliverables:** Insert tab → Table inserts a 3×3 table after the current block via `InsertTable` command.
+
 | Test ID | Type | Spec |
 |---------|------|------|
-| `I-F09-S1-insert-3x3` | Integration | Insert tab → table in doc |
+| `U-F09-S1-insert-3x3` | Unit | 3×3 table block after paragraph; undo removes it |
+| `U-F09-S1-table-layout` | Unit | Layout produces 9 cells and grid lines |
+| `I-F09-S1-insert-3x3` | Integration | Insert tab → Table in doc |
 
-### F09.S2 — Row/column delete
+**Tests:** `crates/tw-edit/tests/f09_s1_insert_table.rs`, `crates/tw-layout/tests/f09_s1_table_layout.rs`, `app/test/f09_s1_insert_table_test.dart`
+
+**Exit:** Insert→Table enqueues `InsertTable { rows: 3, cols: 3 }`; document gains a table block; layout renders a 3×3 grid; mock/native round-trip preserves table dimensions.
+
+### F09.S2 — Row/column delete (complete)
 
 **Deliverables:** `DeleteTableRow`, `DeleteTableColumn` commands + FFI + Layout tab.
 
@@ -541,23 +633,57 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 | `U-F09-S2-delete-row` | Unit | Row count decreases; undo |
 | `I-F09-S2-delete-row-ui` | Integration | Layout→Delete Row |
 
-### F09.S3 — Merge and split
+**Tests:** `crates/tw-edit/tests/f09_s2_delete_row.rs`, `app/test/f09_s2_delete_row_test.dart`
 
-**Deliverables:** Wire existing `MergeTableCells`; add split cell command.
+**Exit:** Caret in table cell → Layout→Delete Row/Column removes one row or column; undo restores; last row/column cannot be deleted.
+
+### F09.S3 — Merge and split (complete)
+
+**Deliverables:** Wire existing `MergeTableCells`; add `SplitTableCell` command + Layout tab.
 
 | Test ID | Type | Spec |
 |---------|------|------|
-| `U-F09-S3-merge-cells-span` | Unit | colspan/rowspan layout |
+| `U-F09-S3-merge-cells-span` | Unit | colspan/rowspan on model and layout |
+| `I-F09-S3-merge-cells` | Integration | Layout→Merge Cells / Split Cell |
 
-### F09.S4 — Borders, shading, AutoFit
+**Tests:** `crates/tw-edit/tests/f09_s3_merge_split.rs`, `crates/tw-layout/tests/f09_s3_merge_cells_layout.rs`, `app/test/f09_s3_merge_split_test.dart`
 
-**Deliverables:** Table design UI; column width drag (partial exists).
+**Exit:** Caret in table cell → Merge Cells combines with the cell to the right; Split Cell resets colspan/rowspan to 1; layout renders merged span width; undo restores prior span.
 
-### F09.S5 — Sort, formulas, nested (advanced)
+### F09.S4 — Borders, shading, AutoFit (complete)
 
-**Deliverables:** Sort table by column; simple SUM formula; nested table in cell layout.
+**Deliverables:** Table design dialog; `SetTableBorder`, `SetTableCellShading`, `AutoFitTable`, `ResizeTableColumn` wired through FFI + Layout tab.
 
-**Out of scope:** Excel-style formula engine — minimal field calc only.
+| Test ID | Type | Spec |
+|---------|------|------|
+| `U-F09-S4-set-table-border` | Unit | Table border on model; undo |
+| `U-F09-S4-cell-shading` | Unit | Cell background on model; undo |
+| `U-F09-S4-resize-column` | Unit | Column width change; undo |
+| `U-F09-S4-autofit-to-window` | Unit | Column widths scale to content width; undo |
+| `U-F09-S4-table-border-layout` | Unit | Layout grid lines reflect border |
+| `U-F09-S4-cell-shading-layout` | Unit | Layout cell background ARGB |
+| `I-F09-S4-table-design-ui` | Integration | Layout→Table Design dialog |
+
+**Tests:** `crates/tw-edit/tests/f09_s4_table_design.rs`, `crates/tw-layout/tests/f09_s4_table_design_layout.rs`, `app/test/f09_s4_table_design_test.dart`
+
+**Exit:** Caret in table cell → Layout→Table Design sets border/shading/column width; AutoFit scales columns to page content width; layout renders borders and cell shading; undo restores prior format.
+
+### F09.S5 — Sort, formulas, nested (complete)
+
+**Deliverables:** Sort table by column; `=SUM(ABOVE)` field; nested table in cell layout.
+
+| Test ID | Type | Spec |
+|---------|------|------|
+| `U-F09-S5-sort-rows-asc` | Unit | Rows reorder by column; header preserved; undo |
+| `U-F09-S5-insert-sum-field` | Unit | `TableSumAbove` field run at caret |
+| `U-F09-S5-insert-nested-table` | Unit | Nested `Block::Table` in cell; undo |
+| `U-F09-S5-nested-table-layout` | Unit | Layout cell has `nested_tables` slice |
+| `U-F09-S5-sum-field-layout` | Unit | SUM field renders total above |
+| `I-F09-S5-sort-table` | Integration | Layout→Sort A→Z |
+
+**Tests:** `crates/tw-edit/tests/f09_s5_sort_formula_nested.rs`, `crates/tw-layout/tests/f09_s5_nested_sum_layout.rs`, `app/test/f09_s5_sort_formula_nested_test.dart`
+
+**Exit:** Caret in table → Sort A→Z reorders data rows; Sum Formula inserts `=SUM(ABOVE)`; Nested Table adds 2×2 inside cell; layout renders nested grid and computed sum.
 
 ---
 
@@ -569,34 +695,56 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 | Capability | Status |
 |------------|--------|
-| Insert | Partial (placeholder bytes) |
-| Wrap/anchor layout | Partial |
-| Crop, rotate, caption | Missing |
+| Insert | **Done** (F10.S1 — file picker, PNG/JPEG/SVG bytes) |
+| Wrap/anchor layout | **Done** (F10.S3) |
+| Resize/replace | **Done** (F10.S2) |
+| Crop, rotate, caption, compress | **Done** (F10.S4) |
 
-### F10.S1 — Real image insert
+### F10.S1 — Real image insert ✅
 
 **Deliverables:** File picker → PNG/JPEG/SVG bytes in model; display list image batch.
 
-| Test ID | Type | Spec |
-|---------|------|------|
-| `U-F10-S1-import-png-bytes` | Unit | DOCX image round-trip bytes |
-| `I-F10-S1-insert-picture` | Integration | Insert→Picture from file |
+| Test ID | Type | Spec | Status |
+|---------|------|------|--------|
+| `U-F10-S1-import-png-bytes` | Unit | DOCX image round-trip bytes | ✅ `f10_s1_import_png_bytes.rs` |
+| `I-F10-S1-insert-picture` | Integration | Insert→Picture from file | ✅ `f10_s1_insert_picture_test.dart` |
 
-### F10.S2 — Resize and replace
+### F10.S2 — Resize and replace ✅
 
 **Deliverables:** Drag handles; replace image keeps wrap.
 
-### F10.S3 — Wrap and position
+| Test ID | Type | Spec | Status |
+|---------|------|------|--------|
+| `U-F10-S2-set-image-size` | Unit | `display_width/height` change + undo | ✅ `f10_s2_resize_replace.rs` |
+| `U-F10-S2-replace-bytes-keeps-wrap` | Unit | Replace bytes; wrap/anchor preserved | ✅ `f10_s2_resize_replace.rs` |
+| `U-F10-S2-layout-reflow` | Unit | Layout box reflects new size | ✅ `f10_s2_image_resize_layout.rs` |
+| `I-F10-S2-resize-drag` | Integration | Drag handle → size command | ✅ `f10_s2_resize_replace_test.dart` |
+| `I-F10-S2-replace-picture` | Integration | Replace via engine | ✅ `f10_s2_resize_replace_test.dart` |
+
+### F10.S3 — Wrap and position ✅
 
 **Deliverables:** Square/inline/behind; anchor UI.
 
-| Test ID | Type | Spec |
-|---------|------|------|
-| `U-F10-S3-square-wrap-reflow` | Unit | `image_placement.rs` |
+| Test ID | Type | Spec | Status |
+|---------|------|------|--------|
+| `U-F10-S3-square-wrap-reflow` | Unit | `image_placement.rs` | ✅ `image_placement.rs` |
+| `U-F10-S3-set-image-wrap` | Unit | Wrap/anchor commands + undo | ✅ `f10_s3_wrap_anchor.rs` |
+| `I-F10-S3-wrap-square` | Integration | Layout tab → square wrap | ✅ `f10_s3_wrap_position_test.dart` |
+| `I-F10-S3-move-image` | Integration | Drag image → anchor command | ✅ `f10_s3_wrap_position_test.dart` |
 
-### F10.S4 — Crop, rotate, compress, caption, transparency
+### F10.S4 — Crop, rotate, compress, caption, transparency ✅
 
 **Deliverables:** Model transform; caption paragraph linked; optional re-encode.
+
+| Test ID | Type | Spec | Status |
+|---------|------|------|--------|
+| `U-F10-S4-set-image-transform` | Unit | Transform + crop + undo | ✅ `f10_s4_transform_caption.rs` |
+| `U-F10-S4-insert-image-caption` | Unit | Caption paragraph linked | ✅ `f10_s4_transform_caption.rs` |
+| `U-F10-S4-compress-image` | Unit | JPEG re-encode + undo | ✅ `f10_s4_transform_caption.rs` |
+| `U-F10-S4-display-list-transform` | Unit | Rotation/opacity/crop in v6 batch | ✅ `f10_s4_image_transform_display_list.rs` |
+| `I-F10-S4-rotate-picture` | Integration | Rotate → transform command | ✅ `f10_s4_transform_caption_test.dart` |
+| `I-F10-S4-insert-caption` | Integration | Insert caption via engine | ✅ `f10_s4_transform_caption_test.dart` |
+| `I-F10-S4-compress-picture` | Integration | Compress via engine | ✅ `f10_s4_transform_caption_test.dart` |
 
 ---
 
@@ -604,29 +752,38 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Scope:** Rectangle, circle, arrow, lines, callouts, freeform, text boxes, icons, WordArt.
 
-### Baseline status: **Missing** (Insert Shapes disabled; no `ShapeBlock`).
+### Baseline status: **Partial** (`ShapeBlock` import + placeholder render; insert disabled).
 
 **Dependencies:** F10 (drawing layer), `tw-render` paths.
 
-### F11.S1 — Preserved DrawingML (read-only)
+### F11.S1 — Preserved DrawingML (read-only) ✅
 
 **Deliverables:** Import `w:drawing` shapes as bounds + passthrough; placeholder render.
 
-| Test ID | Type | Spec |
-|---------|------|------|
-| `U-F11-S1-drawing-preserves-bytes` | Unit | Unmodified shape part in package |
+| Test ID | Type | Spec | Status |
+|---------|------|------|--------|
+| `U-F11-S1-drawing-preserves-bytes` | Unit | Unmodified shape part in package | ✅ `f11_s1_drawing_preserves_bytes.rs` |
+| `U-F11-S1-shape-placeholder-display-list` | Unit | Placeholder rect in display list | ✅ `f11_s1_shape_placeholder_display_list.rs` |
 
-### F11.S2 — Insert basic shapes
+### F11.S2 — Insert basic shapes ✅
 
 **Deliverables:** `ShapeBlock` model; rect, line, ellipse; stroke/fill.
 
-| Test ID | Type | Spec |
-|---------|------|------|
-| `U-F11-S2-shape-display-list` | Unit | Path batch contains shape |
+| Test ID | Type | Spec | Status |
+|---------|------|------|--------|
+| `U-F11-S2-shape-display-list` | Unit | Path batch contains shape | ✅ `f11_s2_shape_display_list.rs` |
+| `U-F11-S2-insert-shape` | Unit | Insert rect/line/ellipse + undo | ✅ `f11_s2_insert_shape.rs` |
+| `I-F11-S2-insert-rectangle` | Integration | Insert tab → rectangle | ✅ `f11_s2_insert_shape_test.dart` |
 
 ### F11.S3 — Text boxes and WordArt
 
 **Deliverables:** Shapes with embedded paragraph; simple WordArt text path.
+
+| Test ID | Type | Spec | Status |
+|---------|------|------|--------|
+| `U-F11-S3-text-box-paragraph` | Unit | Text box embeds paragraph + undo | ✅ `f11_s3_text_box_paragraph.rs` |
+| `U-F11-S3-word-art-display-list` | Unit | WordArt arc path + inner glyphs | ✅ `f11_s3_word_art_display_list.rs` |
+| `I-F11-S3-insert-text-box` | Integration | Insert tab → text box / WordArt | ✅ `f11_s3_insert_text_box_test.dart` |
 
 **Out of scope:** SmartArt (F12), freeform pen (later).
 
@@ -636,19 +793,35 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Scope:** SmartArt, flowcharts, process diagrams, hierarchy, org charts.
 
-### Baseline status: **Missing** (Tier C preserve only in spec).
+### Baseline status: **Partial** (Tier C passthrough, preview raster, insert placeholder).
 
-### F12.S1 — Preserve and placeholder
+### F12.S1 — Preserve and placeholder ✅
 
 **Deliverables:** `word/diagrams/*` passthrough; bounding box placeholder.
 
-| Test ID | Type | Spec |
-|---------|------|------|
-| `U-F12-S1-diagram-part-survives-save` | Unit | Package bytes unchanged |
+| Test ID | Type | Spec | Status |
+|---------|------|------|--------|
+| `U-F12-S1-diagram-part-survives-save` | Unit | Package bytes unchanged | ✅ `f12_s1_diagram_part_survives_save.rs` |
+| `U-F12-S1-diagram-placeholder-display-list` | Unit | Bounding box placeholder rect | ✅ `f12_s1_diagram_placeholder_display_list.rs` |
 
-### F12.S2 — Render static diagram (optional)
+### F12.S2 — Render static diagram (optional) ✅
 
 **Deliverables:** Raster fallback if EMF/PNG preview part exists.
+
+| Test ID | Type | Spec | Status |
+|---------|------|------|--------|
+| `U-F12-S2-diagram-preview-import` | Unit | PNG preview resolved from drawing part | ✅ `f12_s2_diagram_preview_import.rs` |
+| `U-F12-S2-diagram-preview-display-list` | Unit | Preview PNG in image batch | ✅ `f12_s2_diagram_preview_display_list.rs` |
+
+### F12.S3 — Insert placeholder and read-only selection ✅
+
+**Deliverables:** Insert SmartArt placeholder; centered label; read-only click selection.
+
+| Test ID | Type | Spec | Status |
+|---------|------|------|--------|
+| `U-F12-S3-insert-diagram` | Unit | Insert diagram block + undo | ✅ `f12_s3_insert_diagram.rs` |
+| `U-F12-S3-diagram-label-display-list` | Unit | SmartArt label + selection batch | ✅ `f12_s3_diagram_label_display_list.rs` |
+| `I-F12-S3-insert-smart-art` | Integration | Insert tab → SmartArt | ✅ `f12_s3_insert_smart_art_test.dart` |
 
 **Out of scope:** SmartArt editing (Tier C indefinitely).
 
@@ -658,21 +831,52 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Scope:** Bar, line, pie, area, scatter, radar, bubble, editable datasets.
 
-### Baseline status: **Missing**.
+### Baseline status: **Partial** (F13.S1–S3 preserve + static preview + editable data).
 
-### F13.S1 — Preserve chart parts
+### F13.S1 — Preserve chart parts ✅
 
-| Test ID | Type | Spec |
-|---------|------|------|
-| `U-F13-S1-chart-xml-passthrough` | Unit | `word/charts/chart1.xml` preserved |
+**Deliverables:** `word/charts/*` passthrough; bounding box placeholder.
 
-### F13.S2 — Static chart image
+| Test ID | Type | Spec | Status |
+|---------|------|------|--------|
+| `U-F13-S1-chart-xml-passthrough` | Unit | `word/charts/chart1.xml` preserved | ✅ `f13_s1_chart_xml_passthrough.rs` |
+
+### F13.S2 — Static chart image ✅
 
 **Deliverables:** Show embedded chart PNG if relationship exists.
 
-### F13.S3 — Editable chart data (future)
+| Test ID | Type | Spec | Status |
+|---------|------|------|--------|
+| `U-F13-S2-chart-preview-import` | Unit | PNG preview resolved from chart part | ✅ `f13_s2_chart_preview_import.rs` |
+| `U-F13-S2-chart-preview-display-list` | Unit | Preview PNG in image batch | ✅ `f13_s2_chart_preview_display_list.rs` |
 
-**Deliverables:** Minimal data table model — schedule after F13.S2.
+### F13.S3 — Editable chart data ✅
+
+**Deliverables:** Minimal data table model; insert chart; edit dataset; export round-trip.
+
+| Test ID | Type | Spec | Status |
+|---------|------|------|--------|
+| `U-F13-S3-insert-chart` | Unit | Insert chart block + undo | ✅ `f13_s3_insert_chart.rs` |
+| `U-F13-S3-set-chart-data` | Unit | SetChartData command + undo | ✅ `f13_s3_set_chart_data.rs` |
+| `U-F13-S3-chart-data-import` | Unit | Parse chart cache from chart part | ✅ `f13_s3_chart_data_import.rs` |
+| `U-F13-S3-chart-data-export` | Unit | Edited dataset in chart1.xml | ✅ `f13_s3_chart_data_export.rs` |
+| `U-F13-S3-chart-label-display-list` | Unit | Chart label + selection batch | ✅ `f13_s3_chart_label_display_list.rs` |
+| `I-F13-S3-insert-chart` | Integration | Insert tab → Chart | ✅ `f13_s3_insert_chart_test.dart` |
+
+### F12/F13 — Bugbot hardening ✅
+
+| Test ID | Type | Spec | Status |
+|---------|------|------|--------|
+| `U-F12-S2-diagram-preview-selection-batch` | Unit | Preview diagram in shape selection batch | ✅ `f12_s2_diagram_preview_selection_batch.rs` |
+| `U-F13-S2-chart-preview-selection-batch` | Unit | Preview chart in shape selection batch | ✅ `f13_s2_chart_preview_selection_batch.rs` |
+| `U-F12-S3-inserted-diagram-export` | Unit | Inserted SmartArt OPC round-trip | ✅ `f12_s3_inserted_diagram_export.rs` |
+| `U-F13-S3-multi-chart-content-types` | Unit | Per-chart content-type overrides | ✅ `f13_s3_multi_chart_content_types.rs` |
+| `I-F12-S2-diagram-preview-selection` | Integration | Preview tap → diagram selection | ✅ `f12_s2_diagram_preview_selection_test.dart` |
+| `I-F13-mixed-hit-test` | Integration | Shape vs image hit priority | ✅ `f13_mixed_hit_test_test.dart` |
+| `stress_multi_chart_export_ten` | Stress (`#[ignore]`) | Ten charts → OPC metadata | ✅ `stress/f13_multi_chart_export.rs` |
+| `stress_chart_passthrough_fifty_parts` | Stress (`#[ignore]`) | 50 chart parts byte-stable | ✅ `stress/f13_chart_passthrough_scale.rs` |
+| `stress_malformed_chart_*` | Stress (`#[ignore]`) | Malformed chart OPC resilience | ✅ `stress/f13_malformed_chart.rs` |
+| `stress_chart_data_churn` | Stress (`#[ignore]`) | 500× SetChartData → export round-trip | ✅ `tw-edit/tests/stress/f13_chart_data_churn.rs` |
 
 ---
 

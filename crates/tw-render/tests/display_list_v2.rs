@@ -96,7 +96,7 @@ fn multi_page_document_produces_per_page_display_lists() {
         assert!(!bytes.is_empty());
         let has_content = page.boxes.iter().any(|b| match b {
             LayoutBox::TextLine(l) => !l.glyphs.is_empty(),
-            LayoutBox::Table(_) | LayoutBox::Image(_) => true,
+            LayoutBox::Table(_) | LayoutBox::Image(_) | LayoutBox::Shape(_) => true,
             LayoutBox::Rect { .. } => true,
         });
         assert!(has_content || page.page_index > 0);

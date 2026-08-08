@@ -1,8 +1,14 @@
-use tw_layout::{LayoutBox, PageLayout, TextLine};
+use tw_layout::{LayoutBox, PageLayout, ShapeLayout, TableLayout, TextLine};
 use tw_shape::GlyphAtlas;
 
-/// v2 added path and image batches; v3 added encoded image payloads; v4 drops embedded atlas pixels.
-pub const DISPLAY_LIST_VERSION: u32 = 4;
+/// v2 added path and image batches; v3 added encoded image payloads; v4 drops embedded atlas pixels;
+/// v5 adds stable image block ids for selection/resize;
+/// v6 adds rotation, opacity, and crop metadata per image (F10.S4);
+/// v7 adds read-only shape selection bounds for SmartArt placeholders (F12.S3).
+pub const DISPLAY_LIST_VERSION: u32 = 7;
+
+/// ARGB fill for read-only imported shape placeholders (F11.S1).
+pub const SHAPE_PLACEHOLDER_COLOR: u32 = 0xFFD0DCE8;
 
 /// Separate atlas resource wire format version.
 pub const ATLAS_RESOURCE_VERSION: u32 = 1;
@@ -28,6 +34,7 @@ pub struct DisplayList {
     pub rect_batch: RectBatch,
     pub image_batch: ImageBatch,
     pub path_batch: PathBatch,
+    pub shape_selection_batch: ShapeSelectionBatch,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -48,15 +55,30 @@ pub struct ImageBatch {
     pub transforms: Vec<f32>,
     pub sizes: Vec<f32>,
     pub asset_ids: Vec<String>,
+    /// Block ids parallel to asset_ids (wire format v5+).
+    pub image_ids: Vec<String>,
     /// Source bytes (PNG, JPEG, ...) per image, decoded by the platform.
     /// Empty for an image whose asset could not be resolved.
     pub payloads: Vec<Vec<u8>>,
+    /// Clockwise rotation in degrees (wire format v6+).
+    pub rotations: Vec<f32>,
+    /// Opacity 0..1 (wire format v6+).
+    pub opacities: Vec<f32>,
+    /// Crop fractions l,t,r,b per image (wire format v6+).
+    pub crop_rects: Vec<f32>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct PathBatch {
     pub points: Vec<f32>,
     pub colors: Vec<u32>,
+}
+
+/// Read-only diagram/shape bounds for hit-testing (F12.S3).
+#[derive(Debug, Clone, Default)]
+pub struct ShapeSelectionBatch {
+    pub shape_ids: Vec<String>,
+    pub rects: Vec<f32>,
 }
 
 #[derive(Debug, Clone)]
@@ -75,6 +97,7 @@ impl DisplayListBuilder {
         let mut rect_batch = RectBatch::default();
         let mut image_batch = ImageBatch::default();
         let mut path_batch = PathBatch::default();
+        let mut shape_selection_batch = ShapeSelectionBatch::default();
 
         for layout_box in &page.boxes {
             match layout_box {
@@ -90,12 +113,30 @@ impl DisplayListBuilder {
                     color,
                 } => append_rect(*x, *y, *width, *height, *color, &mut rect_batch),
                 LayoutBox::Image(img) => {
+                    if matches!(
+                        img.selection_shape_kind,
+                        Some(tw_model::ShapeKind::Diagram) | Some(tw_model::ShapeKind::Chart)
+                    ) {
+                        shape_selection_batch
+                            .shape_ids
+                            .push(img.image_id.to_string());
+                        shape_selection_batch.rects.extend_from_slice(&[
+                            img.x, img.y, img.width, img.height,
+                        ]);
+                    }
                     image_batch.transforms.push(img.x);
                     image_batch.transforms.push(img.y);
                     image_batch.sizes.push(img.width);
                     image_batch.sizes.push(img.height);
                     image_batch.asset_ids.push(img.asset_id.clone());
+                    image_batch.image_ids.push(img.image_id.to_string());
                     image_batch.payloads.push(img.encoded.as_ref().clone());
+                    image_batch.rotations.push(img.rotation_deg);
+                    image_batch.opacities.push(img.opacity);
+                    image_batch.crop_rects.push(img.crop_left);
+                    image_batch.crop_rects.push(img.crop_top);
+                    image_batch.crop_rects.push(img.crop_right);
+                    image_batch.crop_rects.push(img.crop_bottom);
                     if img.encoded.is_empty() {
                         // Nothing to decode, so mark the slot the way an empty
                         // frame reads in Word.
@@ -109,29 +150,26 @@ impl DisplayListBuilder {
                         );
                     }
                 }
+                LayoutBox::Shape(shape) => {
+                    if shape.shape_type == tw_model::ShapeKind::Diagram
+                        || shape.shape_type == tw_model::ShapeKind::Chart
+                    {
+                        shape_selection_batch.shape_ids.push(shape.shape_id.to_string());
+                        shape_selection_batch
+                            .rects
+                            .extend_from_slice(&[shape.x, shape.y, shape.width, shape.height]);
+                    }
+                    if shape.fill.is_none() && shape.stroke.is_none() {
+                        append_shape_placeholder(shape, &mut rect_batch);
+                    } else {
+                        append_shape_geometry(shape, &mut rect_batch, &mut path_batch);
+                    }
+                    if shape.shape_type == tw_model::ShapeKind::WordArt {
+                        append_word_art_path(shape, &mut path_batch);
+                    }
+                }
                 LayoutBox::Table(table) => {
-                    for cell in &table.cells {
-                        if let Some(bg) = cell.background {
-                            append_rect(cell.x, cell.y, cell.width, cell.height, bg, &mut rect_batch);
-                        }
-                        for line in &cell.lines {
-                            append_line_decorations(line, &mut rect_batch);
-                            append_line_glyphs(line, &mut atlas_batch);
-                        }
-                    }
-                    for chunk in table.grid_lines.chunks(4) {
-                        if chunk.len() == 4 {
-                            path_batch.points.extend_from_slice(chunk);
-                            let color_idx = path_batch.colors.len();
-                            path_batch.colors.push(
-                                table
-                                    .grid_line_colors
-                                    .get(color_idx)
-                                    .copied()
-                                    .unwrap_or(0xFF000000),
-                            );
-                        }
-                    }
+                    append_table_layout(table, &mut rect_batch, &mut path_batch, &mut atlas_batch);
                 }
             }
         }
@@ -147,6 +185,7 @@ impl DisplayListBuilder {
             rect_batch,
             image_batch,
             path_batch,
+            shape_selection_batch,
         }
     }
 
@@ -171,6 +210,7 @@ impl DisplayListBuilder {
         write_rect_batch(&mut bytes, &list.rect_batch);
         write_path_batch(&mut bytes, &list.path_batch);
         write_image_batch(&mut bytes, &list.image_batch);
+        write_shape_selection_batch(&mut bytes, &list.shape_selection_batch);
 
         bytes
     }
@@ -243,6 +283,7 @@ impl DisplayListBuilder {
         write_rect_batch(&mut bytes, &list.rect_batch);
         write_path_batch(&mut bytes, &list.path_batch);
         write_image_batch(&mut bytes, &list.image_batch);
+        write_shape_selection_batch(&mut bytes, &list.shape_selection_batch);
 
         bytes
     }
@@ -284,6 +325,12 @@ impl DisplayListBuilder {
             (PathBatch::default(), ImageBatch::default())
         };
 
+        let shape_selection_batch = if file_version >= 7 {
+            read_shape_selection_batch(bytes, &mut offset).unwrap_or_default()
+        } else {
+            ShapeSelectionBatch::default()
+        };
+
         Some(DisplayList {
             version,
             page_width,
@@ -295,6 +342,7 @@ impl DisplayListBuilder {
             rect_batch,
             image_batch,
             path_batch,
+            shape_selection_batch,
         })
     }
 }
@@ -320,6 +368,39 @@ fn read_f32(bytes: &[u8], offset: &mut usize) -> Option<f32> {
     Some(v)
 }
 
+fn append_table_layout(
+    table: &TableLayout,
+    rect_batch: &mut RectBatch,
+    path_batch: &mut PathBatch,
+    atlas_batch: &mut AtlasBatch,
+) {
+    for cell in &table.cells {
+        if let Some(bg) = cell.background {
+            append_rect(cell.x, cell.y, cell.width, cell.height, bg, rect_batch);
+        }
+        for line in &cell.lines {
+            append_line_decorations(line, rect_batch);
+            append_line_glyphs(line, atlas_batch);
+        }
+        for nested in &cell.nested_tables {
+            append_table_layout(nested, rect_batch, path_batch, atlas_batch);
+        }
+    }
+    for chunk in table.grid_lines.chunks(4) {
+        if chunk.len() == 4 {
+            path_batch.points.extend_from_slice(chunk);
+            let color_idx = path_batch.colors.len();
+            path_batch.colors.push(
+                table
+                    .grid_line_colors
+                    .get(color_idx)
+                    .copied()
+                    .unwrap_or(0xFF000000),
+            );
+        }
+    }
+}
+
 fn append_line_decorations(line: &TextLine, batch: &mut RectBatch) {
     for deco in &line.decorations {
         append_rect(deco.x, deco.y, deco.width, deco.height, deco.color, batch);
@@ -341,6 +422,129 @@ fn append_line_glyphs(line: &TextLine, batch: &mut AtlasBatch) {
 fn append_rect(x: f32, y: f32, w: f32, h: f32, color: u32, batch: &mut RectBatch) {
     batch.rects.extend_from_slice(&[x, y, w, h]);
     batch.colors.push(color);
+}
+
+fn append_path_line(
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+    color: u32,
+    batch: &mut PathBatch,
+) {
+    batch.points.extend_from_slice(&[x1, y1, x2, y2]);
+    batch.colors.push(color);
+}
+
+fn append_shape_placeholder(shape: &ShapeLayout, rect_batch: &mut RectBatch) {
+    append_rect(
+        shape.x,
+        shape.y,
+        shape.width,
+        shape.height,
+        SHAPE_PLACEHOLDER_COLOR,
+        rect_batch,
+    );
+    let border = 0xFF8099B3;
+    append_rect(shape.x, shape.y, shape.width, 1.0, border, rect_batch);
+    append_rect(
+        shape.x,
+        shape.y + shape.height - 1.0,
+        shape.width,
+        1.0,
+        border,
+        rect_batch,
+    );
+    append_rect(shape.x, shape.y, 1.0, shape.height, border, rect_batch);
+    append_rect(
+        shape.x + shape.width - 1.0,
+        shape.y,
+        1.0,
+        shape.height,
+        border,
+        rect_batch,
+    );
+}
+
+fn append_shape_geometry(
+    shape: &ShapeLayout,
+    rect_batch: &mut RectBatch,
+    path_batch: &mut PathBatch,
+) {
+    use tw_model::ShapeKind;
+
+    let stroke = shape.stroke.unwrap_or(0xFF000000);
+    match shape.shape_type {
+        ShapeKind::Rectangle => {
+            if let Some(fill) = shape.fill {
+                append_rect(shape.x, shape.y, shape.width, shape.height, fill, rect_batch);
+            }
+            append_path_line(shape.x, shape.y, shape.x + shape.width, shape.y, stroke, path_batch);
+            append_path_line(
+                shape.x + shape.width,
+                shape.y,
+                shape.x + shape.width,
+                shape.y + shape.height,
+                stroke,
+                path_batch,
+            );
+            append_path_line(
+                shape.x + shape.width,
+                shape.y + shape.height,
+                shape.x,
+                shape.y + shape.height,
+                stroke,
+                path_batch,
+            );
+            append_path_line(shape.x, shape.y + shape.height, shape.x, shape.y, stroke, path_batch);
+        }
+        ShapeKind::Line => {
+            append_path_line(
+                shape.x,
+                shape.y,
+                shape.x + shape.width,
+                shape.y + shape.height,
+                stroke,
+                path_batch,
+            );
+        }
+        ShapeKind::Ellipse => {
+            if let Some(fill) = shape.fill {
+                append_rect(shape.x, shape.y, shape.width, shape.height, fill, rect_batch);
+            }
+            let cx = shape.x + shape.width / 2.0;
+            let cy = shape.y + shape.height / 2.0;
+            let rx = shape.width / 2.0;
+            let ry = shape.height / 2.0;
+            let segments = 36;
+            let mut prev = (
+                cx + rx,
+                cy,
+            );
+            for i in 1..=segments {
+                let t = std::f32::consts::TAU * i as f32 / segments as f32;
+                let next = (cx + rx * t.cos(), cy + ry * t.sin());
+                append_path_line(prev.0, prev.1, next.0, next.1, stroke, path_batch);
+                prev = next;
+            }
+        }
+        _ => append_shape_placeholder(shape, rect_batch),
+    }
+}
+
+fn append_word_art_path(shape: &ShapeLayout, path_batch: &mut PathBatch) {
+    let color = 0xFF1F4E79;
+    let cx = shape.x + shape.width / 2.0;
+    let base_y = shape.y + shape.height * 0.72;
+    let rx = shape.width * 0.42;
+    let segments = 24;
+    let mut prev = (cx - rx, base_y);
+    for i in 1..=segments {
+        let t = std::f32::consts::PI * i as f32 / segments as f32;
+        let next = (cx - rx * t.cos(), base_y - rx * 0.35 * t.sin());
+        append_path_line(prev.0, prev.1, next.0, next.1, color, path_batch);
+        prev = next;
+    }
 }
 
 fn write_glyph_batch(bytes: &mut Vec<u8>, batch: &AtlasBatch) {
@@ -482,9 +686,25 @@ fn write_image_batch(bytes: &mut Vec<u8>, batch: &ImageBatch) {
         bytes.extend_from_slice(&(bytes_id.len() as u32).to_le_bytes());
         bytes.extend_from_slice(bytes_id);
     }
+    for id in &batch.image_ids {
+        let bytes_id = id.as_bytes();
+        bytes.extend_from_slice(&(bytes_id.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(bytes_id);
+    }
     for payload in &batch.payloads {
         bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
         bytes.extend_from_slice(payload);
+    }
+    if !batch.rotations.is_empty() {
+        for val in &batch.rotations {
+            bytes.extend_from_slice(&val.to_le_bytes());
+        }
+        for val in &batch.opacities {
+            bytes.extend_from_slice(&val.to_le_bytes());
+        }
+        for val in &batch.crop_rects {
+            bytes.extend_from_slice(&val.to_le_bytes());
+        }
     }
 }
 
@@ -518,6 +738,17 @@ fn read_image_batch(bytes: &[u8], offset: &mut usize, file_version: u32) -> Opti
         *offset = end;
         asset_ids.push(id);
     }
+    let mut image_ids = Vec::new();
+    if file_version >= 5 {
+        image_ids = Vec::with_capacity(image_count);
+        for _ in 0..image_count {
+            let len = read_u32(bytes, offset)? as usize;
+            let end = *offset + len;
+            let id = std::str::from_utf8(bytes.get(*offset..end)?).ok()?.to_string();
+            *offset = end;
+            image_ids.push(id);
+        }
+    }
     let mut payloads = vec![Vec::new(); image_count];
     if file_version >= 3 {
         for slot in payloads.iter_mut() {
@@ -527,12 +758,75 @@ fn read_image_batch(bytes: &[u8], offset: &mut usize, file_version: u32) -> Opti
             *offset = end;
         }
     }
+    let mut rotations = Vec::new();
+    let mut opacities = Vec::new();
+    let mut crop_rects = Vec::new();
+    if file_version >= 6 && *offset + image_count * 4 * 6 <= bytes.len() {
+        rotations = Vec::with_capacity(image_count);
+        for _ in 0..image_count {
+            rotations.push(read_f32(bytes, offset)?);
+        }
+        opacities = Vec::with_capacity(image_count);
+        for _ in 0..image_count {
+            opacities.push(read_f32(bytes, offset)?);
+        }
+        crop_rects = Vec::with_capacity(image_count * 4);
+        for _ in 0..image_count * 4 {
+            crop_rects.push(read_f32(bytes, offset)?);
+        }
+    }
     Some(ImageBatch {
         transforms,
         sizes,
         asset_ids,
+        image_ids,
         payloads,
+        rotations,
+        opacities,
+        crop_rects,
     })
+}
+
+fn write_shape_selection_batch(bytes: &mut Vec<u8>, batch: &ShapeSelectionBatch) {
+    let shape_count = batch.shape_ids.len() as u32;
+    bytes.extend_from_slice(&shape_count.to_le_bytes());
+    for val in &batch.rects {
+        bytes.extend_from_slice(&val.to_le_bytes());
+    }
+    for id in &batch.shape_ids {
+        let bytes_id = id.as_bytes();
+        bytes.extend_from_slice(&(bytes_id.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(bytes_id);
+    }
+}
+
+fn read_shape_selection_batch(bytes: &[u8], offset: &mut usize) -> Option<ShapeSelectionBatch> {
+    fn read_u32(bytes: &[u8], offset: &mut usize) -> Option<u32> {
+        let end = *offset + 4;
+        let v = u32::from_le_bytes(bytes.get(*offset..end)?.try_into().ok()?);
+        *offset = end;
+        Some(v)
+    }
+    fn read_f32(bytes: &[u8], offset: &mut usize) -> Option<f32> {
+        let end = *offset + 4;
+        let v = f32::from_le_bytes(bytes.get(*offset..end)?.try_into().ok()?);
+        *offset = end;
+        Some(v)
+    }
+    let shape_count = read_u32(bytes, offset)? as usize;
+    let mut rects = Vec::with_capacity(shape_count * 4);
+    for _ in 0..shape_count * 4 {
+        rects.push(read_f32(bytes, offset)?);
+    }
+    let mut shape_ids = Vec::with_capacity(shape_count);
+    for _ in 0..shape_count {
+        let len = read_u32(bytes, offset)? as usize;
+        let end = *offset + len;
+        let id = std::str::from_utf8(bytes.get(*offset..end)?).ok()?.to_string();
+        *offset = end;
+        shape_ids.push(id);
+    }
+    Some(ShapeSelectionBatch { shape_ids, rects })
 }
 
 #[cfg(test)]
@@ -562,7 +856,7 @@ mod tests {
         let page = layout.pages.first().unwrap();
         let list = DisplayListBuilder::from_page_without_atlas(page, 2);
         let bytes = DisplayListBuilder::to_page_bytes(&list);
-        assert_eq!(u32::from_le_bytes(bytes[0..4].try_into().unwrap()), 4);
+        assert_eq!(u32::from_le_bytes(bytes[0..4].try_into().unwrap()), 7);
         let decoded = DisplayListBuilder::from_bytes(&bytes).unwrap();
         assert_eq!(decoded.version, 2);
         assert!(decoded.atlas_pixels.is_empty());

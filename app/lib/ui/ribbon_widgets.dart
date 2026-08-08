@@ -16,6 +16,39 @@ Widget wrapRibbonTooltip(String? tooltip, Widget child) {
   return Tooltip(message: tooltip, child: child);
 }
 
+/// Anchored preset menu used by Layout and Design ribbon groups.
+Future<void> showRibbonPresetMenu(
+  BuildContext context,
+  RenderBox anchor,
+  List<String> items,
+  ValueChanged<String> onSelected, {
+  double minWidth = 120,
+  double maxWidth = 200,
+}) async {
+  final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+  final origin = anchor.localToGlobal(Offset.zero, ancestor: overlay);
+  final selected = await showMenu<String>(
+    context: context,
+    position: RelativeRect.fromLTRB(
+      origin.dx,
+      origin.dy + anchor.size.height,
+      origin.dx + anchor.size.width,
+      origin.dy + anchor.size.height + 4,
+    ),
+    constraints: BoxConstraints(minWidth: minWidth, maxWidth: maxWidth, maxHeight: 280),
+    items: items
+        .map(
+          (item) => PopupMenuItem<String>(
+            value: item,
+            height: 28,
+            child: Text(item, style: WordTheme.ribbonLabel),
+          ),
+        )
+        .toList(),
+  );
+  if (selected != null) onSelected(selected);
+}
+
 /// Horizontal scroller for a ribbon tab's groups.
 ///
 /// Phone-width screens cannot fit every group at once; drag horizontally to

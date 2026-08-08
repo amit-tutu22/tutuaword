@@ -29,6 +29,37 @@ fn parse_run_id(run_id: Option<&str>) -> Option<tw_model::NodeId> {
         .map(tw_model::NodeId::from_uuid)
 }
 
+fn text_wrap_from_u8(value: u8) -> Option<tw_model::TextWrap> {
+    match value {
+        0 => Some(tw_model::TextWrap::Inline),
+        1 => Some(tw_model::TextWrap::Square),
+        2 => Some(tw_model::TextWrap::TopBottom),
+        3 => Some(tw_model::TextWrap::Behind),
+        4 => Some(tw_model::TextWrap::InFront),
+        _ => None,
+    }
+}
+
+fn anchor_origin_from_u8(value: u8) -> Option<tw_model::AnchorOrigin> {
+    match value {
+        0 => Some(tw_model::AnchorOrigin::Column),
+        1 => Some(tw_model::AnchorOrigin::Page),
+        2 => Some(tw_model::AnchorOrigin::Margin),
+        _ => None,
+    }
+}
+
+fn parse_field_type_name(name: &str) -> Result<tw_model::FieldType, String> {
+    match name.to_ascii_lowercase().as_str() {
+        "page" => Ok(tw_model::FieldType::Page),
+        "numpages" => Ok(tw_model::FieldType::NumPages),
+        "date" => Ok(tw_model::FieldType::Date),
+        "time" => Ok(tw_model::FieldType::Time),
+        "tablesum" | "sum" => Ok(tw_model::FieldType::TableSumAbove),
+        _ => Err(format!("unknown field type: {name}")),
+    }
+}
+
 fn format_from_extension(ext: &str) -> DetectedFormat {
     tw_core::format_from_extension(ext).unwrap_or(DetectedFormat::Unknown)
 }
@@ -163,6 +194,125 @@ impl WasmSession {
         self.enqueue_edit(session.apply_normal_style_at(caret))
     }
 
+    pub fn apply_paragraph_style_enqueue(
+        &self,
+        caret_run_id: Option<&str>,
+        style_name: &str,
+    ) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let caret = parse_run_id(caret_run_id);
+        self.enqueue_edit(session.apply_paragraph_style_at(caret, style_name))
+    }
+
+    pub fn apply_document_theme_enqueue(&self, theme_name: &str) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        self.enqueue_edit(session.apply_document_theme(theme_name))
+    }
+
+    pub fn apply_section_format_enqueue(
+        &self,
+        format_json: &str,
+        caret_run_id: Option<&str>,
+    ) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let format: tw_model::SectionFormat = serde_json::from_str(format_json)
+            .map_err(|e| format!("invalid section format json: {e}"))?;
+        let caret = parse_run_id(caret_run_id);
+        self.enqueue_edit(session.apply_section_format_at(caret, format))
+    }
+
+    pub fn section_format_json(&self, caret_run_id: Option<&str>) -> Result<String, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let caret = parse_run_id(caret_run_id);
+        session
+            .section_format_json_at(caret)
+            .ok_or_else(|| "section format unavailable".into())
+    }
+
+    pub fn insert_section_break_enqueue(&self, caret_run_id: Option<&str>) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let caret = parse_run_id(caret_run_id);
+        self.enqueue_edit(session.insert_section_break_at(caret))
+    }
+
+    pub fn ensure_header_footer_enqueue(
+        &self,
+        caret_run_id: Option<&str>,
+        is_header: bool,
+        page_index: Option<u32>,
+    ) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let caret = parse_run_id(caret_run_id);
+        self.enqueue_edit(session.ensure_header_footer_at(caret, is_header, page_index))
+    }
+
+    pub fn set_even_and_odd_headers_enqueue(&self, enabled: bool) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        self.enqueue_edit(session.set_even_and_odd_headers(enabled))
+    }
+
+    pub fn header_footer_linked(
+        &self,
+        caret_run_id: Option<&str>,
+        is_header: bool,
+        page_index: Option<u32>,
+    ) -> bool {
+        let session = self.session().expect("WasmSession not initialized");
+        let caret = parse_run_id(caret_run_id);
+        session.header_footer_linked_at(caret, is_header, page_index)
+    }
+
+    pub fn set_header_footer_link_enqueue(
+        &self,
+        caret_run_id: Option<&str>,
+        is_header: bool,
+        page_index: Option<u32>,
+        linked: bool,
+    ) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let caret = parse_run_id(caret_run_id);
+        self.enqueue_edit(session.set_header_footer_link_at(
+            caret,
+            is_header,
+            page_index,
+            linked,
+        ))
+    }
+
+    pub fn even_and_odd_headers_enabled(&self) -> bool {
+        self.session()
+            .expect("WasmSession not initialized")
+            .document()
+            .settings
+            .even_and_odd_headers
+    }
+
+    pub fn header_footer_seed_run(
+        &self,
+        caret_run_id: Option<&str>,
+        is_header: bool,
+        page_index: Option<u32>,
+    ) -> Result<String, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let caret = parse_run_id(caret_run_id);
+        session
+            .header_footer_seed_run_at(caret, is_header, page_index)
+            .map(|id| id.to_string())
+            .ok_or_else(|| "header/footer seed run unavailable".into())
+    }
+
+    pub fn insert_field_enqueue(
+        &self,
+        run_id: &str,
+        offset: usize,
+        field_type: &str,
+    ) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let run = parse_run_id(Some(run_id)).ok_or_else(|| "run id required".to_string())?;
+        let field = parse_field_type_name(field_type)?;
+        self.enqueue_edit(session.insert_field_at(run, offset, field))
+    }
+
     pub fn apply_bullet_list_enqueue(&self, caret_run_id: Option<&str>) -> Result<u64, String> {
         let session = self.session().expect("WasmSession not initialized");
         let caret = parse_run_id(caret_run_id);
@@ -186,9 +336,262 @@ impl WasmSession {
         self.enqueue_edit(session.insert_table(rows, cols))
     }
 
+    pub fn delete_table_row_enqueue(&self, caret_run_id: Option<&str>) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let caret = parse_run_id(caret_run_id);
+        self.enqueue_edit(session.delete_table_row_at(caret))
+    }
+
+    pub fn delete_table_column_enqueue(&self, caret_run_id: Option<&str>) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let caret = parse_run_id(caret_run_id);
+        self.enqueue_edit(session.delete_table_column_at(caret))
+    }
+
+    pub fn merge_table_cells_enqueue(&self, caret_run_id: Option<&str>) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let caret = parse_run_id(caret_run_id);
+        self.enqueue_edit(session.merge_table_cells_at(caret))
+    }
+
+    pub fn split_table_cell_enqueue(&self, caret_run_id: Option<&str>) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let caret = parse_run_id(caret_run_id);
+        self.enqueue_edit(session.split_table_cell_at(caret))
+    }
+
+    pub fn set_table_border_enqueue(
+        &self,
+        caret_run_id: Option<&str>,
+        width: f32,
+        color_r: u8,
+        color_g: u8,
+        color_b: u8,
+        color_a: u8,
+    ) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let caret = parse_run_id(caret_run_id);
+        let border = if width > 0.0 {
+            Some(tw_model::BorderSpec {
+                width,
+                color: tw_model::Color {
+                    r: color_r,
+                    g: color_g,
+                    b: color_b,
+                    a: color_a,
+                },
+            })
+        } else {
+            None
+        };
+        self.enqueue_edit(session.set_table_border_at(caret, border))
+    }
+
+    pub fn set_table_cell_shading_enqueue(
+        &self,
+        caret_run_id: Option<&str>,
+        color_r: i32,
+        color_g: u8,
+        color_b: u8,
+        color_a: u8,
+    ) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let caret = parse_run_id(caret_run_id);
+        let background = if color_r < 0 {
+            None
+        } else {
+            Some(tw_model::Color {
+                r: color_r as u8,
+                g: color_g,
+                b: color_b,
+                a: color_a,
+            })
+        };
+        self.enqueue_edit(session.set_table_cell_shading_at(caret, background))
+    }
+
+    pub fn resize_table_column_enqueue(
+        &self,
+        caret_run_id: Option<&str>,
+        width: f32,
+    ) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let caret = parse_run_id(caret_run_id);
+        self.enqueue_edit(session.resize_table_column_at(caret, width))
+    }
+
+    pub fn autofit_table_enqueue(&self, caret_run_id: Option<&str>) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let caret = parse_run_id(caret_run_id);
+        self.enqueue_edit(session.autofit_table_at(caret))
+    }
+
+    pub fn sort_table_rows_enqueue(
+        &self,
+        caret_run_id: Option<&str>,
+        ascending: bool,
+    ) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let caret = parse_run_id(caret_run_id);
+        self.enqueue_edit(session.sort_table_rows_at(caret, ascending))
+    }
+
+    pub fn insert_nested_table_enqueue(
+        &self,
+        caret_run_id: Option<&str>,
+        rows: u32,
+        cols: u32,
+    ) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let caret = parse_run_id(caret_run_id);
+        self.enqueue_edit(session.insert_nested_table_at(caret, rows, cols))
+    }
+
+    pub fn insert_table_sum_field_enqueue(
+        &self,
+        caret_run_id: Option<&str>,
+    ) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let caret = parse_run_id(caret_run_id);
+        self.enqueue_edit(session.insert_table_sum_field_at(caret))
+    }
+
     pub fn insert_image_enqueue(&self, width: f32, height: f32) -> Result<u64, String> {
         let session = self.session().expect("WasmSession not initialized");
         self.enqueue_edit(session.insert_image(width, height))
+    }
+
+    pub fn insert_shape_enqueue(&self, shape_type: i32) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let kind = match shape_type {
+            0 => tw_model::ShapeKind::Rectangle,
+            1 => tw_model::ShapeKind::Line,
+            2 => tw_model::ShapeKind::Ellipse,
+            3 => tw_model::ShapeKind::TextBox,
+            4 => tw_model::ShapeKind::WordArt,
+            _ => tw_model::ShapeKind::Other,
+        };
+        self.enqueue_edit(session.insert_shape(kind))
+    }
+
+    pub fn insert_text_box_enqueue(&self) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        self.enqueue_edit(session.insert_text_box())
+    }
+
+    pub fn insert_word_art_enqueue(&self, text: String) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        self.enqueue_edit(session.insert_word_art(text))
+    }
+
+    pub fn insert_diagram_enqueue(&self) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        self.enqueue_edit(session.insert_diagram())
+    }
+
+    pub fn insert_chart_enqueue(&self) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        self.enqueue_edit(session.insert_chart())
+    }
+
+    pub fn insert_image_bytes_enqueue(
+        &self,
+        bytes: Vec<u8>,
+        mime_type: String,
+    ) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        self.enqueue_edit(session.insert_image_bytes(bytes, mime_type))
+    }
+
+    pub fn set_image_size_enqueue(
+        &self,
+        image_id: &str,
+        width: f32,
+        height: f32,
+    ) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let id = parse_run_id(Some(image_id)).ok_or_else(|| "invalid image id".to_string())?;
+        self.enqueue_edit(session.set_image_size(id, width, height))
+    }
+
+    pub fn replace_image_bytes_enqueue(
+        &self,
+        image_id: &str,
+        bytes: Vec<u8>,
+        mime_type: String,
+    ) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let id = parse_run_id(Some(image_id)).ok_or_else(|| "invalid image id".to_string())?;
+        self.enqueue_edit(session.replace_image_bytes(id, bytes, mime_type))
+    }
+
+    pub fn set_image_wrap_enqueue(&self, image_id: &str, wrap: u8) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let id = parse_run_id(Some(image_id)).ok_or_else(|| "invalid image id".to_string())?;
+        let wrap = text_wrap_from_u8(wrap).ok_or_else(|| "invalid wrap mode".to_string())?;
+        self.enqueue_edit(session.set_image_wrap(id, wrap))
+    }
+
+    pub fn set_image_anchor_enqueue(
+        &self,
+        image_id: &str,
+        x: f32,
+        y: f32,
+        origin_x: u8,
+        origin_y: u8,
+    ) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let id = parse_run_id(Some(image_id)).ok_or_else(|| "invalid image id".to_string())?;
+        let origin_x =
+            anchor_origin_from_u8(origin_x).ok_or_else(|| "invalid anchor origin_x".to_string())?;
+        let origin_y =
+            anchor_origin_from_u8(origin_y).ok_or_else(|| "invalid anchor origin_y".to_string())?;
+        self.enqueue_edit(session.set_image_anchor(
+            id,
+            tw_model::ImageAnchor {
+                x,
+                y,
+                origin_x,
+                origin_y,
+            },
+        ))
+    }
+
+    pub fn set_image_transform_enqueue(
+        &self,
+        image_id: &str,
+        rotation_deg: f32,
+        crop_left: f32,
+        crop_top: f32,
+        crop_right: f32,
+        crop_bottom: f32,
+        opacity: f32,
+    ) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let id = parse_run_id(Some(image_id)).ok_or_else(|| "invalid image id".to_string())?;
+        self.enqueue_edit(session.set_image_transform(
+            id,
+            tw_model::ImageTransform {
+                rotation_deg,
+                crop_left,
+                crop_top,
+                crop_right,
+                crop_bottom,
+                opacity,
+            },
+        ))
+    }
+
+    pub fn insert_image_caption_enqueue(&self, image_id: &str) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let id = parse_run_id(Some(image_id)).ok_or_else(|| "invalid image id".to_string())?;
+        self.enqueue_edit(session.insert_image_caption(id))
+    }
+
+    pub fn compress_image_enqueue(&self, image_id: &str, quality: u8) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let id = parse_run_id(Some(image_id)).ok_or_else(|| "invalid image id".to_string())?;
+        self.enqueue_edit(session.compress_image(id, quality))
     }
 
     pub fn set_track_changes_enqueue(&self, enabled: bool) -> Result<u64, String> {
@@ -566,6 +969,152 @@ pub mod bindgen_exports {
             self.enqueue_op(self.session.apply_normal_style_enqueue(caret))
         }
 
+        pub fn apply_paragraph_style(
+            &mut self,
+            caret_run_id: &str,
+            style_name: &str,
+        ) -> Result<f64, JsValue> {
+            let caret = if caret_run_id.is_empty() {
+                None
+            } else {
+                Some(caret_run_id)
+            };
+            self.enqueue_op(self.session.apply_paragraph_style_enqueue(caret, style_name))
+        }
+
+        pub fn apply_document_theme(&mut self, theme_name: &str) -> Result<f64, JsValue> {
+            self.enqueue_op(self.session.apply_document_theme_enqueue(theme_name))
+        }
+
+        pub fn apply_section_format(
+            &mut self,
+            format_json: &str,
+            caret_run_id: &str,
+        ) -> Result<f64, JsValue> {
+            let caret = if caret_run_id.is_empty() {
+                None
+            } else {
+                Some(caret_run_id)
+            };
+            self.enqueue_op(self.session.apply_section_format_enqueue(format_json, caret))
+        }
+
+        pub fn get_section_format_json(&self, caret_run_id: &str) -> Result<String, JsValue> {
+            let caret = if caret_run_id.is_empty() {
+                None
+            } else {
+                Some(caret_run_id)
+            };
+            self.session
+                .section_format_json(caret)
+                .map_err(|e| JsValue::from_str(&e))
+        }
+
+        pub fn insert_section_break(&mut self, caret_run_id: &str) -> Result<f64, JsValue> {
+            let caret = if caret_run_id.is_empty() {
+                None
+            } else {
+                Some(caret_run_id)
+            };
+            self.enqueue_op(self.session.insert_section_break_enqueue(caret))
+        }
+
+        pub fn ensure_header_footer(
+            &mut self,
+            caret_run_id: &str,
+            is_header: bool,
+            page_index: i32,
+        ) -> Result<f64, JsValue> {
+            let caret = if caret_run_id.is_empty() {
+                None
+            } else {
+                Some(caret_run_id)
+            };
+            let page = if page_index < 0 {
+                None
+            } else {
+                Some(page_index as u32)
+            };
+            self.enqueue_op(self.session.ensure_header_footer_enqueue(caret, is_header, page))
+        }
+
+        pub fn set_even_and_odd_headers(&mut self, enabled: bool) -> Result<f64, JsValue> {
+            self.enqueue_op(self.session.set_even_and_odd_headers_enqueue(enabled))
+        }
+
+        pub fn even_and_odd_headers_enabled(&self) -> bool {
+            self.session.even_and_odd_headers_enabled()
+        }
+
+        pub fn header_footer_linked(
+            &self,
+            caret_run_id: &str,
+            is_header: bool,
+            page_index: i32,
+        ) -> bool {
+            let caret = if caret_run_id.is_empty() {
+                None
+            } else {
+                Some(caret_run_id)
+            };
+            let page = if page_index < 0 {
+                None
+            } else {
+                Some(page_index as u32)
+            };
+            self.session.header_footer_linked(caret, is_header, page)
+        }
+
+        pub fn set_header_footer_link(
+            &mut self,
+            caret_run_id: &str,
+            is_header: bool,
+            page_index: i32,
+            linked: bool,
+        ) -> Result<f64, JsValue> {
+            let caret = if caret_run_id.is_empty() {
+                None
+            } else {
+                Some(caret_run_id)
+            };
+            let page = if page_index < 0 {
+                None
+            } else {
+                Some(page_index as u32)
+            };
+            self.enqueue_op(self.session.set_header_footer_link_enqueue(
+                caret,
+                is_header,
+                page,
+                linked,
+            ))
+        }
+
+        pub fn header_footer_seed_run(
+            &self,
+            caret_run_id: &str,
+            is_header: bool,
+            page_index: i32,
+        ) -> Result<String, JsValue> {
+            let caret = if caret_run_id.is_empty() {
+                None
+            } else {
+                Some(caret_run_id)
+            };
+            let page = if page_index < 0 {
+                None
+            } else {
+                Some(page_index as u32)
+            };
+            self.session
+                .header_footer_seed_run(caret, is_header, page)
+                .map_err(|e| JsValue::from_str(&e))
+        }
+
+        pub fn insert_field(&mut self, run_id: &str, offset: u32, field_type: &str) -> Result<f64, JsValue> {
+            self.enqueue_op(self.session.insert_field_enqueue(run_id, offset as usize, field_type))
+        }
+
         pub fn apply_bullet_list(&mut self, caret_run_id: &str) -> Result<f64, JsValue> {
             let caret = if caret_run_id.is_empty() {
                 None
@@ -597,8 +1146,234 @@ pub mod bindgen_exports {
             self.enqueue_op(self.session.insert_table_enqueue(rows, cols))
         }
 
+        pub fn delete_table_row(&mut self, caret_run_id: &str) -> Result<f64, JsValue> {
+            let caret = if caret_run_id.is_empty() {
+                None
+            } else {
+                Some(caret_run_id)
+            };
+            self.enqueue_op(self.session.delete_table_row_enqueue(caret))
+        }
+
+        pub fn delete_table_column(&mut self, caret_run_id: &str) -> Result<f64, JsValue> {
+            let caret = if caret_run_id.is_empty() {
+                None
+            } else {
+                Some(caret_run_id)
+            };
+            self.enqueue_op(self.session.delete_table_column_enqueue(caret))
+        }
+
+        pub fn merge_table_cells(&mut self, caret_run_id: &str) -> Result<f64, JsValue> {
+            let caret = if caret_run_id.is_empty() {
+                None
+            } else {
+                Some(caret_run_id)
+            };
+            self.enqueue_op(self.session.merge_table_cells_enqueue(caret))
+        }
+
+        pub fn split_table_cell(&mut self, caret_run_id: &str) -> Result<f64, JsValue> {
+            let caret = if caret_run_id.is_empty() {
+                None
+            } else {
+                Some(caret_run_id)
+            };
+            self.enqueue_op(self.session.split_table_cell_enqueue(caret))
+        }
+
+        pub fn set_table_border(
+            &mut self,
+            caret_run_id: &str,
+            width: f32,
+            color_r: u8,
+            color_g: u8,
+            color_b: u8,
+            color_a: u8,
+        ) -> Result<f64, JsValue> {
+            let caret = if caret_run_id.is_empty() {
+                None
+            } else {
+                Some(caret_run_id)
+            };
+            self.enqueue_op(self.session.set_table_border_enqueue(
+                caret, width, color_r, color_g, color_b, color_a,
+            ))
+        }
+
+        pub fn set_table_cell_shading(
+            &mut self,
+            caret_run_id: &str,
+            color_r: i32,
+            color_g: u8,
+            color_b: u8,
+            color_a: u8,
+        ) -> Result<f64, JsValue> {
+            let caret = if caret_run_id.is_empty() {
+                None
+            } else {
+                Some(caret_run_id)
+            };
+            self.enqueue_op(self.session.set_table_cell_shading_enqueue(
+                caret, color_r, color_g, color_b, color_a,
+            ))
+        }
+
+        pub fn resize_table_column(
+            &mut self,
+            caret_run_id: &str,
+            width: f32,
+        ) -> Result<f64, JsValue> {
+            let caret = if caret_run_id.is_empty() {
+                None
+            } else {
+                Some(caret_run_id)
+            };
+            self.enqueue_op(self.session.resize_table_column_enqueue(caret, width))
+        }
+
+        pub fn autofit_table(&mut self, caret_run_id: &str) -> Result<f64, JsValue> {
+            let caret = if caret_run_id.is_empty() {
+                None
+            } else {
+                Some(caret_run_id)
+            };
+            self.enqueue_op(self.session.autofit_table_enqueue(caret))
+        }
+
+        pub fn sort_table_rows(
+            &mut self,
+            caret_run_id: &str,
+            ascending: bool,
+        ) -> Result<f64, JsValue> {
+            let caret = if caret_run_id.is_empty() {
+                None
+            } else {
+                Some(caret_run_id)
+            };
+            self.enqueue_op(self.session.sort_table_rows_enqueue(caret, ascending))
+        }
+
+        pub fn insert_nested_table(
+            &mut self,
+            caret_run_id: &str,
+            rows: u32,
+            cols: u32,
+        ) -> Result<f64, JsValue> {
+            let caret = if caret_run_id.is_empty() {
+                None
+            } else {
+                Some(caret_run_id)
+            };
+            self.enqueue_op(self.session.insert_nested_table_enqueue(caret, rows, cols))
+        }
+
+        pub fn insert_table_sum_field(&mut self, caret_run_id: &str) -> Result<f64, JsValue> {
+            let caret = if caret_run_id.is_empty() {
+                None
+            } else {
+                Some(caret_run_id)
+            };
+            self.enqueue_op(self.session.insert_table_sum_field_enqueue(caret))
+        }
+
         pub fn insert_image(&mut self, width: f32, height: f32) -> Result<f64, JsValue> {
             self.enqueue_op(self.session.insert_image_enqueue(width, height))
+        }
+
+        pub fn insert_shape(&mut self, shape_type: i32) -> Result<f64, JsValue> {
+            self.enqueue_op(self.session.insert_shape_enqueue(shape_type))
+        }
+
+        pub fn insert_text_box(&mut self) -> Result<f64, JsValue> {
+            self.enqueue_op(self.session.insert_text_box_enqueue())
+        }
+
+        pub fn insert_word_art(&mut self, text: &str) -> Result<f64, JsValue> {
+            self.enqueue_op(self.session.insert_word_art_enqueue(text.to_string()))
+        }
+
+        pub fn insert_diagram(&mut self) -> Result<f64, JsValue> {
+            self.enqueue_op(self.session.insert_diagram_enqueue())
+        }
+
+        pub fn insert_chart(&mut self) -> Result<f64, JsValue> {
+            self.enqueue_op(self.session.insert_chart_enqueue())
+        }
+
+        pub fn insert_image_bytes(&mut self, data: &[u8], mime_type: &str) -> Result<f64, JsValue> {
+            self.enqueue_op(
+                self.session
+                    .insert_image_bytes_enqueue(data.to_vec(), mime_type.to_string()),
+            )
+        }
+
+        pub fn set_image_size(
+            &mut self,
+            image_id: &str,
+            width: f32,
+            height: f32,
+        ) -> Result<f64, JsValue> {
+            self.enqueue_op(self.session.set_image_size_enqueue(image_id, width, height))
+        }
+
+        pub fn replace_image_bytes(
+            &mut self,
+            image_id: &str,
+            data: &[u8],
+            mime_type: &str,
+        ) -> Result<f64, JsValue> {
+            self.enqueue_op(self.session.replace_image_bytes_enqueue(
+                image_id,
+                data.to_vec(),
+                mime_type.to_string(),
+            ))
+        }
+
+        pub fn set_image_wrap(&mut self, image_id: &str, wrap: u8) -> Result<f64, JsValue> {
+            self.enqueue_op(self.session.set_image_wrap_enqueue(image_id, wrap))
+        }
+
+        pub fn set_image_anchor(
+            &mut self,
+            image_id: &str,
+            x: f32,
+            y: f32,
+            origin_x: u8,
+            origin_y: u8,
+        ) -> Result<f64, JsValue> {
+            self.enqueue_op(self.session.set_image_anchor_enqueue(
+                image_id, x, y, origin_x, origin_y,
+            ))
+        }
+
+        pub fn set_image_transform(
+            &mut self,
+            image_id: &str,
+            rotation_deg: f32,
+            crop_left: f32,
+            crop_top: f32,
+            crop_right: f32,
+            crop_bottom: f32,
+            opacity: f32,
+        ) -> Result<f64, JsValue> {
+            self.enqueue_op(self.session.set_image_transform_enqueue(
+                image_id,
+                rotation_deg,
+                crop_left,
+                crop_top,
+                crop_right,
+                crop_bottom,
+                opacity,
+            ))
+        }
+
+        pub fn insert_image_caption(&mut self, image_id: &str) -> Result<f64, JsValue> {
+            self.enqueue_op(self.session.insert_image_caption_enqueue(image_id))
+        }
+
+        pub fn compress_image(&mut self, image_id: &str, quality: u8) -> Result<f64, JsValue> {
+            self.enqueue_op(self.session.compress_image_enqueue(image_id, quality))
         }
 
         pub fn paste_html(&mut self, run_id: &str, offset: u32, html: &str) -> Result<f64, JsValue> {

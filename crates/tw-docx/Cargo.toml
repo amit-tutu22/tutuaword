@@ -15,3 +15,4 @@ zip = { workspace = true }
 [dev-dependencies]
 tw-layout = { path = "../tw-layout" }
 tw-render = { path = "../tw-render" }
+tw-edit = { path = "../tw-edit" }

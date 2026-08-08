@@ -1,4 +1,4 @@
-use tw_model::{Alignment, LineSpacing, Paragraph, RevisionType, TabStop};
+use tw_model::{Alignment, FieldEvalContext, LineSpacing, Paragraph, RevisionType, TabStop, paragraph_layout_text, run_layout_text};
 use tw_shape::{AtlasKey, GlyphAtlas, TextShaper};
 use unicode_linebreak::{linebreaks, BreakOpportunity};
 
@@ -51,6 +51,8 @@ pub struct ParagraphFrame {
     pub tab_interval: f32,
     /// Explicit tab stops from paragraph formatting.
     pub tab_stops: Vec<TabStop>,
+    /// Dynamic field evaluation (PAGE, DATE, …) during layout.
+    pub field_context: Option<FieldEvalContext>,
 }
 
 impl ParagraphFrame {
@@ -64,6 +66,7 @@ impl ParagraphFrame {
             tab_origin: x,
             tab_interval: DEFAULT_TAB_INTERVAL,
             tab_stops: Vec::new(),
+            field_context: None,
         }
     }
 
@@ -77,6 +80,11 @@ impl ParagraphFrame {
         self
     }
 
+    pub fn with_field_context(mut self, field_context: FieldEvalContext) -> Self {
+        self.field_context = Some(field_context);
+        self
+    }
+
     pub fn indented_in(column_x: f32, indent: f32, y: f32, column_width: f32) -> Self {
         Self {
             x: column_x + indent,
@@ -85,6 +93,7 @@ impl ParagraphFrame {
             tab_origin: column_x,
             tab_interval: DEFAULT_TAB_INTERVAL,
             tab_stops: Vec::new(),
+            field_context: None,
         }
     }
 }
@@ -103,6 +112,7 @@ pub fn layout_paragraph(
         tab_origin,
         tab_interval,
         tab_stops,
+        field_context,
     } = frame;
     let font_id = shaper.default_font();
     let mut lines = Vec::new();
@@ -118,7 +128,7 @@ pub fn layout_paragraph(
         .map(|fid| shaper.vertical_metrics(fid, size))
         .unwrap_or((size, size * 0.25, size * 0.1));
 
-    let text = para.full_text();
+    let text = paragraph_layout_text(para, frame.field_context.as_ref());
     if text.trim().is_empty() {
         lines.push(super::types::TextLine {
             y: current_y + ascent,
@@ -169,6 +179,7 @@ pub fn layout_paragraph(
                     tab_origin,
                     tab_interval,
                     &tab_stops,
+                    field_context,
                 ),
                 font_id,
                 default_color,
@@ -192,6 +203,7 @@ pub fn layout_paragraph(
             tab_interval,
             &tab_stops,
             font_id,
+            field_context,
         );
 
         if width <= max_width {
@@ -215,10 +227,12 @@ pub fn layout_paragraph(
                     tab_origin,
                     tab_interval,
                     &tab_stops,
+                    field_context,
                 ),
                 font_id,
                 default_color,
                 true,
+                line_height,
                 &mut lines,
             );
             current_y += line_height;
@@ -232,6 +246,7 @@ pub fn layout_paragraph(
                 tab_interval,
                 &tab_stops,
                 font_id,
+                field_context,
             );
         }
 
@@ -252,6 +267,7 @@ pub fn layout_paragraph(
                     tab_origin,
                     tab_interval,
                     &tab_stops,
+                    field_context,
                 ),
                 font_id,
                 default_color,
@@ -283,6 +299,7 @@ pub fn layout_paragraph(
                 tab_origin,
                 tab_interval,
                 &tab_stops,
+                field_context,
             ),
             font_id,
             default_color,
@@ -344,6 +361,7 @@ struct LineContext<'a> {
     tab_origin: f32,
     tab_interval: f32,
     tab_stops: &'a [TabStop],
+    field_context: Option<FieldEvalContext>,
 }
 
 fn atlas_ctx<'a>(
@@ -356,6 +374,7 @@ fn atlas_ctx<'a>(
     tab_origin: f32,
     tab_interval: f32,
     tab_stops: &'a [TabStop],
+    field_context: Option<FieldEvalContext>,
 ) -> LineContext<'a> {
     LineContext {
         para,
@@ -367,6 +386,7 @@ fn atlas_ctx<'a>(
         tab_origin,
         tab_interval,
         tab_stops,
+        field_context,
     }
 }
 
@@ -377,6 +397,9 @@ fn emit_line(
     font_id: Option<tw_shape::FontId>,
     default_color: u32,
     trim_end: bool,
+    // Paragraph line-spacing rule must win over font-metric height from
+    // `shape_line` — Exact is an absolute height.
+    line_height: f32,
     lines: &mut Vec<super::types::TextLine>,
 ) {
     let end = if trim_end && ctx.end < ctx.text.len() {
@@ -385,7 +408,7 @@ fn emit_line(
         ctx.end
     };
     let line_text = &ctx.text[ctx.start..end];
-    let (line, _) = shape_line(
+    let (mut line, _) = shape_line(
         shaper,
         atlas,
         ctx.para,
@@ -398,7 +421,9 @@ fn emit_line(
         ctx.tab_stops,
         font_id,
         default_color,
+        ctx.field_context,
     );
+    line.line_height = line_height;
     lines.push(line);
 }
 
@@ -420,6 +445,7 @@ fn break_overlong(
     tab_interval: f32,
     tab_stops: &[TabStop],
     font_id: Option<tw_shape::FontId>,
+    field_context: Option<FieldEvalContext>,
 ) -> usize {
     // Interior boundaries only: `start` would make no progress and `end` is
     // already known not to fit.
@@ -443,6 +469,7 @@ fn break_overlong(
             tab_interval,
             tab_stops,
             font_id,
+            field_context,
         ) <= max_width
     });
     if fitting == 0 {
@@ -482,6 +509,7 @@ fn emit_line_wrapped(
             ctx.tab_interval,
             ctx.tab_stops,
             font_id,
+            ctx.field_context,
         );
         if width <= max_width {
             break;
@@ -497,6 +525,7 @@ fn emit_line_wrapped(
             ctx.tab_interval,
             ctx.tab_stops,
             font_id,
+            ctx.field_context,
         );
         if break_at <= start || break_at >= ctx.end {
             break;
@@ -514,10 +543,12 @@ fn emit_line_wrapped(
                 ctx.tab_origin,
                 ctx.tab_interval,
                 ctx.tab_stops,
+                ctx.field_context,
             ),
             font_id,
             default_color,
             true,
+            line_height,
             lines,
         );
         baseline_y += line_height;
@@ -537,10 +568,12 @@ fn emit_line_wrapped(
             ctx.tab_origin,
             ctx.tab_interval,
             ctx.tab_stops,
+            ctx.field_context,
         ),
         font_id,
         default_color,
         trim_end,
+        line_height,
         lines,
     );
     consumed + line_height
@@ -573,6 +606,7 @@ fn measure_range(
     tab_interval: f32,
     tab_stops: &[TabStop],
     font_id: Option<tw_shape::FontId>,
+    field_context: Option<FieldEvalContext>,
 ) -> f32 {
     let Some(fid) = font_id.or_else(|| shaper.default_font()) else {
         return 0.0;
@@ -580,7 +614,7 @@ fn measure_range(
     // Widths are relative to the line origin, so the tab grid resolves against
     // the column origin expressed in the same space.
     let mut width = 0.0;
-    for (segment_text, run, _) in run_segments_for_range(para, start_byte, end_byte) {
+    for (segment_text, run, _) in run_segments_for_range(para, start_byte, end_byte, field_context) {
         if segment_text.is_empty() {
             continue;
         }
@@ -639,6 +673,7 @@ pub fn apply_list_markers(
         &[],
         font_id,
         marker_color,
+        None,
     );
     lines[0].glyphs.append(&mut marker_line.glyphs);
     lines[0].list_marker = Some(marker.to_string());
@@ -697,6 +732,7 @@ fn shape_line(
     tab_stops: &[TabStop],
     font_id: Option<tw_shape::FontId>,
     default_color: u32,
+    field_context: Option<FieldEvalContext>,
 ) -> (super::types::TextLine, f32) {
     let default_size = para.runs.first().and_then(|r| r.format.font_size).unwrap_or(12.0);
     let Some(fid) = font_id.or_else(|| shaper.default_font()) else {
@@ -709,7 +745,7 @@ fn shape_line(
     let mut run_map = Vec::new();
     let line_end_byte = line_start_byte + line_text.len();
 
-    let segments = run_segments_for_range(para, line_start_byte, line_end_byte);
+    let segments = run_segments_for_range(para, line_start_byte, line_end_byte, field_context);
     let mut line_ascent = 0.0f32;
     let mut line_descent = 0.0f32;
     let mut line_gap = 0.0f32;
@@ -892,12 +928,13 @@ fn run_segments_for_range(
     para: &Paragraph,
     start_byte: usize,
     end_byte: usize,
+    field_context: Option<FieldEvalContext>,
 ) -> Vec<(String, tw_model::Run, usize)> {
     let mut segments = Vec::new();
     let mut byte_cursor = 0usize;
 
     for run in &para.runs {
-        let run_text = run.text();
+        let run_text = run_layout_text(run, field_context.as_ref());
         let run_start = byte_cursor;
         let run_end = byte_cursor + run_text.len();
         byte_cursor = run_end;

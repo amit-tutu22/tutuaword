@@ -6,6 +6,14 @@ import 'package:flutter/material.dart';
 import 'package:tutuaword/editor/controllers/engine_host.dart';
 import 'package:tutuaword/editor/controllers/selection_controller.dart';
 
+/// Paragraph line-spacing presets exposed by the Home spacing dialog (F04.S2).
+enum LineSpacingMode {
+  single,
+  oneAndHalf,
+  double_,
+  exact,
+}
+
 /// Ribbon format state — reads ONLY from engine caret-format JSON on caret move.
 class FormattingController extends ChangeNotifier {
   FormattingController({
@@ -34,6 +42,19 @@ class FormattingController extends ChangeNotifier {
   Color? _highlightColor;
   String _activeParagraphStyle = 'Normal';
   double _indentLeft = 0;
+  bool _inList = false;
+  int _listLevel = 0;
+  LineSpacingMode _lineSpacing = LineSpacingMode.single;
+  double _exactLineSpacingPt = 12;
+  double _spaceBefore = 0;
+  double _spaceAfter = 0;
+  List<Map<String, dynamic>> _tabStops = const [];
+  bool _keepTogether = false;
+  bool _keepWithNext = false;
+  bool _widowOrphanControl = true;
+  Color? _paraShading;
+  double _borderWidth = 0;
+  String _styleInspectorSummary = '';
 
   bool get bold => _bold;
   bool get italic => _italic;
@@ -52,6 +73,20 @@ class FormattingController extends ChangeNotifier {
   Color? get highlightColor => _highlightColor;
   String get activeParagraphStyle => _activeParagraphStyle;
   double get indentLeft => _indentLeft;
+  bool get isInList => _inList;
+  int get listLevel => _listLevel;
+  LineSpacingMode get lineSpacing => _lineSpacing;
+  double get exactLineSpacingPt => _exactLineSpacingPt;
+  double get spaceBefore => _spaceBefore;
+  double get spaceAfter => _spaceAfter;
+  List<Map<String, dynamic>> get tabStops =>
+      List<Map<String, dynamic>>.from(_tabStops.map(Map<String, dynamic>.from));
+  bool get keepTogether => _keepTogether;
+  bool get keepWithNext => _keepWithNext;
+  bool get widowOrphanControl => _widowOrphanControl;
+  Color? get paraShading => _paraShading;
+  double get borderWidth => _borderWidth;
+  String get styleInspectorSummary => _styleInspectorSummary;
 
   void syncFromCaret() {
     final engine = _host.engine;
@@ -91,10 +126,33 @@ class FormattingController extends ChangeNotifier {
     _highlightColor = _colorFromFormatJson(charFmt['highlight']);
     _alignment = _alignmentFromJson(paraFmt['alignment'] as String?);
     _indentLeft = (paraFmt['indent_left'] as num?)?.toDouble() ?? 0;
+    final numbering = paraFmt['numbering'];
+    if (numbering is Map) {
+      _inList = true;
+      _listLevel = (numbering['level'] as num?)?.toInt() ?? 0;
+    } else {
+      _inList = false;
+      _listLevel = 0;
+    }
+    _spaceBefore = (paraFmt['space_before'] as num?)?.toDouble() ?? 0;
+    _spaceAfter = (paraFmt['space_after'] as num?)?.toDouble() ?? 0;
+    final parsedSpacing = _lineSpacingFromJson(paraFmt['line_spacing']);
+    _lineSpacing = parsedSpacing.$1;
+    if (parsedSpacing.$2 != null) {
+      _exactLineSpacingPt = parsedSpacing.$2!;
+    }
+    _tabStops = _tabStopsFromJson(paraFmt['tab_stops']);
+    _keepTogether = paraFmt['keep_together'] == true;
+    _keepWithNext = paraFmt['keep_with_next'] == true;
+    _widowOrphanControl = paraFmt['widow_orphan_control'] != false;
+    _paraShading = _colorFromFormatJson(paraFmt['shading']);
+    if (_paraShading?.alpha == 0) _paraShading = null;
+    _borderWidth = _borderWidthFromJson(paraFmt['borders']);
     final styleName = map['style_name'] as String?;
     if (styleName != null && styleName.isNotEmpty) {
       _activeParagraphStyle = styleName;
     }
+    _styleInspectorSummary = map['inspector_summary'] as String? ?? '';
     notifyListeners();
   }
 
@@ -118,6 +176,86 @@ class FormattingController extends ChangeNotifier {
         'Right' => TextAlign.right,
         'Justify' => TextAlign.justify,
         _ => TextAlign.left,
+      };
+
+  /// Parses serde externally-tagged [`LineSpacing`] JSON into UI mode + exact pt.
+  (LineSpacingMode, double?) _lineSpacingFromJson(dynamic value) {
+    if (value == null || value == 'Single') {
+      return (LineSpacingMode.single, null);
+    }
+    if (value == 'Double') {
+      return (LineSpacingMode.double_, null);
+    }
+    if (value is Map) {
+      if (value.containsKey('Exactly')) {
+        final pt = (value['Exactly'] as num?)?.toDouble();
+        return (LineSpacingMode.exact, pt ?? _exactLineSpacingPt);
+      }
+      if (value.containsKey('AtLeast')) {
+        final pt = (value['AtLeast'] as num?)?.toDouble();
+        return (LineSpacingMode.exact, pt ?? _exactLineSpacingPt);
+      }
+      if (value.containsKey('Multiple')) {
+        final m = (value['Multiple'] as num?)?.toDouble() ?? 1.0;
+        if ((m - 1.5).abs() < 0.05) return (LineSpacingMode.oneAndHalf, null);
+        if ((m - 2.0).abs() < 0.05) return (LineSpacingMode.double_, null);
+        if ((m - 1.0).abs() < 0.05) return (LineSpacingMode.single, null);
+        return (LineSpacingMode.oneAndHalf, null);
+      }
+    }
+    return (LineSpacingMode.single, null);
+  }
+
+  Object _lineSpacingToJson(LineSpacingMode mode, double exactPt) => switch (mode) {
+        LineSpacingMode.single => 'Single',
+        LineSpacingMode.oneAndHalf => {'Multiple': 1.5},
+        LineSpacingMode.double_ => 'Double',
+        LineSpacingMode.exact => {'Exactly': exactPt},
+      };
+
+  List<Map<String, dynamic>> _tabStopsFromJson(dynamic value) {
+    if (value is! List) return const [];
+    final stops = <Map<String, dynamic>>[];
+    for (final item in value) {
+      if (item is! Map) continue;
+      final pos = item['position'];
+      if (pos is! num) continue;
+      final align = item['alignment'];
+      stops.add({
+        'position': pos.toDouble(),
+        'alignment': align is String && align.isNotEmpty ? align : 'Left',
+      });
+    }
+    stops.sort((a, b) =>
+        ((a['position'] as num).toDouble()).compareTo((b['position'] as num).toDouble()));
+    return stops;
+  }
+
+  double _borderWidthFromJson(dynamic value) {
+    if (value is! Map) return 0;
+    for (final side in ['top', 'left', 'bottom', 'right']) {
+      final edge = value[side];
+      if (edge is Map) {
+        final width = edge['width'];
+        if (width is num && width.toDouble() > 0) return width.toDouble();
+      }
+    }
+    return 0;
+  }
+
+  Map<String, dynamic>? _colorPatch(Color? color) {
+    if (color == null) return null;
+    return {
+      'r': color.red,
+      'g': color.green,
+      'b': color.blue,
+      'a': color.alpha,
+    };
+  }
+
+  Map<String, dynamic> _borderSpecJson(double width, Color color) => {
+        'width': width,
+        'color': _colorPatch(color),
       };
 
   Future<void> _applyCharFormatJson(String json) async {
@@ -192,10 +330,20 @@ class FormattingController extends ChangeNotifier {
   void increaseFontSize() => setFontSize(_fontSize + 1);
   void decreaseFontSize() => setFontSize(_fontSize - 1);
 
-  String _encodeColorPatch({Color? color, Color? highlight}) {
+  String _encodeColorPatch({
+    Color? color,
+    Color? highlight,
+    Map<String, dynamic>? themeColor,
+  }) {
     final map = <String, dynamic>{};
     if (color != null) {
       map['color'] = {'r': color.red, 'g': color.green, 'b': color.blue, 'a': color.alpha};
+      if (themeColor == null) {
+        map['theme_color'] = null;
+      }
+    }
+    if (themeColor != null) {
+      map['theme_color'] = themeColor;
     }
     if (highlight != null) {
       map['highlight'] = {
@@ -208,9 +356,18 @@ class FormattingController extends ChangeNotifier {
     return jsonEncode(map);
   }
 
-  void setFontColor(Color color) {
+  void setFontColor(Color color, {String? themeSlot, int? themeVariant}) {
     _fontColor = color;
-    unawaited(_applyCharFormatJson(_encodeColorPatch(color: color)));
+    final themeColor = themeSlot != null && themeVariant != null
+        ? {'slot': themeSlot, 'variant': themeVariant}
+        : null;
+    unawaited(_applyCharFormatJson(_encodeColorPatch(color: color, themeColor: themeColor)));
+    notifyListeners();
+  }
+
+  void clearFontColor() {
+    _fontColor = Colors.black;
+    unawaited(_applyCharFormatJson('{"clear_color":true}'));
     notifyListeners();
   }
 
@@ -287,6 +444,10 @@ class FormattingController extends ChangeNotifier {
   static const _indentStep = 36.0;
 
   void increaseIndent() {
+    if (_inList) {
+      promoteListLevel();
+      return;
+    }
     final next = _indentLeft + _indentStep;
     unawaited(_applyParaFormatJson('{"indent_left":$next}'));
     _indentLeft = next;
@@ -294,9 +455,115 @@ class FormattingController extends ChangeNotifier {
   }
 
   void decreaseIndent() {
+    if (_inList) {
+      demoteListLevel();
+      return;
+    }
     final next = (_indentLeft - _indentStep).clamp(0.0, double.infinity);
     unawaited(_applyParaFormatJson('{"indent_left":$next}'));
     _indentLeft = next;
+    notifyListeners();
+  }
+
+  void promoteListLevel() {
+    if (!_inList) return;
+    unawaited(_adjustListLevel(1));
+  }
+
+  void demoteListLevel() {
+    if (!_inList) return;
+    unawaited(_adjustListLevel(-1));
+  }
+
+  Future<void> _adjustListLevel(int delta) async {
+    if (_host.engine == null) return;
+    final edit = _host.performNativeEdit(
+      () => _host.engine!.adjustListLevelAsync(
+        caretRunId: _selection.defaultRunId(),
+        delta: delta,
+      ),
+      dirtyPage: _selection.caretPage,
+    );
+    if (await edit) {
+      syncFromCaret();
+    }
+  }
+
+  /// Applies line spacing + space before/after + pagination flags (F04.S2/S4).
+  void applySpacing({
+    required LineSpacingMode lineSpacing,
+    required double exactPoints,
+    required double spaceBefore,
+    required double spaceAfter,
+    required bool keepTogether,
+    required bool keepWithNext,
+    required bool widowOrphanControl,
+  }) {
+    _lineSpacing = lineSpacing;
+    _exactLineSpacingPt = exactPoints.clamp(1, 240).toDouble();
+    _spaceBefore = spaceBefore.clamp(0, 240).toDouble();
+    _spaceAfter = spaceAfter.clamp(0, 240).toDouble();
+    _keepTogether = keepTogether;
+    _keepWithNext = keepWithNext;
+    _widowOrphanControl = widowOrphanControl;
+    final patch = <String, dynamic>{
+      'line_spacing': _lineSpacingToJson(_lineSpacing, _exactLineSpacingPt),
+      'space_before': _spaceBefore,
+      'space_after': _spaceAfter,
+      'keep_together': keepTogether,
+      'keep_with_next': keepWithNext,
+      'widow_orphan_control': widowOrphanControl,
+    };
+    unawaited(_applyParaFormatJson(jsonEncode(patch)));
+    notifyListeners();
+  }
+
+  /// Replaces explicit tab stops (`Some([])` clears; F04.S3).
+  void applyTabStops(List<Map<String, dynamic>> stops) {
+    final normalized = _tabStopsFromJson(stops);
+    _tabStops = normalized;
+    unawaited(_applyParaFormatJson(jsonEncode({'tab_stops': normalized})));
+    notifyListeners();
+  }
+
+  /// Applies paragraph shading and uniform borders (F04.S4).
+  void applyBordersAndShading({
+    Color? shading,
+    double borderWidth = 0,
+    Color borderColor = Colors.black,
+    bool clearShading = false,
+    bool clearBorders = false,
+  }) {
+    final patch = <String, dynamic>{};
+    if (clearShading) {
+      patch['shading'] = {'r': 0, 'g': 0, 'b': 0, 'a': 0};
+      _paraShading = null;
+    } else if (shading != null) {
+      patch['shading'] = _colorPatch(shading);
+      _paraShading = shading;
+    }
+
+    if (clearBorders) {
+      patch['borders'] = {
+        'top': null,
+        'left': null,
+        'bottom': null,
+        'right': null,
+      };
+      _borderWidth = 0;
+    } else if (borderWidth > 0) {
+      final spec = _borderSpecJson(borderWidth, borderColor);
+      patch['borders'] = {
+        'top': spec,
+        'left': spec,
+        'bottom': spec,
+        'right': spec,
+      };
+      _borderWidth = borderWidth;
+    }
+
+    if (patch.isEmpty) return;
+    unawaited(_applyParaFormatJson(jsonEncode(patch)));
     notifyListeners();
   }
 

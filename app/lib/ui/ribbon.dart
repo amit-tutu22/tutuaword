@@ -73,8 +73,8 @@ class WordRibbonState extends State<WordRibbon> {
     return switch (_activeTab) {
       RibbonTab.home => HomeTab(controller: widget.controller),
       RibbonTab.insert => InsertTab(controller: widget.controller),
-      RibbonTab.design => const DesignTab(),
-      RibbonTab.layout => const LayoutTab(),
+      RibbonTab.design => DesignTab(controller: widget.controller),
+      RibbonTab.layout => LayoutTab(controller: widget.controller),
       RibbonTab.references => const ReferencesTab(),
       RibbonTab.mailings => const MailingsTab(),
       RibbonTab.review => ReviewTab(controller: widget.controller),

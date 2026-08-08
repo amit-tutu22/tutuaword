@@ -34,6 +34,13 @@ fn layout_fingerprint(doc: &Document) -> u64 {
                     img.x.to_bits().hash(&mut hasher);
                     img.y.to_bits().hash(&mut hasher);
                 }
+                LayoutBox::Shape(shape) => {
+                    "shape".hash(&mut hasher);
+                    shape.x.to_bits().hash(&mut hasher);
+                    shape.y.to_bits().hash(&mut hasher);
+                    shape.width.to_bits().hash(&mut hasher);
+                    shape.height.to_bits().hash(&mut hasher);
+                }
                 LayoutBox::Rect { x, y, width, height, .. } => {
                     "rect".hash(&mut hasher);
                     x.to_bits().hash(&mut hasher);

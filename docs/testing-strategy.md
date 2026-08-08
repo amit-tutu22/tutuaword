@@ -320,3 +320,24 @@ cargo tarpaulin --out Html --output-dir coverage/
 ```
 
 Coverage reports uploaded to CI artifact storage. Coverage targets enforced per crate (see Unit Tests section above).
+
+## Stress / Nightly Tests
+
+Slow or scale-sensitive tests are marked `#[ignore]` and live outside the default PR path. Run locally or on nightly CI with:
+
+```bash
+# tw-docx scale / malformed OPC
+cargo test -p tw-docx --test stress -- --ignored
+
+# tw-edit chart data churn
+cargo test -p tw-edit --test stress -- --ignored
+```
+
+| Test ID | Location | Scenario |
+|---------|----------|----------|
+| `stress_multi_chart_export_ten` | `crates/tw-docx/tests/stress/f13_multi_chart_export.rs` | Ten `InsertChart` blocks → export → all chart parts + content-type overrides |
+| `stress_chart_passthrough_fifty_parts` | `crates/tw-docx/tests/stress/f13_chart_passthrough_scale.rs` | Synthetic DOCX with 50 chart parts → import/export byte-stable passthrough |
+| `stress_malformed_chart_*` | `crates/tw-docx/tests/stress/f13_malformed_chart.rs` | Missing chart rels / empty chart XML → import succeeds, placeholder fallback, no panic |
+| `stress_chart_data_churn` | `crates/tw-edit/tests/stress/f13_chart_data_churn.rs` | 500× `SetChartData` apply/undo → export → reimport data intact |
+
+These complement feature-slice unit tests (F12/F13 Bugbot hardening) without slowing every `cargo test` run. WASM concurrent queue stress remains manual until a browser test harness exists.

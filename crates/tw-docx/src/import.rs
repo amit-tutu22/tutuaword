@@ -6,7 +6,10 @@ use zip::ZipArchive;
 
 use crate::paragraph::{paragraph_properties_xml, parse_paragraph_with_retention};
 use crate::preserve::PreservedParagraph;
-use crate::properties::{parse_app_properties, parse_core_properties, parse_read_only_from_settings};
+use crate::properties::{
+    parse_app_properties, parse_core_properties, parse_even_and_odd_headers_from_settings,
+    parse_read_only_from_settings,
+};
 use crate::retention::{scan_ooxml_elements, ImportRetentionReport};
 use crate::styles::{
     parse_numbering_xml, parse_para_properties, parse_section_properties, parse_styles_xml,
@@ -92,6 +95,7 @@ pub fn import_docx(source: &[u8]) -> Result<ImportResult, DocxError> {
         scan_ooxml_elements(hf, &mut retention);
     }
     let mut preserved_paragraphs = crate::preserve::PreservedParagraphMap::new();
+    let mut preserved_shapes = crate::preserve::PreservedShapeMap::new();
     let mut document = {
         let media = PackageMedia {
             package: &package,
@@ -103,8 +107,10 @@ pub fn import_docx(source: &[u8]) -> Result<ImportResult, DocxError> {
             &numbering_xml,
             &theme_xml,
             &media,
+            &package,
             &mut retention,
             &mut preserved_paragraphs,
+            &mut preserved_shapes,
         );
         apply_headers_footers(
             &mut doc,
@@ -113,11 +119,24 @@ pub fn import_docx(source: &[u8]) -> Result<ImportResult, DocxError> {
             &footer_parts,
             &relationships,
             &media,
+            &package,
             &mut retention,
         );
         doc
     };
     package.preserved_paragraphs = preserved_paragraphs;
+    package.preserved_shapes = preserved_shapes;
+
+    for part in package.parts.keys() {
+        if part.starts_with("word/diagrams/") {
+            retention.record_encountered("diagramPart");
+            retention.record_retained("diagramPart");
+        }
+        if part.starts_with("word/charts/") {
+            retention.record_encountered("chartPart");
+            retention.record_retained("chartPart");
+        }
+    }
 
     let mut props = tw_model::DocumentProperties::default();
     if let Some(core) = core_properties_xml.as_deref() {
@@ -131,6 +150,9 @@ pub fn import_docx(source: &[u8]) -> Result<ImportResult, DocxError> {
     if let Some(settings) = settings_xml.as_deref() {
         if parse_read_only_from_settings(settings) {
             document.settings.read_only = true;
+        }
+        if parse_even_and_odd_headers_from_settings(settings) {
+            document.settings.even_and_odd_headers = true;
         }
     }
 
@@ -223,8 +245,10 @@ fn parse_document_xml(
     numbering_xml: &Option<String>,
     theme_xml: &Option<String>,
     media: &dyn MediaResolver,
+    package: &DocxPackage,
     retention: &mut ImportRetentionReport,
     preserved_paragraphs: &mut crate::preserve::PreservedParagraphMap,
+    preserved_shapes: &mut crate::preserve::PreservedShapeMap,
 ) -> Document {
     let mut doc = Document::new();
 
@@ -239,8 +263,15 @@ fn parse_document_xml(
     }
 
     let body = extract_body_xml(xml);
-    let (mut blocks, section_format) =
-        parse_body_blocks(body, &doc, media, retention, preserved_paragraphs);
+    let (mut blocks, section_format) = parse_body_blocks(
+        body,
+        &doc,
+        media,
+        package,
+        retention,
+        preserved_paragraphs,
+        preserved_shapes,
+    );
 
     if blocks.is_empty() {
         blocks.push(Block::Paragraph(Paragraph::new()));
@@ -253,7 +284,7 @@ fn parse_document_xml(
         }
     }
 
-    crate::styles::resolve_theme_fonts(&mut doc);
+    crate::styles::resolve_theme(&mut doc);
     doc
 }
 
@@ -261,8 +292,10 @@ fn parse_body_blocks(
     body: &str,
     doc: &Document,
     media: &dyn MediaResolver,
+    package: &DocxPackage,
     retention: &mut ImportRetentionReport,
     preserved_paragraphs: &mut crate::preserve::PreservedParagraphMap,
+    preserved_shapes: &mut crate::preserve::PreservedShapeMap,
 ) -> (Vec<Block>, Option<tw_model::SectionFormat>) {
     let mut blocks = Vec::new();
     let mut section_format = None;
@@ -272,13 +305,40 @@ fn parse_body_blocks(
             BlockKind::Paragraph => {
                 let image = parse_image_block(chunk, media);
                 let shape = if image.is_none() {
-                    parse_shape_block(chunk)
+                    parse_shape_block(chunk, media, package)
                 } else {
                     None
                 };
                 if let Some(shape) = shape {
                     retention.record_encountered("drawing");
                     retention.record_retained("drawing");
+                    if shape.shape.shape_type == tw_model::ShapeKind::Diagram {
+                        retention.record_encountered("diagram");
+                        retention.record_retained("diagram");
+                        if shape.preview_image.is_some() {
+                            retention.record_encountered("diagramPreview");
+                            retention.record_retained("diagramPreview");
+                        }
+                    }
+                    if shape.shape.shape_type == tw_model::ShapeKind::Chart {
+                        retention.record_encountered("chart");
+                        retention.record_retained("chart");
+                        if shape.preview_image.is_some() {
+                            retention.record_encountered("chartPreview");
+                            retention.record_retained("chartPreview");
+                        }
+                        if shape.chart_data.is_some() {
+                            retention.record_encountered("chartData");
+                            retention.record_retained("chartData");
+                        }
+                    }
+                    preserved_shapes.insert(
+                        shape.id,
+                        PreservedParagraph {
+                            xml: chunk.to_string(),
+                            fingerprint: crate::fingerprint::shape_fingerprint(&shape),
+                        },
+                    );
                     blocks.push(Block::ShapeBlock(shape));
                 } else if image.is_none() {
                     if let Some(para) =
@@ -323,6 +383,7 @@ fn apply_headers_footers(
     footers: &HashMap<String, String>,
     relationships: &HashMap<String, String>,
     media: &dyn MediaResolver,
+    package: &DocxPackage,
     retention: &mut ImportRetentionReport,
 ) {
     let body = extract_body_xml(document_xml);
@@ -340,12 +401,15 @@ fn apply_headers_footers(
             if let Some(part) = part_for_relationship(relationships, &ref_id) {
                 if let Some(xml) = headers.get(&part) {
                     let mut discard = crate::preserve::PreservedParagraphMap::new();
+                    let mut discard_shapes = crate::preserve::PreservedShapeMap::new();
                     let (blocks, _) = parse_body_blocks(
                         extract_part_body(xml),
                         doc,
                         media,
+                        package,
                         retention,
                         &mut discard,
+                        &mut discard_shapes,
                     );
                     if let Some(section) = doc.sections.first_mut() {
                         let hf = if blocks.is_empty() {
@@ -375,12 +439,15 @@ fn apply_headers_footers(
             if let Some(part) = part_for_relationship(relationships, &ref_id) {
                 if let Some(xml) = footers.get(&part) {
                     let mut discard = crate::preserve::PreservedParagraphMap::new();
+                    let mut discard_shapes = crate::preserve::PreservedShapeMap::new();
                     let (blocks, _) = parse_body_blocks(
                         extract_part_body(xml),
                         doc,
                         media,
+                        package,
                         retention,
                         &mut discard,
+                        &mut discard_shapes,
                     );
                     if let Some(section) = doc.sections.first_mut() {
                         let hf = if blocks.is_empty() {

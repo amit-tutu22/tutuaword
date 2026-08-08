@@ -6,14 +6,8 @@ use tw_model::{Document, NodeId, Run};
 use tw_text::slice_chars;
 
 pub fn run_with_id<'a>(doc: &'a Document, run_id: NodeId) -> Option<&'a Run> {
-    let (si, bi, ri) = doc.find_run_location(run_id)?;
-    doc.sections
-        .get(si)?
-        .blocks
-        .get(bi)?
-        .paragraph()?
-        .runs
-        .get(ri)
+    let loc = doc.find_run_location(run_id)?;
+    doc.run_at(loc)
 }
 
 pub fn run_char_len(run: &Run) -> usize {

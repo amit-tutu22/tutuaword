@@ -7,6 +7,7 @@ import 'package:tutuaword/bridge/engine_types.dart';
 import 'package:tutuaword/editor/document_painter.dart';
 import 'package:tutuaword/editor/display_list.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
+import 'package:tutuaword/editor/image_hit_test.dart';
 
 class GlyphEditorSurface extends StatefulWidget {
   const GlyphEditorSurface({
@@ -33,6 +34,8 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
   Offset? _pointerDown;
   bool _selecting = false;
   bool _draggingText = false;
+  bool _resizingImage = false;
+  bool _movingImage = false;
 
   @override
   void initState() {
@@ -75,7 +78,13 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
     // Tab must be handled here: Flutter steals it for focus traversal when
     // ignored, and `event.character` is often null for Tab on macOS.
     if (key == LogicalKeyboardKey.tab) {
-      if (HardwareKeyboard.instance.isShiftPressed) {
+      if (widget.controller.isInList) {
+        if (HardwareKeyboard.instance.isShiftPressed) {
+          widget.controller.demoteListLevel();
+        } else {
+          widget.controller.promoteListLevel();
+        }
+      } else if (HardwareKeyboard.instance.isShiftPressed) {
         widget.controller.decreaseIndent();
       } else {
         unawaited(widget.controller.insertGlyphCharacter('\t'));
@@ -118,15 +127,54 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
   void _onPointerDown(PointerDownEvent event) {
     _pointerDown = event.localPosition;
     _selecting = false;
-    if (widget.controller.isPointInGlyphSelection(
+    _resizingImage = false;
+    _movingImage = false;
+
+    final controller = widget.controller;
+    final onImagePage = controller.selectedImagePage == widget.pageIndex;
+    if (onImagePage && controller.hasSelectedImage) {
+      final handle = controller.imageHandleAt(event.localPosition);
+      if (handle != null) {
+        controller.beginImageResize(handle);
+        _resizingImage = true;
+        _focusNode.requestFocus();
+        return;
+      }
+      if (controller.isPointOnSelectedImage(event.localPosition)) {
+        controller.beginImageMove(event.localPosition);
+        _movingImage = true;
+        _focusNode.requestFocus();
+        return;
+      }
+    }
+
+    if (controller.trySelectDiagramAt(
+      widget.pageIndex,
+      event.localPosition,
+      widget.snapshot,
+    )) {
+      _focusNode.requestFocus();
+      return;
+    }
+
+    if (controller.trySelectImageAt(
+      widget.pageIndex,
+      event.localPosition,
+      widget.snapshot,
+    )) {
+      _focusNode.requestFocus();
+      return;
+    }
+
+    if (controller.isPointInGlyphSelection(
       widget.pageIndex,
       event.localPosition,
     )) {
       _draggingText = true;
-      widget.controller.beginGlyphDrag(widget.pageIndex);
+      controller.beginGlyphDrag(widget.pageIndex);
     } else {
       _draggingText = false;
-      widget.controller.beginGlyphSelection(
+      controller.beginGlyphSelection(
         widget.pageIndex,
         event.localPosition.dx,
         event.localPosition.dy,
@@ -136,6 +184,17 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
   }
 
   void _onPointerMove(PointerMoveEvent event) {
+    if (_resizingImage) {
+      widget.controller.updateImageResize(
+        event.localPosition,
+        lockAspectRatio: HardwareKeyboard.instance.isShiftPressed,
+      );
+      return;
+    }
+    if (_movingImage) {
+      widget.controller.updateImageMove(event.localPosition);
+      return;
+    }
     if (_draggingText) {
       widget.controller.updateGlyphDragDropCaret(
         widget.pageIndex,
@@ -165,7 +224,13 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
   }
 
   void _onPointerUp(PointerUpEvent event) {
-    if (_draggingText) {
+    if (_resizingImage) {
+      unawaited(widget.controller.commitImageResize());
+      _resizingImage = false;
+    } else if (_movingImage) {
+      unawaited(widget.controller.commitImageMove());
+      _movingImage = false;
+    } else if (_draggingText) {
       widget.controller.completeGlyphDrag(
         widget.pageIndex,
         event.localPosition.dx,
@@ -199,13 +264,21 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
         actions: <Type, Action<Intent>>{
           _InsertTabIntent: CallbackAction<_InsertTabIntent>(
             onInvoke: (_) {
-              unawaited(widget.controller.insertGlyphCharacter('\t'));
+              if (widget.controller.isInList) {
+                widget.controller.promoteListLevel();
+              } else {
+                unawaited(widget.controller.insertGlyphCharacter('\t'));
+              }
               return null;
             },
           ),
           _OutdentIntent: CallbackAction<_OutdentIntent>(
             onInvoke: (_) {
-              widget.controller.decreaseIndent();
+              if (widget.controller.isInList) {
+                widget.controller.demoteListLevel();
+              } else {
+                widget.controller.decreaseIndent();
+              }
               return null;
             },
           ),
@@ -235,6 +308,14 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
               onPointerMove: _onPointerMove,
               onPointerUp: _onPointerUp,
               onPointerCancel: (_) {
+                if (_resizingImage) {
+                  widget.controller.cancelImageResize();
+                  _resizingImage = false;
+                }
+                if (_movingImage) {
+                  widget.controller.cancelImageMove();
+                  _movingImage = false;
+                }
                 if (_draggingText) {
                   widget.controller.cancelGlyphDrag();
                 }
@@ -252,6 +333,22 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
                     images: widget.images,
                   ),
                 ),
+                if (widget.controller.selectedDiagramPage == widget.pageIndex &&
+                    widget.controller.selectedDiagramRect != null)
+                  CustomPaint(
+                    size: Size(widget.controller.pageWidth, widget.controller.pageHeight),
+                    painter: _DiagramSelectionPainter(
+                      bounds: widget.controller.selectedDiagramRect!,
+                    ),
+                  ),
+                if (widget.controller.selectedImagePage == widget.pageIndex &&
+                    widget.controller.selectedImageRect != null)
+                  CustomPaint(
+                    size: Size(widget.controller.pageWidth, widget.controller.pageHeight),
+                    painter: _ImageSelectionPainter(
+                      bounds: widget.controller.selectedImageRect!,
+                    ),
+                  ),
                 if (selection.isNotEmpty)
                   CustomPaint(
                     size: Size(widget.controller.pageWidth, widget.controller.pageHeight),
@@ -308,4 +405,55 @@ class _SelectionPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _SelectionPainter oldDelegate) =>
       oldDelegate.rects != rects;
+}
+
+class _ImageSelectionPainter extends CustomPainter {
+  _ImageSelectionPainter({required this.bounds});
+
+  final Rect bounds;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final border = Paint()
+      ..color = const Color(0xFF2563EB)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5;
+    canvas.drawRect(bounds, border);
+
+    final handlePaint = Paint()..color = const Color(0xFF2563EB);
+    for (final point in imageHandlePoints(bounds)) {
+      canvas.drawCircle(point, 4, handlePaint);
+      canvas.drawCircle(
+        point,
+        4,
+        Paint()
+          ..color = Colors.white
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _ImageSelectionPainter oldDelegate) =>
+      oldDelegate.bounds != bounds;
+}
+
+class _DiagramSelectionPainter extends CustomPainter {
+  _DiagramSelectionPainter({required this.bounds});
+
+  final Rect bounds;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final border = Paint()
+      ..color = const Color(0xFF64748B)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5;
+    canvas.drawRect(bounds, border);
+  }
+
+  @override
+  bool shouldRepaint(covariant _DiagramSelectionPainter oldDelegate) =>
+      oldDelegate.bounds != bounds;
 }

@@ -40,6 +40,13 @@ pub fn paragraph_fingerprint(para: &Paragraph) -> u64 {
     hasher.finish()
 }
 
+/// Fingerprint for an imported shape block (bounds + kind + wrap).
+pub fn shape_fingerprint(shape: &tw_model::ShapeBlock) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    hash_shape(shape, &mut hasher);
+    hasher.finish()
+}
+
 /// Tier B fingerprint for the numbering catalog.
 pub fn numbering_fingerprint(catalog: &NumberingCatalog) -> u64 {
     fingerprint_json(catalog)
@@ -87,8 +94,7 @@ fn hash_blocks(blocks: &[Block], hasher: &mut DefaultHasher) {
             }
             Block::ShapeBlock(shape) => {
                 3u8.hash(hasher);
-                shape.shape.width.to_bits().hash(hasher);
-                shape.shape.height.to_bits().hash(hasher);
+                hash_shape(shape, hasher);
             }
             _ => {
                 255u8.hash(hasher);
@@ -155,6 +161,38 @@ fn hash_paragraph(para: &Paragraph, hasher: &mut DefaultHasher) {
         format.color.hash(hasher);
         run.revision.is_some().hash(hasher);
     }
+}
+
+fn hash_shape(shape: &tw_model::ShapeBlock, hasher: &mut DefaultHasher) {
+    shape.shape.shape_type.hash(hasher);
+    shape.shape.width.to_bits().hash(hasher);
+    shape.shape.height.to_bits().hash(hasher);
+    shape.wrap.hash(hasher);
+    shape.style.fill.hash(hasher);
+    shape.style.stroke.hash(hasher);
+    shape.style.stroke_width.to_bits().hash(hasher);
+    shape.paragraphs.len().hash(hasher);
+    for para in &shape.paragraphs {
+        hash_paragraph(para, hasher);
+    }
+    if let Some(preview) = &shape.preview_image {
+        preview.asset_id.hash(hasher);
+        preview.bytes.len().hash(hasher);
+    }
+    if let Some(data) = &shape.chart_data {
+        data.categories.len().hash(hasher);
+        for category in &data.categories {
+            category.hash(hasher);
+        }
+        data.series.len().hash(hasher);
+        for series in &data.series {
+            series.name.hash(hasher);
+            for value in &series.values {
+                value.to_bits().hash(hasher);
+            }
+        }
+    }
+    shape.chart_part.hash(hasher);
 }
 
 #[cfg(test)]

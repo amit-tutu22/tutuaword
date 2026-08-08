@@ -62,6 +62,25 @@ void main() {
 
       expect(find.text('Document1'), findsOneWidget);
     });
+
+    testWidgets('Title bar Open control is enabled for mobile import', (tester) async {
+      await pumpWide(tester, WordTitleBar(controller: controller));
+
+      final openIcon = find.byIcon(Icons.folder_open_outlined);
+      expect(openIcon, findsOneWidget);
+      // Tooltip wraps the gesture target; long-press surfaces the label.
+      await tester.longPress(openIcon);
+      await tester.pumpAndSettle();
+      expect(find.text('Open'), findsOneWidget);
+    });
+
+    testWidgets('Title bar centers document name on the full bar width', (tester) async {
+      await pumpWide(tester, WordTitleBar(controller: controller));
+
+      final title = tester.getCenter(find.text('Document1'));
+      final bar = tester.getRect(find.byType(WordTitleBar));
+      expect(title.dx, closeTo(bar.center.dx, 1.0));
+    });
   });
 
   group('Ribbon tab integration', () {
@@ -119,7 +138,7 @@ void main() {
     });
 
     testWidgets('Design tab renders theme gallery cards', (tester) async {
-      await pumpWide(tester, const DesignTab());
+      await pumpWide(tester, DesignTab(controller: controller));
 
       expect(find.text('Office'), findsOneWidget);
       expect(find.text('Document Formatting'), findsOneWidget);
@@ -230,7 +249,7 @@ void main() {
     });
 
     testWidgets('Design tab disabled controls show Coming soon tooltip', (tester) async {
-      await pumpWide(tester, const DesignTab());
+      await pumpWide(tester, DesignTab(controller: controller));
 
       final tooltip = find.byTooltip(kComingSoonTooltip);
       expect(tooltip, findsWidgets);

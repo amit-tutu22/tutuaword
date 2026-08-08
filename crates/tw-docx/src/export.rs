@@ -6,7 +6,7 @@
 
 use tw_model::{
     Alignment, Block, BorderSpec, CellFormat, CharFormat, Color, Document, ImageBlock, LineSpacing,
-    NodeId, Paragraph, ParaFormat, Run, RunContent, SectionFormat, StyleId, TabAlignment, Table,
+    NodeId, Paragraph, ParaFormat, Run, RunContent, StyleId, StyleSheet, TabAlignment, Table,
     TableCell, TableRow, TextWrap, UnderlineStyle, VerticalAlign,
 };
 
@@ -37,7 +37,6 @@ const PRESERVED_SECTION_CHILDREN: &[&str] = &[
     "w:formProt",
     "w:vAlign",
     "w:noEndnote",
-    "w:titlePg",
     "w:textDirection",
     "w:bidi",
     "w:rtlGutter",
@@ -47,7 +46,29 @@ const PRESERVED_SECTION_CHILDREN: &[&str] = &[
 pub fn export_docx(doc: &Document, package: &DocxPackage) -> Result<Vec<u8>, DocxError> {
     let mut pkg = package.clone();
     let mut media = MediaWriter::new(&pkg);
-    let document_xml = serialize_document_xml(doc, package, &mut media);
+    let mut charts = crate::chart::ChartWriter::new(&pkg);
+    let mut diagrams = crate::diagram::DiagramWriter::new(&pkg);
+    for section in &doc.sections {
+        for block in &section.blocks {
+            if let Block::ShapeBlock(shape) = block {
+                if shape.shape.shape_type == tw_model::ShapeKind::Chart {
+                    if let Some(data) = &shape.chart_data {
+                        charts.reference(shape, data);
+                    }
+                }
+                if shape.shape.shape_type == tw_model::ShapeKind::Diagram {
+                    let preserved = package.preserved_shapes.get(&shape.id);
+                    let use_preserved = preserved
+                        .map(|p| p.fingerprint == crate::fingerprint::shape_fingerprint(shape))
+                        .unwrap_or(false);
+                    if !use_preserved {
+                        diagrams.reference(shape);
+                    }
+                }
+            }
+        }
+    }
+    let document_xml = serialize_document_xml(doc, package, &mut media, &charts, &diagrams);
 
     pkg.parts
         .insert("word/document.xml".into(), document_xml.into_bytes());
@@ -68,7 +89,24 @@ pub fn export_docx(doc: &Document, package: &DocxPackage) -> Result<Vec<u8>, Doc
         }
     }
 
+    let styles_changed = package
+        .source_styles_fingerprint
+        .map(|f| f != crate::fingerprint::styles_fingerprint(&doc.styles))
+        .unwrap_or(true);
+    if styles_changed {
+        let styles_xml = serialize_styles_xml(&doc.styles);
+        pkg.parts
+            .insert("word/styles.xml".into(), styles_xml.into_bytes());
+        pkg.mark_modified("word/styles.xml".into());
+        ensure_styles_content_type(&mut pkg);
+        ensure_styles_relationship(&mut pkg);
+    }
+
     media.commit(&mut pkg);
+    charts.commit(&mut pkg);
+    diagrams.commit(&mut pkg);
+
+    patch_settings_xml(&mut pkg, doc);
 
     crate::opc::repack(&pkg)
 }
@@ -107,7 +145,47 @@ fn ensure_numbering_relationship(pkg: &mut DocxPackage) {
     }
 }
 
-fn serialize_document_xml(doc: &Document, source: &DocxPackage, media: &mut MediaWriter) -> String {
+fn ensure_styles_content_type(pkg: &mut DocxPackage) {
+    let part = "[Content_Types].xml";
+    let bytes = pkg.parts.get(part).cloned().unwrap_or_else(|| {
+        MINIMAL_CONTENT_TYPES.to_vec()
+    });
+    let mut xml = String::from_utf8_lossy(&bytes).into_owned();
+    let override_tag = r#"<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>"#;
+    if !xml.contains("/word/styles.xml") {
+        if let Some(end) = xml.rfind("</Types>") {
+            xml.insert_str(end, override_tag);
+        } else {
+            xml.push_str(override_tag);
+        }
+        pkg.parts.insert(part.into(), xml.into_bytes());
+        pkg.mark_modified(part.into());
+    }
+}
+
+fn ensure_styles_relationship(pkg: &mut DocxPackage) {
+    let part = "word/_rels/document.xml.rels";
+    let bytes = pkg.parts.get(part).cloned().unwrap_or_else(|| b"<Relationships/>".to_vec());
+    let mut xml = String::from_utf8_lossy(&bytes).into_owned();
+    if !xml.contains("styles.xml") {
+        let rel = r#"<Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#;
+        if let Some(end) = xml.rfind("</Relationships>") {
+            xml.insert_str(end, rel);
+        } else {
+            xml = format!("<Relationships>{rel}</Relationships>");
+        }
+        pkg.parts.insert(part.into(), xml.into_bytes());
+        pkg.mark_modified(part.into());
+    }
+}
+
+fn serialize_document_xml(
+    doc: &Document,
+    source: &DocxPackage,
+    media: &mut MediaWriter,
+    charts: &crate::chart::ChartWriter,
+    diagrams: &crate::diagram::DiagramWriter,
+) -> String {
     let original_sect_pr = original_section_properties(source);
     let mut body = String::new();
     let mut revision_ids = RevisionIdAllocator::new();
@@ -115,9 +193,16 @@ fn serialize_document_xml(doc: &Document, source: &DocxPackage, media: &mut Medi
     let last = doc.sections.len().saturating_sub(1);
     for (index, section) in doc.sections.iter().enumerate() {
         for block in &section.blocks {
-            body.push_str(&serialize_block(block, doc, source, media, &mut revision_ids));
+            body.push_str(&serialize_block(
+                block, doc, source, media, charts, diagrams, &mut revision_ids,
+            ));
         }
-        let sect_pr = serialize_section_properties(&section.format, original_sect_pr.as_deref());
+        let sect_pr = serialize_section_properties(
+            index,
+            section,
+            doc,
+            original_sect_pr.as_deref(),
+        );
         if index == last {
             body.push_str(&sect_pr);
         } else {
@@ -140,13 +225,15 @@ fn serialize_block(
     doc: &Document,
     package: &DocxPackage,
     media: &mut MediaWriter,
+    charts: &crate::chart::ChartWriter,
+    diagrams: &crate::diagram::DiagramWriter,
     revision_ids: &mut RevisionIdAllocator,
 ) -> String {
     match block {
         Block::Paragraph(para) => serialize_paragraph(para, doc, package, revision_ids),
-        Block::Table(table) => serialize_table(table, doc, package, media, revision_ids),
+        Block::Table(table) => serialize_table(table, doc, package, media, charts, diagrams, revision_ids),
         Block::ImageBlock(image) => serialize_image_paragraph(image, media),
-        Block::ShapeBlock(shape) => serialize_shape_paragraph(shape),
+        Block::ShapeBlock(shape) => serialize_shape_paragraph(shape, package, charts, diagrams),
         _ => String::from("<w:p/>"),
     }
 }
@@ -201,13 +288,24 @@ fn serialize_paragraph_properties(para: &Paragraph, doc: &Document) -> String {
     }
     if let Some(numbering) = format.numbering {
         props.push_str(&format!(
-            r#"<w:numPr><w:ilvl w:val="{}"/><w:numId w:val="{}"/></w:numPr>"#,
+            r#"<w:numPr><w:ilvl w:val="{}"/><w:numId w:val="{}"/>"#,
             numbering.level, numbering.numbering_id
         ));
+        if format.num_restart == Some(true) {
+            props.push_str(r#"<w:numRestart w:val="1"/>"#);
+        }
+        props.push_str("</w:numPr>");
+    }
+    if let Some(level) = format.outline_level {
+        if level <= 8 {
+            props.push_str(&format!(r#"<w:outlineLvl w:val="{}"/>"#, level));
+        }
     }
     props.push_str(&serialize_spacing(format));
     props.push_str(&serialize_indent(format));
     props.push_str(&serialize_tab_stops(format));
+    props.push_str(&serialize_para_shading(format));
+    props.push_str(&serialize_para_borders(format));
     if let Some(alignment) = format.alignment {
         props.push_str(&format!(
             r#"<w:jc w:val="{}"/>"#,
@@ -281,11 +379,11 @@ fn serialize_indent(format: &ParaFormat) -> String {
 }
 
 fn serialize_tab_stops(format: &ParaFormat) -> String {
-    if format.tab_stops.is_empty() {
+    let Some(stops) = format.tab_stops.as_ref().filter(|s| !s.is_empty()) else {
         return String::new();
-    }
+    };
     let mut xml = String::from("<w:tabs>");
-    for stop in &format.tab_stops {
+    for stop in stops {
         let align = match stop.alignment {
             TabAlignment::Center => "center",
             TabAlignment::Right => "right",
@@ -301,6 +399,40 @@ fn serialize_tab_stops(format: &ParaFormat) -> String {
     }
     xml.push_str("</w:tabs>");
     xml
+}
+
+fn serialize_para_shading(format: &ParaFormat) -> String {
+    let Some(shading) = format.shading.filter(|c| c.a > 0) else {
+        return String::new();
+    };
+    format!(
+        r#"<w:shd w:val="clear" w:color="auto" w:fill="{}"/>"#,
+        hex_rgb(shading)
+    )
+}
+
+fn serialize_para_borders(format: &ParaFormat) -> String {
+    let Some(borders) = format.borders.as_ref().filter(|b| b.any()) else {
+        return String::new();
+    };
+    let mut xml = String::from("<w:pBdr>");
+    xml.push_str(&serialize_para_border_edge("w:top", borders.top.as_ref()));
+    xml.push_str(&serialize_para_border_edge("w:left", borders.left.as_ref()));
+    xml.push_str(&serialize_para_border_edge("w:bottom", borders.bottom.as_ref()));
+    xml.push_str(&serialize_para_border_edge("w:right", borders.right.as_ref()));
+    xml.push_str("</w:pBdr>");
+    xml
+}
+
+fn serialize_para_border_edge(tag: &str, spec: Option<&BorderSpec>) -> String {
+    let Some(spec) = spec else {
+        return String::new();
+    };
+    let size = (spec.width * BORDER_EIGHTHS_PER_POINT).round().max(1.0) as i32;
+    format!(
+        r#"<{tag} w:val="single" w:sz="{size}" w:space="0" w:color="{}"/>"#,
+        hex_rgb(spec.color)
+    )
 }
 
 /// The `w:styleId` the style was imported under, so a saved document keeps
@@ -336,8 +468,20 @@ fn serialize_run(run: &Run, revision_ids: &mut RevisionIdAllocator) -> String {
         RunContent::Break(tw_model::BreakType::Line) => "<w:br/>".to_string(),
         RunContent::Hyperlink { text, .. } => serialize_text(text, deleted),
         RunContent::Field(field) => {
-            let display = field.display_text.as_deref().unwrap_or("[field]");
-            serialize_text(display, deleted)
+            let instr = field
+                .instruction
+                .clone()
+                .unwrap_or_else(|| tw_model::field_instruction(&field.field_type));
+            let inner = format!(
+                "<w:r>{}{}</w:r>",
+                serialize_run_properties(&run.format),
+                serialize_text("", false)
+            );
+            return format!(
+                r#"<w:fldSimple w:instr="{}">{}</w:fldSimple>"#,
+                escape_xml(instr.trim()),
+                inner
+            );
         }
         RunContent::InlineImage(_) => "<w:t>[image]</w:t>".to_string(),
         RunContent::FootnoteRef(_) => "<w:footnoteReference/>".to_string(),
@@ -430,6 +574,23 @@ impl RevisionIdAllocator {
     }
 }
 
+fn theme_variant_tint(variant: u8) -> Option<u8> {
+    match variant {
+        0 => Some(0xCC),
+        1 => Some(0x8C),
+        2 => Some(0x66),
+        _ => None,
+    }
+}
+
+fn theme_variant_shade(variant: u8) -> Option<u8> {
+    match variant {
+        4 => Some(0xBF),
+        5 => Some(0x80),
+        _ => None,
+    }
+}
+
 fn serialize_run_properties(format: &CharFormat) -> String {
     let mut props = String::new();
 
@@ -447,7 +608,20 @@ fn serialize_run_properties(format: &CharFormat) -> String {
     props.push_str(&toggle("w:caps", format.all_caps));
     props.push_str(&toggle("w:smallCaps", format.small_caps));
     props.push_str(&toggle("w:vanish", format.hidden));
-    if let Some(color) = format.color {
+    if let Some(reference) = format.theme_color {
+        let color = format.color.unwrap_or(Color::BLACK);
+        let mut attrs = format!(
+            r#"w:val="{}" w:themeColor="{}""#,
+            hex_rgb(color),
+            reference.ooxml_name()
+        );
+        if let Some(tint) = theme_variant_tint(reference.variant) {
+            attrs.push_str(&format!(r#" w:themeTint="{:02X}""#, tint));
+        } else if let Some(shade) = theme_variant_shade(reference.variant) {
+            attrs.push_str(&format!(r#" w:themeShade="{:02X}""#, shade));
+        }
+        props.push_str(&format!(r#"<w:color {attrs}/>"#));
+    } else if let Some(color) = format.color {
         props.push_str(&format!(r#"<w:color w:val="{}"/>"#, hex_rgb(color)));
     }
     if let Some(size) = format.font_size {
@@ -502,6 +676,8 @@ fn serialize_table(
     doc: &Document,
     package: &DocxPackage,
     media: &mut MediaWriter,
+    charts: &crate::chart::ChartWriter,
+    diagrams: &crate::diagram::DiagramWriter,
     revision_ids: &mut RevisionIdAllocator,
 ) -> String {
     let widths = &table.format.column_widths;
@@ -525,7 +701,9 @@ fn serialize_table(
     xml.push_str("</w:tblGrid>");
 
     for row in &table.rows {
-        xml.push_str(&serialize_table_row(row, widths, doc, package, media, revision_ids));
+        xml.push_str(&serialize_table_row(
+            row, widths, doc, package, media, charts, diagrams, revision_ids,
+        ));
     }
     xml.push_str("</w:tbl>");
     xml
@@ -554,6 +732,8 @@ fn serialize_table_row(
     doc: &Document,
     package: &DocxPackage,
     media: &mut MediaWriter,
+    charts: &crate::chart::ChartWriter,
+    diagrams: &crate::diagram::DiagramWriter,
     revision_ids: &mut RevisionIdAllocator,
 ) -> String {
     let mut xml = String::from("<w:tr>");
@@ -573,7 +753,9 @@ fn serialize_table_row(
             .take(span)
             .copied()
             .sum::<f32>();
-        xml.push_str(&serialize_table_cell(cell, width, doc, package, media, revision_ids));
+        xml.push_str(&serialize_table_cell(
+            cell, width, doc, package, media, charts, diagrams, revision_ids,
+        ));
         column += span;
     }
     xml.push_str("</w:tr>");
@@ -586,6 +768,8 @@ fn serialize_table_cell(
     doc: &Document,
     package: &DocxPackage,
     media: &mut MediaWriter,
+    charts: &crate::chart::ChartWriter,
+    diagrams: &crate::diagram::DiagramWriter,
     revision_ids: &mut RevisionIdAllocator,
 ) -> String {
     let mut xml = String::from("<w:tc>");
@@ -594,7 +778,9 @@ fn serialize_table_cell(
     let mut has_paragraph = false;
     for block in &cell.blocks {
         has_paragraph |= matches!(block, Block::Paragraph(_));
-        xml.push_str(&serialize_block(block, doc, package, media, revision_ids));
+        xml.push_str(&serialize_block(
+            block, doc, package, media, charts, diagrams, revision_ids,
+        ));
     }
     // A cell must end with a paragraph or Word treats the file as corrupt.
     if !has_paragraph {
@@ -664,13 +850,16 @@ fn serialize_image_paragraph(image: &ImageBlock, media: &mut MediaWriter) -> Str
         return "<w:p/>".to_string();
     };
 
-    let cx = to_emu(image.display_width);
-    let cy = to_emu(image.display_height);
     let name = escape_xml(&image.data.asset_id);
     let id = media.next_drawing_id();
+    let (frame_w, frame_h) = image.effective_display_size();
+    let cx = to_emu(frame_w);
+    let cy = to_emu(frame_h);
+    let rot = (image.transform.rotation_deg.rem_euclid(360.0) * 60000.0).round() as i64;
+    let src_rect = image_src_rect(&image.transform);
 
     let graphic = format!(
-        r#"<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="{id}" name="{name}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="{relationship_id}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic>"#
+        r#"<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="{id}" name="{name}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="{relationship_id}"/>{src_rect}<a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm rot="{rot}"><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic>"#
     );
     let doc_pr = format!(r#"<wp:docPr id="{id}" name="Picture {id}"/><wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>"#);
 
@@ -695,12 +884,70 @@ fn serialize_image_paragraph(image: &ImageBlock, media: &mut MediaWriter) -> Str
     format!("<w:p><w:r><w:drawing>{drawing}</w:drawing></w:r></w:p>")
 }
 
-fn serialize_shape_paragraph(shape: &tw_model::ShapeBlock) -> String {
+fn serialize_shape_paragraph(
+    shape: &tw_model::ShapeBlock,
+    package: &DocxPackage,
+    charts: &crate::chart::ChartWriter,
+    diagrams: &crate::diagram::DiagramWriter,
+) -> String {
+    if let Some(preserved) = package.preserved_shapes.get(&shape.id) {
+        if preserved.fingerprint == crate::fingerprint::shape_fingerprint(shape) {
+            return preserved.xml.clone();
+        }
+    }
     let cx = to_emu(shape.shape.width);
     let cy = to_emu(shape.shape.height);
+    if shape.shape.shape_type == tw_model::ShapeKind::Diagram {
+        let (dm, lo) = diagrams
+            .relationships_for(&shape.id)
+            .map(|r| (r.data_rel.as_str(), r.layout_rel.as_str()))
+            .unwrap_or(("rId1", "rId2"));
+        return format!(
+            r#"<w:p><w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="{cx}" cy="{cy}"/><wp:docPr id="1" name="SmartArt Diagram"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/diagram"><dgm:relIds xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:dm="{dm}" r:lo="{lo}"/></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#
+        );
+    }
+    if shape.shape.shape_type == tw_model::ShapeKind::Chart {
+        let rel_id = charts
+            .relationship_for(&shape.id)
+            .unwrap_or("rId1");
+        return format!(
+            r#"<w:p><w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="{cx}" cy="{cy}"/><wp:docPr id="1" name="Chart"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="{rel_id}"/></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#
+        );
+    }
+    let preset = match shape.shape.shape_type {
+        tw_model::ShapeKind::Line => "line",
+        tw_model::ShapeKind::Ellipse => "ellipse",
+        _ => "rect",
+    };
+    let tx_body = shape_tx_body(shape);
+    let fill = shape
+        .style
+        .fill
+        .map(|c| format!(r#"<a:solidFill><a:srgbClr val="{:06X}"/></a:solidFill>"#, c & 0xFFFFFF))
+        .unwrap_or_default();
+    let stroke = shape.style.stroke.map(|c| {
+        format!(
+            r#"<a:ln w="12700"><a:solidFill><a:srgbClr val="{:06X}"/></a:solidFill></a:ln>"#,
+            c & 0xFFFFFF
+        )
+    }).unwrap_or_default();
     format!(
-        r#"<w:p><w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="{cx}" cy="{cy}"/><wp:docPr id="1" name="Shape"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp/></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#
+        r#"<w:p><w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="{cx}" cy="{cy}"/><wp:docPr id="1" name="Shape"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="{preset}"><a:avLst/></a:prstGeom>{fill}{stroke}</wps:spPr>{tx_body}</wps:wsp></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#
     )
+}
+
+fn shape_tx_body(shape: &tw_model::ShapeBlock) -> String {
+    if shape.paragraphs.is_empty() {
+        return String::new();
+    }
+    let mut xml = String::from("<wps:txBody><a:bodyPr/><w:txbxContent>");
+    for para in &shape.paragraphs {
+        xml.push_str("<w:p><w:r><w:t xml:space=\"preserve\">");
+        xml.push_str(&escape_xml(&para.full_text()));
+        xml.push_str("</w:t></w:r></w:p>");
+    }
+    xml.push_str("</w:txbxContent></wps:txBody>");
+    xml
 }
 
 fn wrap_element(wrap: TextWrap) -> &'static str {
@@ -710,6 +957,20 @@ fn wrap_element(wrap: TextWrap) -> &'static str {
         TextWrap::Inline | TextWrap::Behind | TextWrap::InFront => "<wp:wrapNone/>",
         _ => "<wp:wrapNone/>",
     }
+}
+
+fn image_src_rect(t: &tw_model::ImageTransform) -> String {
+    if t.crop_left <= 0.0 && t.crop_top <= 0.0 && t.crop_right <= 0.0 && t.crop_bottom <= 0.0 {
+        return String::new();
+    }
+    let pct = |v: f32| ((v.clamp(0.0, 0.95) * 100_000.0).round() as i64).to_string();
+    format!(
+        r#"<a:srcRect l="{}" t="{}" r="{}" b="{}"/>"#,
+        pct(t.crop_left),
+        pct(t.crop_top),
+        pct(t.crop_right),
+        pct(t.crop_bottom),
+    )
 }
 
 fn anchor_origin_value(origin: tw_model::AnchorOrigin) -> &'static str {
@@ -722,13 +983,54 @@ fn anchor_origin_value(origin: tw_model::AnchorOrigin) -> &'static str {
 
 // -- sections -----------------------------------------------------------------
 
-fn serialize_section_properties(format: &SectionFormat, original: Option<&str>) -> String {
+fn serialize_section_properties(
+    section_index: usize,
+    section: &tw_model::Section,
+    _doc: &Document,
+    original: Option<&str>,
+) -> String {
+    let format = &section.format;
     let mut xml = String::from("<w:sectPr>");
 
-    // Header and footer references point at parts we pass through untouched,
-    // so they have to be carried over rather than regenerated.
     if let Some(original) = original {
-        xml.push_str(&copy_children(original, PRESERVED_SECTION_CHILDREN));
+        if section_index == 0 {
+            xml.push_str(&copy_children(original, PRESERVED_SECTION_CHILDREN));
+        } else {
+            xml.push_str(&copy_children(
+                original,
+                &PRESERVED_SECTION_CHILDREN
+                    .iter()
+                    .copied()
+                    .filter(|tag| *tag != "w:headerReference" && *tag != "w:footerReference")
+                    .collect::<Vec<_>>(),
+            ));
+        }
+    }
+
+    for hf_type in [
+        tw_model::HeaderFooterType::Default,
+        tw_model::HeaderFooterType::First,
+        tw_model::HeaderFooterType::Even,
+        tw_model::HeaderFooterType::Odd,
+    ] {
+        if section_index > 0 && section.header_links.is_linked(hf_type) {
+            continue;
+        }
+        if section.headers.get(&hf_type).is_some_and(|hf| !hf.blocks.is_empty()) {
+            xml.push_str(&format!(
+                r#"<w:headerReference w:type="{}" w:linked="0"/>"#,
+                ooxml_hf_type(hf_type)
+            ));
+        }
+        if section_index > 0 && section.footer_links.is_linked(hf_type) {
+            continue;
+        }
+        if section.footers.get(&hf_type).is_some_and(|hf| !hf.blocks.is_empty()) {
+            xml.push_str(&format!(
+                r#"<w:footerReference w:type="{}" w:linked="0"/>"#,
+                ooxml_hf_type(hf_type)
+            ));
+        }
     }
     xml.push_str(&format!(
         r#"<w:pgSz w:w="{}" w:h="{}"/>"#,
@@ -742,8 +1044,89 @@ fn serialize_section_properties(format: &SectionFormat, original: Option<&str>) 
         to_twips(format.margin_bottom),
         to_twips(format.margin_left)
     ));
+    if format.columns.count > 1 {
+        xml.push_str(&format!(
+            r#"<w:cols w:num="{}" w:space="{}"/>"#,
+            format.columns.count,
+            to_twips(format.columns.gap)
+        ));
+    }
+    if format.different_first_page {
+        xml.push_str("<w:titlePg/>");
+    }
     xml.push_str("</w:sectPr>");
     xml
+}
+
+fn ooxml_hf_type(kind: tw_model::HeaderFooterType) -> &'static str {
+    match kind {
+        tw_model::HeaderFooterType::Default => "default",
+        tw_model::HeaderFooterType::First => "first",
+        tw_model::HeaderFooterType::Even => "even",
+        tw_model::HeaderFooterType::Odd => "odd",
+        _ => "default",
+    }
+}
+
+fn patch_settings_xml(pkg: &mut DocxPackage, doc: &Document) {
+    let path = "word/settings.xml";
+    let xml = pkg
+        .parts
+        .get(path)
+        .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+        .unwrap_or_else(minimal_settings_xml);
+    let patched = set_even_and_odd_headers_in_settings(&xml, doc.settings.even_and_odd_headers);
+    if patched != xml {
+        pkg.parts.insert(path.into(), patched.into_bytes());
+        pkg.mark_modified(path.into());
+    }
+}
+
+fn minimal_settings_xml() -> String {
+    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+</w:settings>"#
+        .into()
+}
+
+fn set_even_and_odd_headers_in_settings(xml: &str, enabled: bool) -> String {
+    let tag = "<w:evenAndOddHeaders";
+    if enabled {
+        if xml.contains(tag) {
+            return xml.to_string();
+        }
+        if let Some(end) = xml.rfind("</w:settings>") {
+            let mut out = xml.to_string();
+            out.insert_str(end, "<w:evenAndOddHeaders/>");
+            return out;
+        }
+        return minimal_settings_xml().replace(
+            "</w:settings>",
+            "<w:evenAndOddHeaders/></w:settings>",
+        );
+    }
+
+    if !xml.contains(tag) {
+        return xml.to_string();
+    }
+    let mut out = String::new();
+    let mut rest = xml;
+    while let Some(start) = rest.find(tag) {
+        out.push_str(&rest[..start]);
+        let after = &rest[start..];
+        let end = if after.starts_with("<w:evenAndOddHeaders/>") {
+            "<w:evenAndOddHeaders/>".len()
+        } else if let Some(close) = after.find("</w:evenAndOddHeaders>") {
+            close + "</w:evenAndOddHeaders>".len()
+        } else if let Some(head_end) = after.find('>') {
+            head_end + 1
+        } else {
+            break;
+        };
+        rest = &after[end..];
+    }
+    out.push_str(rest);
+    out
 }
 
 fn original_section_properties(package: &DocxPackage) -> Option<String> {
@@ -849,6 +1232,118 @@ pub(crate) fn escape_xml(text: &str) -> String {
         .replace('\'', "&apos;")
 }
 
+/// Serialize the full paragraph-style catalog to `word/styles.xml`.
+pub fn serialize_styles_xml(styles: &StyleSheet) -> String {
+    let mut xml = String::from(
+        r#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"#,
+    );
+    let defaults = serialize_run_properties(&styles.defaults.char_format);
+    if !defaults.is_empty() {
+        xml.push_str("<w:docDefaults>");
+        xml.push_str(&defaults);
+        xml.push_str("</w:docDefaults>");
+    }
+    for style_id in style_export_order(styles) {
+        let Some(style) = styles.paragraph_styles.get(&style_id) else {
+            continue;
+        };
+        let ooxml_id = styles
+            .ooxml_id_for(style_id)
+            .unwrap_or_else(|| style.name.replace(' ', ""));
+        let default_attr = if style.name == "Normal" {
+            r#" w:default="1""#
+        } else {
+            ""
+        };
+        xml.push_str(&format!(
+            r#"<w:style w:type="paragraph" w:styleId="{}"{default_attr}>"#,
+            escape_xml(&ooxml_id)
+        ));
+        xml.push_str(&format!(
+            r#"<w:name w:val="{}"/>"#,
+            escape_xml(&style.name)
+        ));
+        if let Some(base) = style.based_on.and_then(|id| styles.ooxml_id_for(id)) {
+            xml.push_str(&format!(r#"<w:basedOn w:val="{}"/>"#, escape_xml(&base)));
+        }
+        if let Some(next) = style.next_style.and_then(|id| styles.ooxml_id_for(id)) {
+            xml.push_str(&format!(r#"<w:next w:val="{}"/>"#, escape_xml(&next)));
+        }
+        let para_props = serialize_style_para_properties(&style.para_format);
+        if !para_props.is_empty() {
+            xml.push_str(&format!("<w:pPr>{para_props}</w:pPr>"));
+        }
+        let run_props = serialize_run_properties(&style.char_format);
+        if !run_props.is_empty() {
+            xml.push_str(&run_props);
+        }
+        xml.push_str("</w:style>");
+    }
+    xml.push_str("</w:styles>");
+    xml
+}
+
+fn style_export_order(styles: &StyleSheet) -> Vec<StyleId> {
+    let mut order = Vec::new();
+    let mut seen = HashMap::new();
+    for &id in styles.paragraph_styles.keys() {
+        visit_style_order(id, styles, &mut order, &mut seen);
+    }
+    order
+}
+
+fn visit_style_order(
+    id: StyleId,
+    styles: &StyleSheet,
+    order: &mut Vec<StyleId>,
+    seen: &mut HashMap<StyleId, ()>,
+) {
+    if seen.contains_key(&id) {
+        return;
+    }
+    if let Some(style) = styles.paragraph_styles.get(&id) {
+        if let Some(base) = style.based_on {
+            visit_style_order(base, styles, order, seen);
+        }
+    }
+    seen.insert(id, ());
+    order.push(id);
+}
+
+fn serialize_style_para_properties(format: &ParaFormat) -> String {
+    let mut props = String::new();
+    if format.keep_together == Some(true) {
+        props.push_str("<w:keepLines/>");
+    }
+    if format.keep_with_next == Some(true) {
+        props.push_str("<w:keepNext/>");
+    }
+    if let Some(widow) = format.widow_orphan_control {
+        if widow {
+            props.push_str("<w:widowControl/>");
+        } else {
+            props.push_str(r#"<w:widowControl w:val="0"/>"#);
+        }
+    }
+    if let Some(level) = format.outline_level {
+        if level <= 8 {
+            props.push_str(&format!(r#"<w:outlineLvl w:val="{}"/>"#, level));
+        }
+    }
+    props.push_str(&serialize_spacing(format));
+    props.push_str(&serialize_indent(format));
+    props.push_str(&serialize_tab_stops(format));
+    props.push_str(&serialize_para_shading(format));
+    props.push_str(&serialize_para_borders(format));
+    if let Some(alignment) = format.alignment {
+        props.push_str(&format!(
+            r#"<w:jc w:val="{}"/>"#,
+            alignment_value(alignment)
+        ));
+    }
+    props
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -857,7 +1352,9 @@ mod tests {
     fn xml_for(doc: &Document) -> String {
         let package = DocxPackage::minimal();
         let mut media = MediaWriter::new(&package);
-        serialize_document_xml(doc, &package, &mut media)
+        let charts = crate::chart::ChartWriter::new(&package);
+        let diagrams = crate::diagram::DiagramWriter::new(&package);
+        serialize_document_xml(doc, &package, &mut media, &charts, &diagrams)
     }
 
     #[test]

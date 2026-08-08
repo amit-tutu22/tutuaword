@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:flutter/material.dart';
 import 'package:tutuaword/bridge/document_properties.dart';
 import 'package:tutuaword/bridge/engine_types.dart';
 import 'package:tutuaword/editor/doc_range.dart';
@@ -21,6 +22,8 @@ abstract class DocumentEngine {
     int endOffset,
   );
   String? fetchCaretFormat(String runId);
+  String? fetchSectionFormat({String? caretRunId});
+  String? fetchDocumentOutline();
   DocumentProperties fetchDocumentProperties();
   bool isDocumentReadOnly();
 
@@ -81,13 +84,107 @@ abstract class DocumentEngine {
     int endOffset,
   );
   Future<bool> insertPageBreakAtAsync({String? caretRunId});
+  Future<bool> insertSectionBreakAtAsync({String? caretRunId});
+  Future<bool> ensureHeaderFooterAsync({
+    String? caretRunId,
+    required bool isHeader,
+    int pageIndex = 0,
+  });
+  String? fetchHeaderFooterSeedRun({
+    String? caretRunId,
+    required bool isHeader,
+    int pageIndex = 0,
+  });
+  bool fetchEvenAndOddHeadersEnabled();
+  Future<bool> setEvenAndOddHeadersAsync({required bool enabled});
+  bool fetchHeaderFooterLinked({
+    String? caretRunId,
+    required bool isHeader,
+    int pageIndex = 0,
+  });
+  Future<bool> setHeaderFooterLinkAsync({
+    String? caretRunId,
+    required bool isHeader,
+    required bool linked,
+    int pageIndex = 0,
+  });
+  Future<bool> insertFieldAsync({
+    required String runId,
+    required int offset,
+    required String fieldType,
+  });
   bool setCurrentPageIndex(int page);
   Future<bool> applyHeading1StyleAsync({String? caretRunId});
   Future<bool> applyNormalStyleAtAsync({String? caretRunId});
+  Future<bool> applyParagraphStyleAsync({String? caretRunId, required String styleName});
+  Future<bool> applyDocumentThemeAsync({required String themeName});
+  Future<bool> applySectionFormatJsonAsync({
+    required String formatJson,
+    String? caretRunId,
+  });
   Future<bool> applyBulletListStyleAsync({String? caretRunId});
   Future<bool> applyNumberedListStyleAsync({String? caretRunId});
+  Future<bool> adjustListLevelAsync({String? caretRunId, required int delta});
+  Future<bool> restartNumberingAsync({String? caretRunId});
+  Future<bool> continueNumberingAsync({String? caretRunId});
   Future<bool> insertTableBlockAsync(int rows, int cols);
+  Future<bool> deleteTableRowAsync({String? caretRunId});
+  Future<bool> deleteTableColumnAsync({String? caretRunId});
+  Future<bool> mergeTableCellsAsync({String? caretRunId});
+  Future<bool> splitTableCellAsync({String? caretRunId});
+  Future<bool> setTableBorderAsync({
+    String? caretRunId,
+    required double width,
+    required Color color,
+  });
+  Future<bool> setTableCellShadingAsync({
+    String? caretRunId,
+    Color? shading,
+  });
+  Future<bool> resizeTableColumnAsync({
+    String? caretRunId,
+    required double width,
+  });
+  Future<bool> autofitTableAsync({String? caretRunId});
+  Future<bool> sortTableRowsAsync({String? caretRunId, required bool ascending});
+  Future<bool> insertNestedTableAsync({
+    String? caretRunId,
+    required int rows,
+    required int cols,
+  });
+  Future<bool> insertTableSumFieldAsync({String? caretRunId});
   Future<bool> insertImageBlockAsync(double width, double height);
+  Future<bool> insertImageBytesAsync(Uint8List bytes, String mimeType);
+  Future<bool> insertShapeBlockAsync(int shapeType);
+  Future<bool> insertTextBoxAsync();
+  Future<bool> insertWordArtAsync(String text);
+  Future<bool> insertDiagramAsync();
+  Future<bool> insertChartAsync();
+  Future<bool> setImageSizeAsync(String imageId, double width, double height);
+  Future<bool> replaceImageBytesAsync(
+    String imageId,
+    Uint8List bytes,
+    String mimeType,
+  );
+  Future<bool> setImageWrapAsync(String imageId, int wrap);
+  Future<bool> setImageAnchorAsync(
+    String imageId,
+    double x,
+    double y, {
+    int originX = 0,
+    int originY = 0,
+  });
+  Future<bool> setImageTransformAsync(
+    String imageId, {
+    double rotationDeg = 0,
+    double cropLeft = 0,
+    double cropTop = 0,
+    double cropRight = 0,
+    double cropBottom = 0,
+    double opacity = 1,
+  });
+  Future<bool> insertImageCaptionAsync(String imageId);
+  Future<bool> compressImageAsync(String imageId, int quality);
   Future<bool> undoEditAsync();
   Future<bool> redoEditAsync();
 

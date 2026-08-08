@@ -9,6 +9,21 @@ class HomeTab extends StatelessWidget {
 
   final EditorController controller;
 
+  static const _builtinGalleryStyles = <(String, TextStyle)>[
+    ('Normal', TextStyle(fontSize: 9)),
+    ('Heading 1', TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+    ('Heading 2', TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+    ('Heading 3', TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+    ('Heading 4', TextStyle(fontSize: 9, fontStyle: FontStyle.italic)),
+    ('Heading 5', TextStyle(fontSize: 9)),
+    ('Heading 6', TextStyle(fontSize: 9, fontStyle: FontStyle.italic)),
+    ('Heading 7', TextStyle(fontSize: 9)),
+    ('Heading 8', TextStyle(fontSize: 8, fontStyle: FontStyle.italic)),
+    ('Heading 9', TextStyle(fontSize: 8)),
+    ('Quote', TextStyle(fontSize: 9, fontStyle: FontStyle.italic)),
+    ('Caption', TextStyle(fontSize: 8, fontStyle: FontStyle.italic)),
+  ];
+
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
@@ -128,14 +143,18 @@ class HomeTab extends StatelessWidget {
                       icon: Icons.format_color_text,
                       tooltip: 'Font Color',
                       barColor: controller.fontColor,
-                      onColorSelected: controller.setFontColor,
-                      onAutomatic: () => controller.setFontColor(Colors.black),
+                      onColorSelected: (selection) => controller.setFontColor(
+                        selection.color,
+                        themeSlot: selection.themeSlot,
+                        themeVariant: selection.themeVariant,
+                      ),
+                      onAutomatic: controller.clearFontColor,
                     ),
                     RibbonColorButton(
                       icon: Icons.format_color_fill,
                       tooltip: 'Text Highlight Color',
                       barColor: controller.highlightColor ?? const Color(0xFFFFFF00),
-                      onColorSelected: controller.setHighlight,
+                      onColorSelected: (selection) => controller.setHighlight(selection.color),
                       onClear: controller.clearHighlight,
                     ),
                     RibbonTextToggleButton(
@@ -189,6 +208,16 @@ class HomeTab extends StatelessWidget {
                       onPressed: controller.applyNumberedList,
                     ),
                     RibbonIconButton(
+                      icon: Icons.restart_alt,
+                      tooltip: 'Restart Numbering',
+                      onPressed: controller.isInList ? controller.restartNumbering : null,
+                    ),
+                    RibbonIconButton(
+                      icon: Icons.playlist_play,
+                      tooltip: 'Continue Numbering',
+                      onPressed: controller.isInList ? controller.continueNumbering : null,
+                    ),
+                    RibbonIconButton(
                       icon: Icons.format_indent_decrease,
                       tooltip: 'Decrease Indent',
                       onPressed: controller.decreaseIndent,
@@ -229,8 +258,16 @@ class HomeTab extends StatelessWidget {
                       selected: controller.alignment == TextAlign.justify,
                       onPressed: () => controller.setAlignment(TextAlign.justify),
                     ),
-                    RibbonIconButton(icon: Icons.format_line_spacing, onPressed: null),
-                    RibbonIconButton(icon: Icons.border_all, onPressed: null),
+                    RibbonIconButton(
+                      icon: Icons.format_line_spacing,
+                      tooltip: 'Paragraph Spacing',
+                      onPressed: () => controller.showParagraphSpacingDialog(context),
+                    ),
+                    RibbonIconButton(
+                      icon: Icons.border_all,
+                      tooltip: 'Borders and Shading',
+                      onPressed: () => controller.showParagraphBordersDialog(context),
+                    ),
                   ],
                 ),
               ],
@@ -240,24 +277,33 @@ class HomeTab extends StatelessWidget {
             label: 'Styles',
             child: Row(
               children: [
-                StyleGalleryCard(
-                  label: 'Normal',
-                  previewStyle: const TextStyle(fontSize: 9),
-                  selected: controller.activeParagraphStyle == 'Normal',
-                  onPressed: controller.applyNormalStyle,
-                ),
-                StyleGalleryCard(
-                  label: 'No Spacing',
-                  previewStyle: const TextStyle(fontSize: 9, height: 1.0),
-                  onPressed: null,
-                ),
-                StyleGalleryCard(
-                  label: 'Heading 1',
-                  previewStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
-                  onPressed: controller.applyHeading1,
+                SizedBox(
+                  width: 420,
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        for (final entry in _builtinGalleryStyles)
+                          StyleGalleryCard(
+                            label: entry.$1,
+                            previewStyle: entry.$2,
+                            selected: controller.activeParagraphStyle == entry.$1,
+                            onPressed: () => controller.applyParagraphStyle(entry.$1),
+                          ),
+                        StyleGalleryCard(
+                          label: 'No Spacing',
+                          previewStyle: const TextStyle(fontSize: 9, height: 1.0),
+                          onPressed: null,
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
                 RibbonIconButton(icon: Icons.chevron_right, onPressed: null),
-                RibbonTextButton(label: 'Styles\nPane', onPressed: null),
+                RibbonTextButton(
+                  label: 'Styles\nPane',
+                  onPressed: controller.toggleStyleInspector,
+                ),
               ],
             ),
           ),

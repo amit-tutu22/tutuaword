@@ -1,6 +1,6 @@
 use crate::line::{layout_paragraph, ParagraphFrame};
 use crate::types::{TableCellLayout, TableLayout};
-use tw_model::Table;
+use tw_model::{sum_numeric_above, FieldEvalContext, Table};
 use tw_shape::{GlyphAtlas, TextShaper};
 
 const CELL_PADDING: f32 = 4.0;
@@ -99,21 +99,43 @@ pub fn layout_table_slice(
             let col_w: f32 = col_widths[ci..ci + colspan].iter().sum();
             let text_width = (col_w - CELL_PADDING * 2.0).max(1.0);
 
+            let sum_above = sum_numeric_above(table, ri, ci);
+            let field_ctx = FieldEvalContext::for_page(0, 1).with_table_sum_above(sum_above);
+
             let mut cell_lines = Vec::new();
+            let mut nested_tables = Vec::new();
             let mut cursor_y = row_y + CELL_PADDING;
             for block in &cell.blocks {
-                if let tw_model::Block::Paragraph(para) = block {
-                    // Word restarts the tab grid at each cell's text edge.
-                    let (lines, height) = layout_paragraph(
-                        shaper,
-                        atlas,
-                        para,
-                        ParagraphFrame::new(col_x + CELL_PADDING, cursor_y, text_width)
-                            .with_tab_interval(tab_interval),
-                        default_color,
-                    );
-                    cell_lines.extend(lines);
-                    cursor_y += height;
+                match block {
+                    tw_model::Block::Paragraph(para) => {
+                        let (lines, height) = layout_paragraph(
+                            shaper,
+                            atlas,
+                            para,
+                            ParagraphFrame::new(col_x + CELL_PADDING, cursor_y, text_width)
+                                .with_tab_interval(tab_interval)
+                                .with_field_context(field_ctx),
+                            default_color,
+                        );
+                        cell_lines.extend(lines);
+                        cursor_y += height;
+                    }
+                    tw_model::Block::Table(nested) => {
+                        let nested_max = (text_width - CELL_PADDING).max(1.0);
+                        let nested_layout = layout_table(
+                            shaper,
+                            atlas,
+                            nested,
+                            col_x + CELL_PADDING,
+                            cursor_y,
+                            nested_max,
+                            default_color,
+                            tab_interval,
+                        );
+                        cursor_y += nested_layout.height + CELL_PADDING;
+                        nested_tables.push(nested_layout);
+                    }
+                    _ => {}
                 }
             }
             let content_height = cursor_y - row_y + CELL_PADDING;
@@ -131,6 +153,7 @@ pub fn layout_table_slice(
                 cell_id: cell.id,
                 background: cell.format.background.map(|c| c.to_argb()),
                 lines: cell_lines,
+                nested_tables,
             });
 
             ci += colspan;

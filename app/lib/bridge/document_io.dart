@@ -50,6 +50,9 @@ class DocumentReader {
         case 'twdoc':
           return TwdocReader.extractText(bytes);
         case 'docx':
+          if (_zipContains(bytes, 'content.json')) {
+            return TwdocReader.extractText(bytes);
+          }
           return _extractDocxText(bytes);
         case 'odt':
           return _extractOdtText(bytes);
@@ -115,15 +118,26 @@ class DocumentReader {
   static bool _zipContains(Uint8List bytes, String name) {
     try {
       final archive = ZipDecoder().decodeBytes(bytes);
-      return archive.findFile(name) != null;
+      return _findZipFile(archive, name) != null;
     } catch (_) {
       return false;
     }
   }
 
+  static ArchiveFile? _findZipFile(Archive archive, String normalizedPath) {
+    final target =
+        normalizedPath.replaceAll('\\', '/').replaceFirst(RegExp(r'^/+'), '').toLowerCase();
+    for (final file in archive.files) {
+      final entry =
+          file.name.replaceAll('\\', '/').replaceFirst(RegExp(r'^/+'), '').toLowerCase();
+      if (entry == target) return file;
+    }
+    return null;
+  }
+
   static String _extractDocxText(Uint8List bytes) {
     final archive = ZipDecoder().decodeBytes(bytes);
-    final content = archive.findFile('word/document.xml');
+    final content = _findZipFile(archive, 'word/document.xml');
     if (content == null) {
       throw const FormatException('word/document.xml missing from .docx');
     }
@@ -133,7 +147,7 @@ class DocumentReader {
 
   static String _extractOdtText(Uint8List bytes) {
     final archive = ZipDecoder().decodeBytes(bytes);
-    final content = archive.findFile('content.xml');
+    final content = _findZipFile(archive, 'content.xml');
     if (content == null) {
       throw const FormatException('content.xml missing from .odt');
     }

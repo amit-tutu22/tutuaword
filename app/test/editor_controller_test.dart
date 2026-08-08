@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
@@ -77,9 +79,12 @@ void main() {
       await Future<void>.delayed(Duration.zero);
       expect(controller.statusText, contains('Table'));
 
-      controller.insertImage();
+      controller.insertImageBytes(
+        Uint8List.fromList([0x89, 0x50, 0x4E, 0x47]),
+        'image/png',
+      );
       await Future<void>.delayed(Duration.zero);
-      expect(controller.statusText, contains('Image'));
+      expect(controller.statusText, contains('Picture'));
 
       controller.applyHeading1();
       await Future<void>.delayed(Duration.zero);

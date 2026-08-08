@@ -6,6 +6,7 @@ import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:tutuaword/bridge/command_codec.dart';
 import 'package:tutuaword/bridge/document_properties.dart';
@@ -129,6 +130,46 @@ typedef TwApplyHeading1Dart = int Function(Pointer<Utf8>);
 typedef TwApplyNormalStyleNative = Int32 Function(Pointer<Utf8>);
 typedef TwApplyNormalStyleDart = int Function(Pointer<Utf8>);
 
+typedef TwApplyParagraphStyleNative = Int32 Function(Pointer<Utf8>, Pointer<Utf8>);
+typedef TwApplyParagraphStyleDart = int Function(Pointer<Utf8>, Pointer<Utf8>);
+
+typedef TwApplyDocumentThemeNative = Int32 Function(Pointer<Utf8>);
+typedef TwApplyDocumentThemeDart = int Function(Pointer<Utf8>);
+
+typedef TwApplySectionFormatJsonNative = Int32 Function(Pointer<Utf8>, Pointer<Utf8>);
+typedef TwApplySectionFormatJsonDart = int Function(Pointer<Utf8>, Pointer<Utf8>);
+
+typedef TwGetSectionFormatJsonNative = Int32 Function(
+  Pointer<Utf8>,
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwGetSectionFormatJsonDart = int Function(
+  Pointer<Utf8>,
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+
+typedef TwInsertSectionBreakNative = Int32 Function(Pointer<Utf8>);
+typedef TwInsertSectionBreakDart = int Function(Pointer<Utf8>);
+typedef TwEnsureHeaderFooterNative = Int32 Function(Pointer<Utf8>, Int32, Int32);
+typedef TwEnsureHeaderFooterDart = int Function(Pointer<Utf8>, int, int);
+typedef TwSetEvenAndOddHeadersNative = Int32 Function(Int32);
+typedef TwSetEvenAndOddHeadersDart = int Function(int);
+typedef TwEvenAndOddHeadersEnabledNative = Int32 Function();
+typedef TwEvenAndOddHeadersEnabledDart = int Function();
+typedef TwHeaderFooterLinkedNative = Int32 Function(Pointer<Utf8>, Int32, Int32);
+typedef TwHeaderFooterLinkedDart = int Function(Pointer<Utf8>, int, int);
+typedef TwSetHeaderFooterLinkNative = Int32 Function(Pointer<Utf8>, Int32, Int32, Int32);
+typedef TwSetHeaderFooterLinkDart = int Function(Pointer<Utf8>, int, int, int);
+typedef TwHeaderFooterSeedRunNative = Int32 Function(
+    Pointer<Utf8>, Int32, Int32, Pointer<Pointer<Uint8>>, Pointer<IntPtr>);
+typedef TwHeaderFooterSeedRunDart = int Function(
+    Pointer<Utf8>, int, int, Pointer<Pointer<Uint8>>, Pointer<IntPtr>);
+typedef TwInsertFieldNative = Int32 Function(
+    Pointer<Utf8>, Int32, Pointer<Utf8>);
+typedef TwInsertFieldDart = int Function(Pointer<Utf8>, int, Pointer<Utf8>);
+
 typedef TwGetTextRangeNative = Int32 Function(
   Pointer<Utf8>,
   Uint32,
@@ -157,6 +198,15 @@ typedef TwGetCaretFormatDart = int Function(
   Pointer<IntPtr>,
 );
 
+typedef TwGetDocumentOutlineNative = Int32 Function(
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwGetDocumentOutlineDart = int Function(
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+
 typedef TwClearFormatNative = Int32 Function(
   Pointer<Utf8>,
   Uint32,
@@ -179,11 +229,83 @@ typedef TwApplyBulletListDart = int Function(Pointer<Utf8>);
 typedef TwApplyNumberedListNative = Int32 Function(Pointer<Utf8>);
 typedef TwApplyNumberedListDart = int Function(Pointer<Utf8>);
 
+typedef TwAdjustListLevelNative = Int32 Function(Pointer<Utf8>, Int32);
+typedef TwAdjustListLevelDart = int Function(Pointer<Utf8>, int);
+
+typedef TwRestartNumberingNative = Int32 Function(Pointer<Utf8>);
+typedef TwRestartNumberingDart = int Function(Pointer<Utf8>);
+
+typedef TwContinueNumberingNative = Int32 Function(Pointer<Utf8>);
+typedef TwContinueNumberingDart = int Function(Pointer<Utf8>);
+
 typedef TwInsertTableNative = Int32 Function(Uint32, Uint32);
 typedef TwInsertTableDart = int Function(int, int);
+typedef TwDeleteTableRowNative = Int32 Function(Pointer<Utf8>);
+typedef TwDeleteTableRowDart = int Function(Pointer<Utf8>);
+typedef TwDeleteTableColumnNative = Int32 Function(Pointer<Utf8>);
+typedef TwDeleteTableColumnDart = int Function(Pointer<Utf8>);
+typedef TwMergeTableCellsNative = Int32 Function(Pointer<Utf8>);
+typedef TwMergeTableCellsDart = int Function(Pointer<Utf8>);
+typedef TwSplitTableCellNative = Int32 Function(Pointer<Utf8>);
+typedef TwSplitTableCellDart = int Function(Pointer<Utf8>);
+
+typedef TwSetTableBorderNative = Int32 Function(Pointer<Utf8>, Float, Uint8, Uint8, Uint8, Uint8);
+typedef TwSetTableBorderDart = int Function(Pointer<Utf8>, double, int, int, int, int);
+
+typedef TwSetTableCellShadingNative = Int32 Function(Pointer<Utf8>, Int32, Uint8, Uint8, Uint8);
+typedef TwSetTableCellShadingDart = int Function(Pointer<Utf8>, int, int, int, int);
+
+typedef TwResizeTableColumnNative = Int32 Function(Pointer<Utf8>, Float);
+typedef TwResizeTableColumnDart = int Function(Pointer<Utf8>, double);
+
+typedef TwAutofitTableNative = Int32 Function(Pointer<Utf8>);
+typedef TwAutofitTableDart = int Function(Pointer<Utf8>);
+
+typedef TwSortTableRowsNative = Int32 Function(Pointer<Utf8>, Bool);
+typedef TwSortTableRowsDart = int Function(Pointer<Utf8>, bool);
+
+typedef TwInsertNestedTableNative = Int32 Function(Pointer<Utf8>, Uint32, Uint32);
+typedef TwInsertNestedTableDart = int Function(Pointer<Utf8>, int, int);
+
+typedef TwInsertTableSumFieldNative = Int32 Function(Pointer<Utf8>);
+typedef TwInsertTableSumFieldDart = int Function(Pointer<Utf8>);
 
 typedef TwInsertImageNative = Int32 Function(Float, Float);
 typedef TwInsertImageDart = int Function(double, double);
+typedef TwInsertShapeNative = Int32 Function(Int32);
+typedef TwInsertShapeDart = int Function(int);
+typedef TwInsertTextBoxNative = Int32 Function();
+typedef TwInsertTextBoxDart = int Function();
+typedef TwInsertWordArtNative = Int32 Function(Pointer<Utf8>);
+typedef TwInsertWordArtDart = int Function(Pointer<Utf8>);
+typedef TwInsertDiagramNative = Int32 Function();
+typedef TwInsertDiagramDart = int Function();
+typedef TwInsertChartNative = Int32 Function();
+typedef TwInsertChartDart = int Function();
+typedef TwInsertImageBytesNative = Int32 Function(
+    Pointer<Uint8>, IntPtr, Pointer<Utf8>);
+typedef TwInsertImageBytesDart = int Function(
+    Pointer<Uint8>, int, Pointer<Utf8>);
+typedef TwReplaceImageBytesNative = Int32 Function(
+    Pointer<Utf8>, Pointer<Uint8>, IntPtr, Pointer<Utf8>);
+typedef TwReplaceImageBytesDart = int Function(
+    Pointer<Utf8>, Pointer<Uint8>, int, Pointer<Utf8>);
+typedef TwSetImageSizeNative = Int32 Function(Pointer<Utf8>, Float, Float);
+typedef TwSetImageSizeDart = int Function(Pointer<Utf8>, double, double);
+typedef TwSetImageWrapNative = Int32 Function(Pointer<Utf8>, Uint8);
+typedef TwSetImageWrapDart = int Function(Pointer<Utf8>, int);
+typedef TwSetImageAnchorNative = Int32 Function(
+    Pointer<Utf8>, Float, Float, Uint8, Uint8);
+typedef TwSetImageAnchorDart = int Function(
+    Pointer<Utf8>, double, double, int, int);
+typedef TwSetImageTransformNative = Int32 Function(
+    Pointer<Utf8>, Float, Float, Float, Float, Float, Float);
+typedef TwSetImageTransformDart = int Function(
+    Pointer<Utf8>, double, double, double, double, double, double);
+typedef TwInsertImageCaptionNative = Int32 Function(Pointer<Utf8>);
+typedef TwInsertImageCaptionDart = int Function(Pointer<Utf8>);
+typedef TwCompressImageNative = Int32 Function(Pointer<Utf8>, Uint8);
+typedef TwCompressImageDart = int Function(Pointer<Utf8>, int);
 
 typedef TwExportPdfNative = Int32 Function(Pointer<Pointer<Uint8>>, Pointer<IntPtr>);
 typedef TwExportPdfDart = int Function(Pointer<Pointer<Uint8>>, Pointer<IntPtr>);
@@ -294,6 +416,7 @@ class NativeEngine {
   TwRegisterFontDart? registerFontNative;
   late final TwGetTextRangeDart getTextRange;
   late final TwGetCaretFormatDart getCaretFormat;
+  late final TwGetDocumentOutlineDart getDocumentOutline;
   late final TwClearFormatDart clearFormatNative;
   late final TwInsertPageBreakDart insertPageBreak;
   late final TwOpenDocumentWithPathDart openDocumentWithPath;
@@ -302,10 +425,49 @@ class NativeEngine {
   late final TwSetCurrentPageDart setCurrentPage;
   late final TwApplyHeading1Dart applyHeading1;
   late final TwApplyNormalStyleDart applyNormalStyle;
+  late final TwApplyParagraphStyleDart applyParagraphStyle;
+  late final TwApplyDocumentThemeDart applyDocumentTheme;
+  late final TwApplySectionFormatJsonDart applySectionFormatJson;
+  late final TwGetSectionFormatJsonDart getSectionFormatJson;
+  late final TwInsertSectionBreakDart insertSectionBreak;
+  late final TwEnsureHeaderFooterDart ensureHeaderFooter;
+  late final TwSetEvenAndOddHeadersDart setEvenAndOddHeaders;
+  late final TwEvenAndOddHeadersEnabledDart evenAndOddHeadersEnabled;
+  late final TwHeaderFooterLinkedDart headerFooterLinked;
+  late final TwSetHeaderFooterLinkDart setHeaderFooterLink;
+  late final TwHeaderFooterSeedRunDart headerFooterSeedRun;
+  late final TwInsertFieldDart insertField;
   late final TwApplyBulletListDart applyBulletList;
   late final TwApplyNumberedListDart applyNumberedList;
+  late final TwAdjustListLevelDart adjustListLevel;
+  late final TwRestartNumberingDart restartNumbering;
+  late final TwContinueNumberingDart continueNumbering;
   late final TwInsertTableDart insertTable;
+  late final TwDeleteTableRowDart deleteTableRow;
+  late final TwDeleteTableColumnDart deleteTableColumn;
+  late final TwMergeTableCellsDart mergeTableCells;
+  late final TwSplitTableCellDart splitTableCell;
+  late final TwSetTableBorderDart setTableBorder;
+  late final TwSetTableCellShadingDart setTableCellShading;
+  late final TwResizeTableColumnDart resizeTableColumn;
+  late final TwAutofitTableDart autofitTable;
+  late final TwSortTableRowsDart sortTableRows;
+  late final TwInsertNestedTableDart insertNestedTable;
+  late final TwInsertTableSumFieldDart insertTableSumField;
   late final TwInsertImageDart insertImage;
+  late final TwInsertShapeDart insertShape;
+  late final TwInsertTextBoxDart insertTextBox;
+  late final TwInsertWordArtDart insertWordArt;
+  late final TwInsertDiagramDart insertDiagram;
+  late final TwInsertChartDart insertChart;
+  late final TwInsertImageBytesDart insertImageBytes;
+  late final TwSetImageSizeDart setImageSize;
+  late final TwSetImageWrapDart setImageWrap;
+  late final TwSetImageAnchorDart setImageAnchor;
+  late final TwSetImageTransformDart setImageTransform;
+  late final TwInsertImageCaptionDart insertImageCaption;
+  late final TwCompressImageDart compressImage;
+  late final TwReplaceImageBytesDart replaceImageBytes;
   late final TwExportPdfDart exportPdf;
   late final TwUndoDart undo;
   late final TwRedoDart redo;
@@ -386,6 +548,9 @@ class NativeEngine {
           lib.lookupFunction<TwGetTextRangeNative, TwGetTextRangeDart>('tw_get_text_range');
       engine.getCaretFormat = lib.lookupFunction<TwGetCaretFormatNative, TwGetCaretFormatDart>(
           'tw_get_caret_format');
+      engine.getDocumentOutline =
+          lib.lookupFunction<TwGetDocumentOutlineNative, TwGetDocumentOutlineDart>(
+              'tw_get_document_outline');
       engine.clearFormatNative =
           lib.lookupFunction<TwClearFormatNative, TwClearFormatDart>('tw_clear_format');
       engine.insertPageBreak = lib.lookupFunction<TwInsertPageBreakNative, TwInsertPageBreakDart>(
@@ -402,14 +567,96 @@ class NativeEngine {
           lib.lookupFunction<TwApplyHeading1Native, TwApplyHeading1Dart>('tw_apply_heading1');
       engine.applyNormalStyle = lib.lookupFunction<TwApplyNormalStyleNative, TwApplyNormalStyleDart>(
           'tw_apply_normal_style');
+      engine.applyParagraphStyle = lib.lookupFunction<TwApplyParagraphStyleNative, TwApplyParagraphStyleDart>(
+          'tw_apply_paragraph_style');
+      engine.applyDocumentTheme = lib.lookupFunction<TwApplyDocumentThemeNative, TwApplyDocumentThemeDart>(
+          'tw_apply_document_theme');
+      engine.applySectionFormatJson = lib.lookupFunction<TwApplySectionFormatJsonNative,
+          TwApplySectionFormatJsonDart>('tw_apply_section_format_json');
+      engine.getSectionFormatJson = lib.lookupFunction<TwGetSectionFormatJsonNative,
+          TwGetSectionFormatJsonDart>('tw_get_section_format_json');
+      engine.insertSectionBreak = lib.lookupFunction<TwInsertSectionBreakNative,
+          TwInsertSectionBreakDart>('tw_insert_section_break');
+      engine.ensureHeaderFooter = lib.lookupFunction<TwEnsureHeaderFooterNative,
+          TwEnsureHeaderFooterDart>('tw_ensure_header_footer');
+      engine.setEvenAndOddHeaders = lib.lookupFunction<TwSetEvenAndOddHeadersNative,
+          TwSetEvenAndOddHeadersDart>('tw_set_even_and_odd_headers');
+      engine.evenAndOddHeadersEnabled = lib.lookupFunction<TwEvenAndOddHeadersEnabledNative,
+          TwEvenAndOddHeadersEnabledDart>('tw_even_and_odd_headers_enabled');
+      engine.headerFooterLinked = lib.lookupFunction<TwHeaderFooterLinkedNative,
+          TwHeaderFooterLinkedDart>('tw_header_footer_linked');
+      engine.setHeaderFooterLink = lib.lookupFunction<TwSetHeaderFooterLinkNative,
+          TwSetHeaderFooterLinkDart>('tw_set_header_footer_link');
+      engine.headerFooterSeedRun = lib.lookupFunction<TwHeaderFooterSeedRunNative,
+          TwHeaderFooterSeedRunDart>('tw_header_footer_seed_run');
+      engine.insertField =
+          lib.lookupFunction<TwInsertFieldNative, TwInsertFieldDart>('tw_insert_field');
       engine.applyBulletList = lib.lookupFunction<TwApplyBulletListNative, TwApplyBulletListDart>(
           'tw_apply_bullet_list');
       engine.applyNumberedList = lib.lookupFunction<TwApplyNumberedListNative, TwApplyNumberedListDart>(
           'tw_apply_numbered_list');
+      engine.adjustListLevel = lib.lookupFunction<TwAdjustListLevelNative, TwAdjustListLevelDart>(
+          'tw_adjust_list_level');
+      engine.restartNumbering = lib.lookupFunction<TwRestartNumberingNative, TwRestartNumberingDart>(
+          'tw_restart_numbering');
+      engine.continueNumbering = lib.lookupFunction<TwContinueNumberingNative, TwContinueNumberingDart>(
+          'tw_continue_numbering');
       engine.insertTable =
           lib.lookupFunction<TwInsertTableNative, TwInsertTableDart>('tw_insert_table');
+      engine.deleteTableRow = lib.lookupFunction<TwDeleteTableRowNative, TwDeleteTableRowDart>(
+          'tw_delete_table_row');
+      engine.deleteTableColumn = lib.lookupFunction<TwDeleteTableColumnNative,
+          TwDeleteTableColumnDart>('tw_delete_table_column');
+      engine.mergeTableCells = lib.lookupFunction<TwMergeTableCellsNative, TwMergeTableCellsDart>(
+          'tw_merge_table_cells');
+      engine.splitTableCell = lib.lookupFunction<TwSplitTableCellNative, TwSplitTableCellDart>(
+          'tw_split_table_cell');
+      engine.setTableBorder = lib.lookupFunction<TwSetTableBorderNative, TwSetTableBorderDart>(
+          'tw_set_table_border');
+      engine.setTableCellShading =
+          lib.lookupFunction<TwSetTableCellShadingNative, TwSetTableCellShadingDart>(
+              'tw_set_table_cell_shading');
+      engine.resizeTableColumn =
+          lib.lookupFunction<TwResizeTableColumnNative, TwResizeTableColumnDart>(
+              'tw_resize_table_column');
+      engine.autofitTable = lib.lookupFunction<TwAutofitTableNative, TwAutofitTableDart>(
+          'tw_autofit_table');
+      engine.sortTableRows = lib.lookupFunction<TwSortTableRowsNative, TwSortTableRowsDart>(
+          'tw_sort_table_rows');
+      engine.insertNestedTable =
+          lib.lookupFunction<TwInsertNestedTableNative, TwInsertNestedTableDart>(
+              'tw_insert_nested_table');
+      engine.insertTableSumField =
+          lib.lookupFunction<TwInsertTableSumFieldNative, TwInsertTableSumFieldDart>(
+              'tw_insert_table_sum_field');
       engine.insertImage =
           lib.lookupFunction<TwInsertImageNative, TwInsertImageDart>('tw_insert_image');
+      engine.insertShape =
+          lib.lookupFunction<TwInsertShapeNative, TwInsertShapeDart>('tw_insert_shape');
+      engine.insertTextBox =
+          lib.lookupFunction<TwInsertTextBoxNative, TwInsertTextBoxDart>('tw_insert_text_box');
+      engine.insertWordArt =
+          lib.lookupFunction<TwInsertWordArtNative, TwInsertWordArtDart>('tw_insert_word_art');
+      engine.insertDiagram =
+          lib.lookupFunction<TwInsertDiagramNative, TwInsertDiagramDart>('tw_insert_diagram');
+      engine.insertChart =
+          lib.lookupFunction<TwInsertChartNative, TwInsertChartDart>('tw_insert_chart');
+      engine.insertImageBytes = lib.lookupFunction<TwInsertImageBytesNative,
+          TwInsertImageBytesDart>('tw_insert_image_bytes');
+      engine.setImageSize = lib.lookupFunction<TwSetImageSizeNative, TwSetImageSizeDart>(
+          'tw_set_image_size');
+      engine.setImageWrap = lib.lookupFunction<TwSetImageWrapNative, TwSetImageWrapDart>(
+          'tw_set_image_wrap');
+      engine.setImageAnchor = lib.lookupFunction<TwSetImageAnchorNative, TwSetImageAnchorDart>(
+          'tw_set_image_anchor');
+      engine.setImageTransform = lib.lookupFunction<TwSetImageTransformNative, TwSetImageTransformDart>(
+          'tw_set_image_transform');
+      engine.insertImageCaption = lib.lookupFunction<TwInsertImageCaptionNative, TwInsertImageCaptionDart>(
+          'tw_insert_image_caption');
+      engine.compressImage = lib.lookupFunction<TwCompressImageNative, TwCompressImageDart>(
+          'tw_compress_image');
+      engine.replaceImageBytes = lib.lookupFunction<TwReplaceImageBytesNative,
+          TwReplaceImageBytesDart>('tw_replace_image_bytes');
       engine.exportPdf =
           lib.lookupFunction<TwExportPdfNative, TwExportPdfDart>('tw_export_pdf');
       engine.undo = lib.lookupFunction<TwUndoNative, TwUndoDart>('tw_undo');
@@ -839,6 +1086,44 @@ extension NativeEngineOps on NativeEngine {
     }
   }
 
+  String? fetchDocumentOutline() {
+    final outPtr = calloc<Pointer<Uint8>>();
+    final outLen = calloc<IntPtr>();
+    try {
+      final result = getDocumentOutline(outPtr, outLen);
+      if (result != 0) return null;
+      final len = outLen.value;
+      final ptr = outPtr.value;
+      if (ptr == nullptr || len == 0) return '[]';
+      final json = ptr.cast<Utf8>().toDartString(length: len);
+      freeBuffer(ptr, len);
+      return json;
+    } finally {
+      calloc.free(outPtr);
+      calloc.free(outLen);
+    }
+  }
+
+  String? fetchSectionFormat({String? caretRunId}) {
+    final caretPtr = caretRunId?.toNativeUtf8() ?? nullptr;
+    final outPtr = calloc<Pointer<Uint8>>();
+    final outLen = calloc<IntPtr>();
+    try {
+      final result = getSectionFormatJson(caretPtr, outPtr, outLen);
+      if (result != 0) return null;
+      final len = outLen.value;
+      final ptr = outPtr.value;
+      if (ptr == nullptr || len == 0) return null;
+      final json = ptr.cast<Utf8>().toDartString(length: len);
+      freeBuffer(ptr, len);
+      return json;
+    } finally {
+      if (caretRunId != null) calloc.free(caretPtr);
+      calloc.free(outPtr);
+      calloc.free(outLen);
+    }
+  }
+
   bool clearFormat(
     String startRunId,
     int startOffset,
@@ -859,6 +1144,15 @@ extension NativeEngineOps on NativeEngine {
     final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
     try {
       return insertPageBreak(ptr) == 0;
+    } finally {
+      if (caretRunId != null) calloc.free(ptr);
+    }
+  }
+
+  bool insertSectionBreakAt({String? caretRunId}) {
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return insertSectionBreak(ptr) == 0;
     } finally {
       if (caretRunId != null) calloc.free(ptr);
     }
@@ -1178,6 +1472,147 @@ extension NativeEngineOps on NativeEngine {
     }
   }
 
+  Future<bool> applyParagraphStyleAsync({
+    String? caretRunId,
+    required String styleName,
+  }) async {
+    final caretPtr = caretRunId?.toNativeUtf8() ?? nullptr;
+    final stylePtr = styleName.toNativeUtf8();
+    try {
+      return enqueueEdit(() => applyParagraphStyle(caretPtr, stylePtr));
+    } finally {
+      if (caretRunId != null) calloc.free(caretPtr);
+      calloc.free(stylePtr);
+    }
+  }
+
+  Future<bool> applyDocumentThemeAsync({required String themeName}) async {
+    final ptr = themeName.toNativeUtf8();
+    try {
+      return enqueueEdit(() => applyDocumentTheme(ptr));
+    } finally {
+      calloc.free(ptr);
+    }
+  }
+
+  Future<bool> insertSectionBreakAtAsync({String? caretRunId}) async {
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return enqueueEdit(() => insertSectionBreak(ptr));
+    } finally {
+      if (caretRunId != null) calloc.free(ptr);
+    }
+  }
+
+  Future<bool> ensureHeaderFooterAsync({
+    String? caretRunId,
+    required bool isHeader,
+    int pageIndex = 0,
+  }) async {
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return enqueueEdit(
+        () => ensureHeaderFooter(ptr, isHeader ? 1 : 0, pageIndex),
+      );
+    } finally {
+      if (caretRunId != null) calloc.free(ptr);
+    }
+  }
+
+  String? fetchHeaderFooterSeedRun({
+    String? caretRunId,
+    required bool isHeader,
+    int pageIndex = 0,
+  }) {
+    final caretPtr = caretRunId?.toNativeUtf8() ?? nullptr;
+    final outPtr = calloc<Pointer<Uint8>>();
+    final outLen = calloc<IntPtr>();
+    try {
+      final result = headerFooterSeedRun(
+        caretPtr,
+        isHeader ? 1 : 0,
+        pageIndex,
+        outPtr,
+        outLen,
+      );
+      if (result != 0) return null;
+      final len = outLen.value;
+      final ptr = outPtr.value;
+      if (ptr == nullptr || len == 0) return null;
+      final runId = ptr.cast<Utf8>().toDartString(length: len);
+      freeBuffer(ptr, len);
+      return runId;
+    } finally {
+      if (caretRunId != null) calloc.free(caretPtr);
+      calloc.free(outPtr);
+      calloc.free(outLen);
+    }
+  }
+
+  bool fetchEvenAndOddHeadersEnabled() => evenAndOddHeadersEnabled() == 1;
+
+  Future<bool> setEvenAndOddHeadersAsync({required bool enabled}) =>
+      enqueueEdit(() => setEvenAndOddHeaders(enabled ? 1 : 0));
+
+  bool fetchHeaderFooterLinked({
+    String? caretRunId,
+    required bool isHeader,
+    int pageIndex = 0,
+  }) {
+    final caretPtr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      final result = headerFooterLinked(caretPtr, isHeader ? 1 : 0, pageIndex);
+      return result == 1;
+    } finally {
+      if (caretRunId != null) calloc.free(caretPtr);
+    }
+  }
+
+  Future<bool> setHeaderFooterLinkAsync({
+    String? caretRunId,
+    required bool isHeader,
+    required bool linked,
+    int pageIndex = 0,
+  }) async {
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return enqueueEdit(
+        () => setHeaderFooterLink(ptr, isHeader ? 1 : 0, pageIndex, linked ? 1 : 0),
+      );
+    } finally {
+      if (caretRunId != null) calloc.free(ptr);
+    }
+  }
+
+  Future<bool> insertFieldAsync({
+    required String runId,
+    required int offset,
+    required String fieldType,
+  }) async {
+    final runPtr = runId.toNativeUtf8();
+    final typePtr = fieldType.toNativeUtf8();
+    try {
+      return enqueueEdit(() => insertField(runPtr, offset, typePtr));
+    } finally {
+      calloc.free(runPtr);
+      calloc.free(typePtr);
+    }
+  }
+
+  Future<bool> applySectionFormatJsonAsync({
+    required String formatJson,
+    String? caretRunId,
+  }) async {
+    final jsonPtr = formatJson.toNativeUtf8();
+    final caretPtr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return enqueueEdit(() => applySectionFormatJson(jsonPtr, caretPtr));
+    } finally {
+      calloc.free(jsonPtr);
+      if (caretRunId != null) calloc.free(caretPtr);
+    }
+  }
+
   Future<bool> applyBulletListStyleAsync({String? caretRunId}) async {
     final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
     try {
@@ -1196,11 +1631,305 @@ extension NativeEngineOps on NativeEngine {
     }
   }
 
+  /// Promote (+1) or demote (−1) list level at the caret (F05.S2).
+  Future<bool> adjustListLevelAsync({String? caretRunId, required int delta}) async {
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      final code = adjustListLevel(ptr, delta);
+      if (code == 1) return true;
+      if (code != 0) return false;
+      return awaitEditCompletion();
+    } finally {
+      if (caretRunId != null) calloc.free(ptr);
+    }
+  }
+
+  Future<bool> restartNumberingAsync({String? caretRunId}) async {
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return enqueueEdit(() => restartNumbering(ptr));
+    } finally {
+      if (caretRunId != null) calloc.free(ptr);
+    }
+  }
+
+  Future<bool> continueNumberingAsync({String? caretRunId}) async {
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return enqueueEdit(() => continueNumbering(ptr));
+    } finally {
+      if (caretRunId != null) calloc.free(ptr);
+    }
+  }
+
   Future<bool> insertTableBlockAsync(int rows, int cols) =>
       enqueueEdit(() => insertTable(rows, cols));
 
+  Future<bool> deleteTableRowAsync({String? caretRunId}) async {
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return enqueueEdit(() => deleteTableRow(ptr));
+    } finally {
+      if (caretRunId != null) calloc.free(ptr);
+    }
+  }
+
+  Future<bool> deleteTableColumnAsync({String? caretRunId}) async {
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return enqueueEdit(() => deleteTableColumn(ptr));
+    } finally {
+      if (caretRunId != null) calloc.free(ptr);
+    }
+  }
+
+  Future<bool> mergeTableCellsAsync({String? caretRunId}) async {
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return enqueueEdit(() => mergeTableCells(ptr));
+    } finally {
+      if (caretRunId != null) calloc.free(ptr);
+    }
+  }
+
+  Future<bool> splitTableCellAsync({String? caretRunId}) async {
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return enqueueEdit(() => splitTableCell(ptr));
+    } finally {
+      if (caretRunId != null) calloc.free(ptr);
+    }
+  }
+
+  Future<bool> setTableBorderAsync({
+    String? caretRunId,
+    required double width,
+    required Color color,
+  }) async {
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return enqueueEdit(
+        () => setTableBorder(
+          ptr,
+          width,
+          color.red,
+          color.green,
+          color.blue,
+          (color.a * 255).round(),
+        ),
+      );
+    } finally {
+      if (caretRunId != null) calloc.free(ptr);
+    }
+  }
+
+  Future<bool> setTableCellShadingAsync({
+    String? caretRunId,
+    Color? shading,
+  }) async {
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return enqueueEdit(
+        () => setTableCellShading(
+          ptr,
+          shading == null ? -1 : shading.red,
+          shading?.green ?? 0,
+          shading?.blue ?? 0,
+          shading == null ? 0 : (shading.a * 255).round(),
+        ),
+      );
+    } finally {
+      if (caretRunId != null) calloc.free(ptr);
+    }
+  }
+
+  Future<bool> resizeTableColumnAsync({
+    String? caretRunId,
+    required double width,
+  }) async {
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return enqueueEdit(() => resizeTableColumn(ptr, width));
+    } finally {
+      if (caretRunId != null) calloc.free(ptr);
+    }
+  }
+
+  Future<bool> autofitTableAsync({String? caretRunId}) async {
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return enqueueEdit(() => autofitTable(ptr));
+    } finally {
+      if (caretRunId != null) calloc.free(ptr);
+    }
+  }
+
+  Future<bool> sortTableRowsAsync({
+    String? caretRunId,
+    required bool ascending,
+  }) async {
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return enqueueEdit(() => sortTableRows(ptr, ascending));
+    } finally {
+      if (caretRunId != null) calloc.free(ptr);
+    }
+  }
+
+  Future<bool> insertNestedTableAsync({
+    String? caretRunId,
+    required int rows,
+    required int cols,
+  }) async {
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return enqueueEdit(() => insertNestedTable(ptr, rows, cols));
+    } finally {
+      if (caretRunId != null) calloc.free(ptr);
+    }
+  }
+
+  Future<bool> insertTableSumFieldAsync({String? caretRunId}) async {
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return enqueueEdit(() => insertTableSumField(ptr));
+    } finally {
+      if (caretRunId != null) calloc.free(ptr);
+    }
+  }
+
   Future<bool> insertImageBlockAsync(double width, double height) =>
       enqueueEdit(() => insertImage(width, height));
+
+  Future<bool> insertShapeBlockAsync(int shapeType) =>
+      enqueueEdit(() => insertShape(shapeType));
+
+  Future<bool> insertTextBoxAsync() => enqueueEdit(() => insertTextBox());
+
+  Future<bool> insertWordArtAsync(String text) async {
+    final ptr = text.toNativeUtf8();
+    try {
+      return enqueueEdit(() => insertWordArt(ptr));
+    } finally {
+      calloc.free(ptr);
+    }
+  }
+
+  Future<bool> insertDiagramAsync() => enqueueEdit(() => insertDiagram());
+
+  Future<bool> insertChartAsync() => enqueueEdit(() => insertChart());
+
+  Future<bool> insertImageBytesAsync(Uint8List bytes, String mimeType) async {
+    final dataPtr = calloc<Uint8>(bytes.length);
+    final mimePtr = mimeType.toNativeUtf8();
+    try {
+      dataPtr.asTypedList(bytes.length).setAll(0, bytes);
+      return enqueueEdit(
+        () => insertImageBytes(dataPtr, bytes.length, mimePtr),
+      );
+    } finally {
+      calloc.free(dataPtr);
+      calloc.free(mimePtr);
+    }
+  }
+
+  Future<bool> setImageSizeAsync(String imageId, double width, double height) async {
+    final ptr = imageId.toNativeUtf8();
+    try {
+      return enqueueEdit(() => setImageSize(ptr, width, height));
+    } finally {
+      calloc.free(ptr);
+    }
+  }
+
+  Future<bool> replaceImageBytesAsync(
+    String imageId,
+    Uint8List bytes,
+    String mimeType,
+  ) async {
+    final idPtr = imageId.toNativeUtf8();
+    final dataPtr = calloc<Uint8>(bytes.length);
+    final mimePtr = mimeType.toNativeUtf8();
+    try {
+      dataPtr.asTypedList(bytes.length).setAll(0, bytes);
+      return enqueueEdit(
+        () => replaceImageBytes(idPtr, dataPtr, bytes.length, mimePtr),
+      );
+    } finally {
+      calloc.free(idPtr);
+      calloc.free(dataPtr);
+      calloc.free(mimePtr);
+    }
+  }
+
+  Future<bool> setImageWrapAsync(String imageId, int wrap) async {
+    final ptr = imageId.toNativeUtf8();
+    try {
+      return enqueueEdit(() => setImageWrap(ptr, wrap));
+    } finally {
+      calloc.free(ptr);
+    }
+  }
+
+  Future<bool> setImageAnchorAsync(
+    String imageId,
+    double x,
+    double y, {
+    int originX = 0,
+    int originY = 0,
+  }) async {
+    final ptr = imageId.toNativeUtf8();
+    try {
+      return enqueueEdit(() => setImageAnchor(ptr, x, y, originX, originY));
+    } finally {
+      calloc.free(ptr);
+    }
+  }
+
+  Future<bool> setImageTransformAsync(
+    String imageId, {
+    double rotationDeg = 0,
+    double cropLeft = 0,
+    double cropTop = 0,
+    double cropRight = 0,
+    double cropBottom = 0,
+    double opacity = 1,
+  }) async {
+    final ptr = imageId.toNativeUtf8();
+    try {
+      return enqueueEdit(
+        () => setImageTransform(
+          ptr,
+          rotationDeg,
+          cropLeft,
+          cropTop,
+          cropRight,
+          cropBottom,
+          opacity,
+        ),
+      );
+    } finally {
+      calloc.free(ptr);
+    }
+  }
+
+  Future<bool> insertImageCaptionAsync(String imageId) async {
+    final ptr = imageId.toNativeUtf8();
+    try {
+      return enqueueEdit(() => insertImageCaption(ptr));
+    } finally {
+      calloc.free(ptr);
+    }
+  }
+
+  Future<bool> compressImageAsync(String imageId, int quality) async {
+    final ptr = imageId.toNativeUtf8();
+    try {
+      return enqueueEdit(() => compressImage(ptr, quality));
+    } finally {
+      calloc.free(ptr);
+    }
+  }
 
   Future<bool> undoEditAsync() => enqueueEdit(undo);
 

@@ -12,3 +12,6 @@ pub struct PreservedParagraph {
 }
 
 pub type PreservedParagraphMap = HashMap<NodeId, PreservedParagraph>;
+
+/// Raw imported `w:p` for a block-level drawing shape (F11.S1).
+pub type PreservedShapeMap = HashMap<NodeId, PreservedParagraph>;

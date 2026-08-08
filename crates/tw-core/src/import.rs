@@ -53,6 +53,14 @@ pub fn extension_from_path(path: &str) -> Option<String> {
 }
 
 pub fn detect_format(data: &[u8], path_hint: Option<&str>) -> DetectedFormat {
+    // Autosave and other callers may pass twdoc bytes with a .docx path hint.
+    // Trust zip contents for the native bundle before the extension.
+    if data.starts_with(b"PK\x03\x04") {
+        if let Some(DetectedFormat::Twdoc) = detect_zip_format(data) {
+            return DetectedFormat::Twdoc;
+        }
+    }
+
     if let Some(ext) = path_hint.and_then(extension_from_path) {
         if let Some(format) = format_from_extension(&ext) {
             return format;
@@ -210,6 +218,26 @@ mod tests {
             zip.finish().unwrap();
         }
         assert_eq!(detect_format(&odt, None), DetectedFormat::Odt);
+    }
+
+    #[test]
+    fn detects_twdoc_bytes_before_docx_path_hint() {
+        use std::io::Write;
+        use zip::write::SimpleFileOptions;
+        use zip::ZipWriter;
+
+        let mut twdoc = Vec::new();
+        {
+            let mut zip = ZipWriter::new(std::io::Cursor::new(&mut twdoc));
+            let options = SimpleFileOptions::default();
+            zip.start_file("content.json", options).unwrap();
+            zip.write_all(br#"{"sections":[]}"#).unwrap();
+            zip.finish().unwrap();
+        }
+        assert_eq!(
+            detect_format(&twdoc, Some("report.docx")),
+            DetectedFormat::Twdoc
+        );
     }
 
     #[test]

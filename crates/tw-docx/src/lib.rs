@@ -4,6 +4,8 @@ use tw_model::Document;
 
 pub type PartName = String;
 
+pub mod chart;
+pub mod diagram;
 mod export;
 mod encryption;
 pub mod fingerprint;
@@ -37,6 +39,8 @@ pub struct DocxPackage {
     pub source_styles_fingerprint: Option<u64>,
     /// Unedited paragraph XML preserved for within-part round-trip (R3.3).
     pub preserved_paragraphs: preserve::PreservedParagraphMap,
+    /// Unedited shape paragraph XML preserved for DrawingML passthrough (F11.S1).
+    pub preserved_shapes: preserve::PreservedShapeMap,
 }
 
 impl DocxPackage {
@@ -74,6 +78,7 @@ impl DocxPackage {
             source_numbering_fingerprint: None,
             source_styles_fingerprint: None,
             preserved_paragraphs: preserve::PreservedParagraphMap::new(),
+            preserved_shapes: preserve::PreservedShapeMap::new(),
         }
     }
 }

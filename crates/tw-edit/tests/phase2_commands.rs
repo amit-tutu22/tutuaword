@@ -58,6 +58,7 @@ fn insert_image_adds_placeholder_block() {
             after_block_id: after,
             width: 200.0,
             height: 150.0,
+            data: None,
         })
         .unwrap();
 

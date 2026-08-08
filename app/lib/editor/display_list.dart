@@ -20,7 +20,13 @@ class DisplayListSnapshot {
     required this.imageTransforms,
     required this.imageSizes,
     required this.imageAssetIds,
+    required this.imageIds,
     required this.imagePayloads,
+    required this.imageRotations,
+    required this.imageOpacities,
+    required this.imageCropRects,
+    required this.shapeIds,
+    required this.shapeRects,
   });
 
   final int version;
@@ -39,10 +45,16 @@ class DisplayListSnapshot {
   final Float32List imageTransforms;
   final Float32List imageSizes;
   final List<String> imageAssetIds;
+  final List<String> imageIds;
 
   /// Encoded source bytes (PNG, JPEG, ...) per image, parallel to
   /// [imageAssetIds]. Empty for an image whose asset could not be resolved.
   final List<Uint8List> imagePayloads;
+  final Float32List imageRotations;
+  final Float32List imageOpacities;
+  final Float32List imageCropRects;
+  final List<String> shapeIds;
+  final Float32List shapeRects;
 
   factory DisplayListSnapshot.fromBytes(Uint8List bytes) {
     if (bytes.length < 20) {
@@ -99,7 +111,13 @@ class DisplayListSnapshot {
     Float32List imageTransforms = Float32List(0);
     Float32List imageSizes = Float32List(0);
     var imageAssetIds = <String>[];
+    var imageIds = <String>[];
     var imagePayloads = <Uint8List>[];
+    Float32List imageRotations = Float32List(0);
+    Float32List imageOpacities = Float32List(0);
+    Float32List imageCropRects = Float32List(0);
+    var shapeIds = <String>[];
+    Float32List shapeRects = Float32List(0);
     if (fileVersion >= 2 && offset + 4 <= bytes.length) {
       final pathData = _readPathBatch(bytes, offset);
       pathPoints = pathData.$1;
@@ -110,7 +128,17 @@ class DisplayListSnapshot {
         imageTransforms = imageData.$1;
         imageSizes = imageData.$2;
         imageAssetIds = imageData.$3;
-        imagePayloads = imageData.$4;
+        imageIds = imageData.$4;
+        imagePayloads = imageData.$5;
+        imageRotations = imageData.$6;
+        imageOpacities = imageData.$7;
+        imageCropRects = imageData.$8;
+      }
+      if (fileVersion >= 7 && offset + 4 <= bytes.length) {
+        final shapeData = _readShapeSelectionBatch(bytes, offset);
+        shapeIds = shapeData.$1;
+        shapeRects = shapeData.$2;
+        offset = shapeData.$3;
       }
     }
 
@@ -131,7 +159,13 @@ class DisplayListSnapshot {
       imageTransforms: imageTransforms,
       imageSizes: imageSizes,
       imageAssetIds: imageAssetIds,
+      imageIds: imageIds,
       imagePayloads: imagePayloads,
+      imageRotations: imageRotations,
+      imageOpacities: imageOpacities,
+      imageCropRects: imageCropRects,
+      shapeIds: shapeIds,
+      shapeRects: shapeRects,
     );
   }
 
@@ -153,7 +187,13 @@ class DisplayListSnapshot {
       imageTransforms: Float32List(0),
       imageSizes: Float32List(0),
       imageAssetIds: [],
+      imageIds: [],
       imagePayloads: [],
+      imageRotations: Float32List(0),
+      imageOpacities: Float32List(0),
+      imageCropRects: Float32List(0),
+      shapeIds: [],
+      shapeRects: Float32List(0),
     );
   }
 
@@ -269,13 +309,24 @@ class DisplayListSnapshot {
   return (points, colors, offset);
 }
 
-(Float32List, Float32List, List<String>, List<Uint8List>) _readImageBatch(
+(Float32List, Float32List, List<String>, List<String>, List<Uint8List>, Float32List,
+    Float32List, Float32List)
+_readImageBatch(
   Uint8List bytes,
   int offset,
   int fileVersion,
 ) {
   if (offset + 4 > bytes.length) {
-    return (Float32List(0), Float32List(0), <String>[], <Uint8List>[]);
+    return (
+      Float32List(0),
+      Float32List(0),
+      <String>[],
+      <String>[],
+      <Uint8List>[],
+      Float32List(0),
+      Float32List(0),
+      Float32List(0),
+    );
   }
   final imageCount = _readU32(bytes, offset);
   offset += 4;
@@ -300,6 +351,17 @@ class DisplayListSnapshot {
     assetIds.add(String.fromCharCodes(bytes.sublist(offset, offset + len)));
     offset += len;
   }
+  final imageIds = <String>[];
+  if (fileVersion >= 5) {
+    for (var i = 0; i < imageCount; i++) {
+      if (offset + 4 > bytes.length) break;
+      final len = _readU32(bytes, offset);
+      offset += 4;
+      if (offset + len > bytes.length) break;
+      imageIds.add(String.fromCharCodes(bytes.sublist(offset, offset + len)));
+      offset += len;
+    }
+  }
   final payloads = List<Uint8List>.filled(imageCount, Uint8List(0));
   if (fileVersion >= 3) {
     for (var i = 0; i < imageCount; i++) {
@@ -311,7 +373,54 @@ class DisplayListSnapshot {
       offset += len;
     }
   }
-  return (transforms, sizes, assetIds, payloads);
+  var rotations = Float32List(0);
+  var opacities = Float32List(0);
+  var cropRects = Float32List(0);
+  if (fileVersion >= 6 && imageCount > 0) {
+    rotations = Float32List(imageCount);
+    for (var i = 0; i < imageCount; i++) {
+      if (offset + 4 > bytes.length) break;
+      rotations[i] = _readF32(bytes, offset);
+      offset += 4;
+    }
+    opacities = Float32List(imageCount);
+    for (var i = 0; i < imageCount; i++) {
+      if (offset + 4 > bytes.length) break;
+      opacities[i] = _readF32(bytes, offset);
+      offset += 4;
+    }
+    cropRects = Float32List(imageCount * 4);
+    for (var i = 0; i < imageCount * 4; i++) {
+      if (offset + 4 > bytes.length) break;
+      cropRects[i] = _readF32(bytes, offset);
+      offset += 4;
+    }
+  }
+  return (transforms, sizes, assetIds, imageIds, payloads, rotations, opacities, cropRects);
+}
+
+(List<String>, Float32List, int) _readShapeSelectionBatch(Uint8List bytes, int offset) {
+  if (offset + 4 > bytes.length) {
+    return (<String>[], Float32List(0), offset);
+  }
+  final shapeCount = _readU32(bytes, offset);
+  offset += 4;
+  final rects = Float32List(shapeCount * 4);
+  for (var i = 0; i < shapeCount * 4; i++) {
+    if (offset + 4 > bytes.length) break;
+    rects[i] = _readF32(bytes, offset);
+    offset += 4;
+  }
+  final shapeIds = <String>[];
+  for (var i = 0; i < shapeCount; i++) {
+    if (offset + 4 > bytes.length) break;
+    final len = _readU32(bytes, offset);
+    offset += 4;
+    if (offset + len > bytes.length) break;
+    shapeIds.add(String.fromCharCodes(bytes.sublist(offset, offset + len)));
+    offset += len;
+  }
+  return (shapeIds, rects, offset);
 }
 
 int _readU32(Uint8List bytes, int offset) {

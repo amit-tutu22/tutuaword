@@ -126,10 +126,9 @@ impl LayoutCache {
 
     /// Resolved character and paragraph format at a caret position.
     pub fn format_at(&self, run_id: NodeId) -> Option<(CharFormat, ParaFormat, Option<String>)> {
-        let (si, bi, ri) = self.document.find_run_location(run_id)?;
-        let block = self.document.sections.get(si)?.blocks.get(bi)?;
-        let para = block.paragraph()?;
-        let run = para.runs.get(ri)?;
+        let loc = self.document.find_run_location(run_id)?;
+        let para = self.document.paragraph_at_loc(loc)?;
+        let run = para.runs.get(loc.run_index)?;
         let char_format = self
             .document
             .styles
@@ -146,6 +145,31 @@ impl LayoutCache {
                 .map(|style| style.name.clone())
         });
         Some((char_format, para_format, style_name))
+    }
+
+    pub fn page_for_paragraph(&self, paragraph_id: NodeId) -> u32 {
+        for page in 0..self.page_count {
+            if let Some(map) = self.line_maps.get(&page) {
+                if map
+                    .lines
+                    .iter()
+                    .any(|line| line.paragraph_id == paragraph_id)
+                {
+                    return page;
+                }
+            }
+        }
+        0
+    }
+
+    pub fn document_outline_with_pages(&self) -> Vec<(tw_model::OutlineEntry, u32)> {
+        tw_model::document_outline(&self.document)
+            .into_iter()
+            .map(|entry| {
+                let page = self.page_for_paragraph(entry.paragraph_id);
+                (entry, page)
+            })
+            .collect()
     }
 
     pub fn hit_test(&self, page: u32, x: f32, y: f32) -> Option<HitTestResult> {

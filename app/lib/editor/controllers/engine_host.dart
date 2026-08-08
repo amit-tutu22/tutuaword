@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
@@ -19,6 +20,10 @@ class EngineHost extends ChangeNotifier {
   int _atlasHeight = 0;
   double _pageWidth = 612;
   double _pageHeight = 792;
+  double _marginTop = 72;
+  double _marginBottom = 72;
+  double _marginLeft = 72;
+  double _marginRight = 72;
   Uint8List _displayListBytes = Uint8List(0);
   int _pageCount = 1;
   int _nativeEditDepth = 0;
@@ -53,6 +58,10 @@ class EngineHost extends ChangeNotifier {
   int get atlasHeight => _atlasHeight;
   double get pageWidth => _pageWidth;
   double get pageHeight => _pageHeight;
+  double get marginTop => _marginTop;
+  double get marginBottom => _marginBottom;
+  double get marginLeft => _marginLeft;
+  double get marginRight => _marginRight;
   Uint8List get displayListBytes => _displayListBytes;
   int get pageCount => _pageCount;
 
@@ -167,9 +176,24 @@ class EngineHost extends ChangeNotifier {
     }
     _pageWidth = data.pageWidth;
     _pageHeight = data.pageHeight;
+    _syncSectionFormatFromEngine();
     _documentTextStale = true;
     _pageCount = data.pageCount.clamp(1, 9999);
     if (full || versionChanged) _refreshAtlasFromEngine();
+  }
+
+  void _syncSectionFormatFromEngine() {
+    final json = _engine?.fetchSectionFormat();
+    if (json == null || json.isEmpty) return;
+    try {
+      final map = jsonDecode(json) as Map<String, dynamic>;
+      _pageWidth = (map['page_width'] as num?)?.toDouble() ?? _pageWidth;
+      _pageHeight = (map['page_height'] as num?)?.toDouble() ?? _pageHeight;
+      _marginTop = (map['margin_top'] as num?)?.toDouble() ?? _marginTop;
+      _marginBottom = (map['margin_bottom'] as num?)?.toDouble() ?? _marginBottom;
+      _marginLeft = (map['margin_left'] as num?)?.toDouble() ?? _marginLeft;
+      _marginRight = (map['margin_right'] as num?)?.toDouble() ?? _marginRight;
+    } catch (_) {}
   }
 
   /// Reads back only the edited page instead of the whole document. Returns
@@ -185,6 +209,7 @@ class EngineHost extends ChangeNotifier {
     _displayVersion = data.version;
     _pageWidth = data.pageWidth;
     _pageHeight = data.pageHeight;
+    _syncSectionFormatFromEngine();
     _documentTextStale = true;
     if (versionChanged) _refreshAtlasFromEngine();
     return true;

@@ -51,10 +51,21 @@ void main() {
     );
   });
 
-  test('sample fixture opens if present', () {
-    final fixture = File('../fixtures/sample.twdoc');
-    if (!fixture.existsSync()) return;
-    final text = DocumentReader.extractText(fixture.readAsBytesSync(), path: fixture.path);
-    expect(text, isNotEmpty);
+  test('reads twdoc autosave bytes even when path ends in .docx', () {
+    final bytes = TwdocWriter.fromText('Recovered draft text');
+    expect(
+      DocumentReader.extractText(bytes, path: '/tmp/report.docx'),
+      'Recovered draft text',
+    );
+  });
+
+  test('finds document.xml with backslash zip entry names', () {
+    final archive = Archive()
+      ..addFile(ArchiveFile(r'word\document.xml', 52, '''
+<w:document><w:body><w:p><w:r><w:t>Backslash</w:t></w:r></w:p></w:body></w:document>
+'''.trim().codeUnits));
+    final docx = Uint8List.fromList(ZipEncoder().encode(archive)!);
+    final text = DocumentReader.extractText(docx, path: 'sample.docx');
+    expect(text, contains('Backslash'));
   });
 }

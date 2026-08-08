@@ -66,6 +66,29 @@ pub struct ImageLayout {
     /// the renderer can hand them to the platform decoder. Empty for
     /// placeholders.
     pub encoded: std::sync::Arc<Vec<u8>>,
+    pub rotation_deg: f32,
+    pub opacity: f32,
+    pub crop_left: f32,
+    pub crop_top: f32,
+    pub crop_right: f32,
+    pub crop_bottom: f32,
+    /// When set, this image is a diagram/chart raster preview and participates
+    /// in read-only shape selection (F12.S2 / F13.S2 hardening).
+    pub selection_shape_kind: Option<tw_model::ShapeKind>,
+}
+
+/// Read-only imported shape placeholder bounds (F11.S1).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShapeLayout {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub shape_id: NodeId,
+    pub shape_type: tw_model::ShapeKind,
+    pub fill: Option<u32>,
+    pub stroke: Option<u32>,
+    pub stroke_width: f32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -77,6 +100,8 @@ pub struct TableCellLayout {
     pub cell_id: NodeId,
     pub background: Option<u32>,
     pub lines: Vec<TextLine>,
+    /// Nested tables laid out inside this cell (F09.S5).
+    pub nested_tables: Vec<TableLayout>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -96,6 +121,7 @@ pub struct TableLayout {
 pub enum LayoutBox {
     TextLine(TextLine),
     Image(ImageLayout),
+    Shape(ShapeLayout),
     Table(TableLayout),
     Rect {
         x: f32,

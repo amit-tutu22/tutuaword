@@ -27,54 +27,68 @@ class WordTitleBar extends StatelessWidget {
         ),
         child: SizedBox(
           height: WordTheme.titleBarHeight,
-          child: Row(
+          // Title is centered on the full bar width; icons sit in a separate
+          // layer so asymmetric quick-access chrome does not shift the name.
+          child: Stack(
+            alignment: Alignment.center,
             children: [
-              const SizedBox(width: WordTheme.trafficLightInset),
-              _QuickAccessIcon(
-                icon: Icons.home_outlined,
-                tooltip: kComingSoonTooltip,
-                onPressed: null,
-              ),
-              _QuickAccessIcon(
-                icon: Icons.save_outlined,
-                tooltip: 'Save',
-                onPressed: () => controller.saveDocument(),
-              ),
-              _QuickAccessIcon(
-                icon: Icons.undo,
-                tooltip: 'Undo',
-                onPressed: controller.undo,
-              ),
-              _QuickAccessIcon(
-                icon: Icons.redo,
-                tooltip: 'Redo',
-                onPressed: controller.redo,
-              ),
-              _QuickAccessIcon(
-                icon: Icons.print_outlined,
-                tooltip: 'Print',
-                onPressed: controller.togglePrintPreview,
-              ),
-              _QuickAccessIcon(
-                icon: Icons.more_horiz,
-                tooltip: 'More',
-                onPressed: null,
-              ),
-              Expanded(
-                child: Center(
-                  child: Text(
-                    controller.documentTitle,
-                    style: WordTheme.titleBarTitle,
-                    overflow: TextOverflow.ellipsis,
-                  ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 120),
+                child: Text(
+                  controller.documentTitle,
+                  style: WordTheme.titleBarTitle,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
                 ),
               ),
-              _QuickAccessIcon(
-                icon: Icons.search,
-                tooltip: 'Search',
-                onPressed: null,
+              Row(
+                children: [
+                  const SizedBox(width: WordTheme.trafficLightInset),
+                  _QuickAccessIcon(
+                    icon: Icons.home_outlined,
+                    tooltip: kComingSoonTooltip,
+                    onPressed: null,
+                  ),
+                  _QuickAccessIcon(
+                    icon: Icons.folder_open_outlined,
+                    tooltip: 'Open',
+                    onPressed: () => controller.openDocument(),
+                  ),
+                  _QuickAccessIcon(
+                    icon: Icons.save_outlined,
+                    tooltip: 'Save',
+                    onPressed: () => controller.saveDocument(),
+                  ),
+                  _QuickAccessIcon(
+                    icon: Icons.undo,
+                    tooltip: 'Undo',
+                    onPressed: controller.undo,
+                  ),
+                  _QuickAccessIcon(
+                    icon: Icons.redo,
+                    tooltip: 'Redo',
+                    onPressed: controller.redo,
+                  ),
+                  _QuickAccessIcon(
+                    icon: Icons.print_outlined,
+                    tooltip: 'Print',
+                    onPressed: controller.togglePrintPreview,
+                  ),
+                  _QuickAccessIcon(
+                    icon: Icons.more_horiz,
+                    tooltip: 'More',
+                    onPressed: null,
+                  ),
+                  const Spacer(),
+                  _QuickAccessIcon(
+                    icon: Icons.search,
+                    tooltip: 'Search',
+                    onPressed: null,
+                  ),
+                  const SizedBox(width: 12),
+                ],
               ),
-              const SizedBox(width: 12),
             ],
           ),
         ),

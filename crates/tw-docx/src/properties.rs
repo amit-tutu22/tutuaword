@@ -16,6 +16,11 @@ pub fn parse_app_properties(xml: &str) -> DocumentProperties {
     }
 }
 
+/// Returns true when odd/even header/footer variants are enabled.
+pub fn parse_even_and_odd_headers_from_settings(xml: &str) -> bool {
+    xml.contains("<w:evenAndOddHeaders")
+}
+
 /// Returns true when Word edit protection is enforced as read-only.
 pub fn parse_read_only_from_settings(xml: &str) -> bool {
     if !xml.contains("w:documentProtection") {
