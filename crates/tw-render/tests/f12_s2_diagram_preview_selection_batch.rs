@@ -31,6 +31,7 @@ fn u_f12_s2_diagram_preview_shape_selection_batch() {
         )),
         chart_data: None,
         chart_part: None,
+        diagram_kind: Default::default(),
         diagram_data_part: None,
         diagram_layout_part: None,
     })];

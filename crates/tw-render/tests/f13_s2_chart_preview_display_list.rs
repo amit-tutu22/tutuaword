@@ -31,6 +31,7 @@ fn u_f13_s2_chart_preview_in_image_batch() {
         )),
         chart_data: None,
         chart_part: None,
+        diagram_kind: Default::default(),
         diagram_data_part: None,
         diagram_layout_part: None,
     })];
@@ -68,6 +69,7 @@ fn u_f13_s2_chart_without_preview_keeps_placeholder() {
         preview_image: None,
         chart_data: None,
         chart_part: None,
+        diagram_kind: Default::default(),
         diagram_data_part: None,
         diagram_layout_part: None,
     })];

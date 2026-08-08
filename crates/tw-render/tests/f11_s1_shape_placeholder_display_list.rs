@@ -20,6 +20,7 @@ fn u_f11_s1_shape_placeholder_rect_in_display_list() {
         preview_image: None,
         chart_data: None,
         chart_part: None,
+        diagram_kind: Default::default(),
         diagram_data_part: None,
         diagram_layout_part: None,
     })];

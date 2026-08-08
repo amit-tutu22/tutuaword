@@ -26,6 +26,7 @@ fn stress_multi_chart_export_ten() {
                 after_block_id: after,
                 width: 300.0,
                 height: 150.0,
+                kind: Default::default(),
             })
             .unwrap();
         after = last_block_id(&session);

@@ -13,6 +13,7 @@ fn u_f13_s3_set_chart_data_updates_shape() {
         .id;
 
     let updated = ChartData {
+        kind: Default::default(),
         categories: vec!["A".into(), "B".into()],
         series: vec![ChartSeries {
             name: "Revenue".into(),

@@ -67,6 +67,7 @@ fn u_f13_s3_chart_data_export_round_trip() {
     let package = imported.package;
 
     let updated = ChartData {
+        kind: Default::default(),
         categories: vec!["East".into(), "West".into()],
         series: vec![ChartSeries {
             name: "Sales".into(),

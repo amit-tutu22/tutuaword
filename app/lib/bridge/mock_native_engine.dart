@@ -999,7 +999,7 @@ class MockDocumentEngine implements DocumentEngine {
   }
 
   @override
-  Future<bool> insertTableBlockAsync(int rows, int cols) async {
+  Future<bool> insertTableBlockAsync(int rows, int cols, {String? caretRunId}) async {
     _pushUndo();
     _tableRows = rows;
     _tableCols = cols;
@@ -1142,10 +1142,10 @@ class MockDocumentEngine implements DocumentEngine {
   Future<bool> insertWordArtAsync(String text) async => true;
 
   @override
-  Future<bool> insertDiagramAsync() async => true;
+  Future<bool> insertDiagramAsync({int diagramType = 0}) async => true;
 
   @override
-  Future<bool> insertChartAsync() async => true;
+  Future<bool> insertChartAsync({int chartType = 0}) async => true;
 
   @override
   Future<bool> insertImageBytesAsync(Uint8List bytes, String mimeType) async {

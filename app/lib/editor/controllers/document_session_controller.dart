@@ -646,6 +646,11 @@ class DocumentSessionController extends ChangeNotifier {
       _formatting.syncFromCaret();
       notifyListeners();
       onSessionChanged();
+    } else {
+      final err = _host.engine?.getLastError();
+      _statusText = (err != null && err.isNotEmpty) ? err : 'Edit failed';
+      notifyListeners();
+      onSessionChanged();
     }
   }
 

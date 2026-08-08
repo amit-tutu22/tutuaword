@@ -1,11 +1,43 @@
 import 'package:flutter/material.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
+import 'package:tutuaword/ui/illustration_pickers.dart';
 import 'package:tutuaword/ui/ribbon_widgets.dart';
+import 'package:tutuaword/ui/shape_picker.dart';
+import 'package:tutuaword/ui/table_size_picker.dart';
 
 class InsertTab extends StatelessWidget {
   const InsertTab({super.key, required this.controller});
 
   final EditorController controller;
+
+  Future<void> _insertTable(BuildContext context) async {
+    final size = await TableSizePicker.show(context);
+    if (size == null) return;
+    await controller.insertTable(rows: size.rows, cols: size.cols);
+  }
+
+  Future<void> _insertSmartArt(BuildContext context) async {
+    final selected = await SmartArtPicker.show(context);
+    if (selected == null) return;
+    final type = switch (selected) {
+      'hierarchy' => EditorController.smartArtHierarchy,
+      'cycle' => EditorController.smartArtCycle,
+      _ => EditorController.smartArtProcess,
+    };
+    await controller.insertSmartArt(diagramType: type);
+  }
+
+  Future<void> _insertChart(BuildContext context) async {
+    final selected = await ChartPicker.show(context);
+    if (selected == null) return;
+    await controller.insertChart(chartType: selected);
+  }
+
+  Future<void> _insertShape(BuildContext context) async {
+    final selected = await ShapePicker.show(context);
+    if (selected == null) return;
+    await controller.insertShape(selected);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -26,10 +58,15 @@ class InsertTab extends StatelessWidget {
           ),
           RibbonGroup(
             label: 'Tables',
-            child: RibbonLargeButton(
-              icon: Icons.table_chart,
-              label: 'Table',
-              onPressed: controller.insertTable,
+            child: Builder(
+              builder: (context) => RibbonLargeButton(
+                key: const Key('insert_table_button'),
+                icon: Icons.table_chart,
+                label: 'Table',
+                tooltip: 'Insert Table',
+                onPressed: () => _insertTable(context),
+                onDropdown: () => _insertTable(context),
+              ),
             ),
           ),
           RibbonGroup(
@@ -74,22 +111,30 @@ class InsertTab extends StatelessWidget {
                       ? () => controller.compressSelectedImage()
                       : null,
                 ),
-                RibbonLargeButton(
-                  key: const Key('insert_smart_art'),
-                  icon: Icons.account_tree_outlined,
-                  label: 'SmartArt',
-                  onPressed: () => controller.insertSmartArt(),
+                Builder(
+                  builder: (context) => RibbonLargeButton(
+                    key: const Key('insert_smart_art'),
+                    icon: Icons.account_tree_outlined,
+                    label: 'Smart\nArt',
+                    tooltip: 'Insert SmartArt',
+                    onPressed: () => _insertSmartArt(context),
+                    onDropdown: () => _insertSmartArt(context),
+                  ),
                 ),
-                RibbonLargeButton(
-                  key: const Key('insert_chart'),
-                  icon: Icons.bar_chart_outlined,
-                  label: 'Chart',
-                  onPressed: () => controller.insertChart(),
+                Builder(
+                  builder: (context) => RibbonLargeButton(
+                    key: const Key('insert_chart'),
+                    icon: Icons.bar_chart_outlined,
+                    label: 'Chart',
+                    tooltip: 'Insert Chart',
+                    onPressed: () => _insertChart(context),
+                    onDropdown: () => _insertChart(context),
+                  ),
                 ),
                 RibbonLargeButton(
                   key: const Key('insert_text_box'),
                   icon: Icons.text_fields_outlined,
-                  label: 'Text Box',
+                  label: 'Text\nBox',
                   onPressed: () => controller.insertTextBox(),
                 ),
                 RibbonLargeButton(
@@ -127,33 +172,15 @@ class InsertTab extends StatelessWidget {
                     }
                   },
                 ),
-                RibbonLargeButton(
-                  key: const Key('insert_shapes'),
-                  icon: Icons.shape_line_outlined,
-                  label: 'Shapes',
-                  onPressed: () async {
-                    final selected = await showMenu<int>(
-                      context: context,
-                      position: const RelativeRect.fromLTRB(200, 120, 200, 0),
-                      items: const [
-                        PopupMenuItem(
-                          value: EditorController.shapeRectangle,
-                          child: Text('Rectangle'),
-                        ),
-                        PopupMenuItem(
-                          value: EditorController.shapeLine,
-                          child: Text('Line'),
-                        ),
-                        PopupMenuItem(
-                          value: EditorController.shapeEllipse,
-                          child: Text('Ellipse'),
-                        ),
-                      ],
-                    );
-                    if (selected != null) {
-                      await controller.insertShape(selected);
-                    }
-                  },
+                Builder(
+                  builder: (context) => RibbonLargeButton(
+                    key: const Key('insert_shapes'),
+                    icon: Icons.shape_line_outlined,
+                    label: 'Shapes',
+                    tooltip: 'Insert Shape',
+                    onPressed: () => _insertShape(context),
+                    onDropdown: () => _insertShape(context),
+                  ),
                 ),
                 RibbonLargeButton(icon: Icons.smart_display_outlined, label: 'Online\nVideo', onPressed: null),
               ],

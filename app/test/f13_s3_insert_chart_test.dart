@@ -10,9 +10,9 @@ void main() {
     final controller = createTestEditorController(engine: engine);
     addTearDown(controller.dispose);
 
-    await controller.insertChart();
+    await controller.insertChart(chartType: EditorController.chartColumn);
     await settleEngineStyle(tester);
 
-    expect(controller.sessionController.statusText, contains('Chart'));
+    expect(controller.sessionController.statusText, contains('Column chart'));
   });
 }

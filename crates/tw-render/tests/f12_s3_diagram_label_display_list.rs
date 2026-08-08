@@ -36,6 +36,7 @@ fn u_f12_s3_diagram_shape_selection_batch() {
         preview_image: None,
         chart_data: None,
         chart_part: None,
+        diagram_kind: Default::default(),
         diagram_data_part: None,
         diagram_layout_part: None,
     })];

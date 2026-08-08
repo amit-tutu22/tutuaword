@@ -950,10 +950,21 @@ class EditorController extends ChangeNotifier {
   Future<void> spellCheckDocument() => _session.spellCheckDocument();
   void clearInfoMessage() => _session.clearInfoMessage();
 
-  void insertTable() => _session.applyEngineStyle(
-        () => _host.engine!.insertTableBlockAsync(3, 3),
-        'Table inserted (3×3)',
-      );
+  Future<void> insertTable({int rows = 3, int cols = 3}) async {
+    if (!_host.isConnected) return;
+    final safeRows = rows.clamp(1, 63);
+    final safeCols = cols.clamp(1, 63);
+    await _session.applyEngineStyle(
+      () => _host.engine!.insertTableBlockAsync(
+        safeRows,
+        safeCols,
+        caretRunId: _selection.defaultRunId(),
+      ),
+      'Table inserted ($safeRows×$safeCols)',
+      full: true,
+    );
+    notifyListeners();
+  }
 
   static const int shapeRectangle = 0;
   static const int shapeLine = 1;
@@ -994,21 +1005,43 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> insertSmartArt() async {
+  /// SmartArt kinds matching [tw_model::DiagramKind].
+  static const int smartArtProcess = 0;
+  static const int smartArtHierarchy = 1;
+  static const int smartArtCycle = 2;
+
+  Future<void> insertSmartArt({int diagramType = smartArtProcess}) async {
     if (!_host.isConnected) return;
+    final label = switch (diagramType) {
+      smartArtHierarchy => 'Hierarchy SmartArt inserted (read-only)',
+      smartArtCycle => 'Cycle SmartArt inserted (read-only)',
+      _ => 'Process SmartArt inserted (read-only)',
+    };
     await _session.applyEngineStyle(
-      () => _host.engine!.insertDiagramAsync(),
-      'SmartArt inserted (read-only)',
+      () => _host.engine!.insertDiagramAsync(diagramType: diagramType),
+      label,
       full: true,
     );
     notifyListeners();
   }
 
-  Future<void> insertChart() async {
+  /// Chart kinds matching [tw_model::ChartKind] / Insert Chart gallery.
+  static const int chartColumn = 0;
+  static const int chartBar = 1;
+  static const int chartLine = 2;
+  static const int chartPie = 3;
+
+  Future<void> insertChart({int chartType = chartColumn}) async {
     if (!_host.isConnected) return;
+    final label = switch (chartType) {
+      chartBar => 'Bar chart inserted',
+      chartLine => 'Line chart inserted',
+      chartPie => 'Pie chart inserted',
+      _ => 'Column chart inserted',
+    };
     await _session.applyEngineStyle(
-      () => _host.engine!.insertChartAsync(),
-      'Chart inserted',
+      () => _host.engine!.insertChartAsync(chartType: chartType),
+      label,
       full: true,
     );
     notifyListeners();

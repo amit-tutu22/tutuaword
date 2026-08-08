@@ -1678,10 +1678,15 @@ pub extern "C" fn tw_apply_split_paragraph(run_id_ptr: *const c_char, offset: u3
 }
 
 #[no_mangle]
-pub extern "C" fn tw_insert_table(rows: u32, cols: u32) -> i32 {
+pub extern "C" fn tw_insert_table(
+    rows: u32,
+    cols: u32,
+    caret_run_id: *const std::os::raw::c_char,
+) -> i32 {
     guard_ffi(|| {
         with_session(|session| {
-            let Some(request_id) = session.insert_table(rows, cols) else {
+            let caret = parse_node_id(caret_run_id);
+            let Some(request_id) = session.insert_table_at(caret, rows, cols) else {
                 return -4;
             };
             finish_edit_enqueue(request_id)
@@ -1943,10 +1948,11 @@ pub extern "C" fn tw_insert_word_art(text_ptr: *const c_char) -> i32 {
 }
 
 #[no_mangle]
-pub extern "C" fn tw_insert_diagram() -> i32 {
+pub extern "C" fn tw_insert_diagram(diagram_type: i32) -> i32 {
     guard_ffi(|| {
         with_session(|session| {
-            let Some(request_id) = session.insert_diagram() else {
+            let kind = tw_model::DiagramKind::from_i32(diagram_type);
+            let Some(request_id) = session.insert_diagram_with_kind(kind) else {
                 return -4;
             };
             finish_edit_enqueue(request_id)
@@ -1955,10 +1961,11 @@ pub extern "C" fn tw_insert_diagram() -> i32 {
 }
 
 #[no_mangle]
-pub extern "C" fn tw_insert_chart() -> i32 {
+pub extern "C" fn tw_insert_chart(chart_type: i32) -> i32 {
     guard_ffi(|| {
         with_session(|session| {
-            let Some(request_id) = session.insert_chart() else {
+            let kind = tw_model::ChartKind::from_i32(chart_type);
+            let Some(request_id) = session.insert_chart_with_kind(kind) else {
                 return -4;
             };
             finish_edit_enqueue(request_id)

@@ -186,8 +186,17 @@ pub fn continue_numbering_command_for_caret(
 }
 
 pub fn insert_table_command(doc: &Document, rows: u32, cols: u32) -> Option<Command> {
+    insert_table_command_for_caret(doc, None, rows, cols)
+}
+
+pub fn insert_table_command_for_caret(
+    doc: &Document,
+    caret_run_id: Option<NodeId>,
+    rows: u32,
+    cols: u32,
+) -> Option<Command> {
     Some(Command::InsertTable {
-        after_block_id: last_block_id(doc)?,
+        after_block_id: block_id_from_caret(doc, caret_run_id).or_else(|| last_block_id(doc))?,
         rows,
         cols,
     })
@@ -408,18 +417,34 @@ pub fn insert_word_art_command(doc: &Document, text: impl Into<String>) -> Optio
 }
 
 pub fn insert_diagram_command(doc: &Document) -> Option<Command> {
+    insert_diagram_command_with_kind(doc, tw_model::DiagramKind::Process)
+}
+
+pub fn insert_diagram_command_with_kind(
+    doc: &Document,
+    kind: tw_model::DiagramKind,
+) -> Option<Command> {
     Some(Command::InsertDiagram {
         after_block_id: block_id_from_caret(doc, None).or_else(|| last_block_id(doc))?,
         width: 432.0,
         height: 216.0,
+        kind,
     })
 }
 
 pub fn insert_chart_command(doc: &Document) -> Option<Command> {
+    insert_chart_command_with_kind(doc, tw_model::ChartKind::Column)
+}
+
+pub fn insert_chart_command_with_kind(
+    doc: &Document,
+    kind: tw_model::ChartKind,
+) -> Option<Command> {
     Some(Command::InsertChart {
         after_block_id: block_id_from_caret(doc, None).or_else(|| last_block_id(doc))?,
         width: 432.0,
-        height: 216.0,
+        height: 252.0,
+        kind,
     })
 }
 

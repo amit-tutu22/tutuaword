@@ -207,15 +207,27 @@ impl LayoutCache {
 
     pub fn caret_geometry(&self, page: u32, x: f32, y: f32) -> Option<(f32, f32, f32)> {
         let map = self.line_maps.get(&page)?;
-        for line in &map.lines {
-            if y >= line.y - line.ascent && y <= line.y + line.descent {
-                for &(x_start, x_end, _, _) in &line.run_map {
-                    if x >= x_start && x <= x_end {
-                        return Some((x, line.y, line.ascent + line.descent));
-                    }
+        // Mirror LineMap::hit_test: consider every Y-matching line before falling
+        // back, so table cells that share a baseline resolve to the right column.
+        let y_matches: Vec<_> = map
+            .lines
+            .iter()
+            .filter(|line| y >= line.y - line.ascent && y <= line.y + line.descent)
+            .collect();
+        for line in &y_matches {
+            for &(x_start, x_end, _, _) in &line.run_map {
+                let end = if x_end <= x_start {
+                    x_start + 4.0
+                } else {
+                    x_end
+                };
+                if x >= x_start && x <= end {
+                    return Some((x, line.y, line.ascent + line.descent));
                 }
-                return Some((line.x, line.y, line.ascent + line.descent));
             }
+        }
+        if let Some(line) = pick_line_for_x_cache(&y_matches, x) {
+            return Some((line.x, line.y, line.ascent + line.descent));
         }
         map.lines.first().map(|line| (line.x, line.y, line.ascent + line.descent))
     }
@@ -294,6 +306,31 @@ fn last_text_run(doc: &Document) -> Option<NodeId> {
         }
     }
     None
+}
+
+/// Same ownership rule as `tw_layout::LineMap` blank-area hit testing.
+fn pick_line_for_x_cache<'a>(
+    lines: &[&'a tw_layout::TextLine],
+    x: f32,
+) -> Option<&'a tw_layout::TextLine> {
+    if lines.is_empty() {
+        return None;
+    }
+    if lines.len() == 1 {
+        return Some(lines[0]);
+    }
+    let mut best: Option<&tw_layout::TextLine> = None;
+    for line in lines {
+        if line.x <= x + 0.5 {
+            best = Some(*line);
+        }
+    }
+    best.or_else(|| {
+        lines
+            .iter()
+            .min_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal))
+            .copied()
+    })
 }
 
 pub type SharedLayoutCache = Arc<RwLock<LayoutCache>>;

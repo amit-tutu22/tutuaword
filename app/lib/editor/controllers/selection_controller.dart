@@ -252,13 +252,22 @@ class SelectionController extends ChangeNotifier {
       }
     }
     if (before == null) return;
-    final nudge = delta > 0 ? 2.0 : -2.0;
-    final probeX = (before.x + nudge).clamp(_marginLeft, _host.pageWidth - _marginRight);
-    if (extendSelection) {
-      _moveGlyphCaretToHit(caretPage, probeX, before.y, extendSelection: true);
+    // Empty table cells share a baseline and have zero advance; a 2px nudge stays
+    // inside the same cell. Probe farther so left/right can cross into neighbors.
+    const distances = <double>[2.0, 24.0, 60.0, 110.0, 180.0];
+    for (final distance in distances) {
+      final probeX = (before.x + delta.sign * distance)
+          .clamp(_marginLeft, _host.pageWidth - _marginRight);
+      final hit = _engine!.hitTestPage(caretPage, probeX, before.y);
+      if (hit == null) continue;
+      if (hit.runId == runId && hit.charOffset == _caretOffset) continue;
+      if (extendSelection) {
+        _moveGlyphCaretToHit(caretPage, probeX, before.y, extendSelection: true);
+      } else {
+        hitTestAt(caretPage, probeX, before.y);
+      }
       return;
     }
-    hitTestAt(caretPage, probeX, before.y);
   }
 
   bool _sameCaretGeometry(CaretGeometry? a, CaretGeometry b) {

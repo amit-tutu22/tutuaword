@@ -238,8 +238,8 @@ typedef TwRestartNumberingDart = int Function(Pointer<Utf8>);
 typedef TwContinueNumberingNative = Int32 Function(Pointer<Utf8>);
 typedef TwContinueNumberingDart = int Function(Pointer<Utf8>);
 
-typedef TwInsertTableNative = Int32 Function(Uint32, Uint32);
-typedef TwInsertTableDart = int Function(int, int);
+typedef TwInsertTableNative = Int32 Function(Uint32, Uint32, Pointer<Utf8>);
+typedef TwInsertTableDart = int Function(int, int, Pointer<Utf8>);
 typedef TwDeleteTableRowNative = Int32 Function(Pointer<Utf8>);
 typedef TwDeleteTableRowDart = int Function(Pointer<Utf8>);
 typedef TwDeleteTableColumnNative = Int32 Function(Pointer<Utf8>);
@@ -278,10 +278,10 @@ typedef TwInsertTextBoxNative = Int32 Function();
 typedef TwInsertTextBoxDart = int Function();
 typedef TwInsertWordArtNative = Int32 Function(Pointer<Utf8>);
 typedef TwInsertWordArtDart = int Function(Pointer<Utf8>);
-typedef TwInsertDiagramNative = Int32 Function();
-typedef TwInsertDiagramDart = int Function();
-typedef TwInsertChartNative = Int32 Function();
-typedef TwInsertChartDart = int Function();
+typedef TwInsertDiagramNative = Int32 Function(Int32);
+typedef TwInsertDiagramDart = int Function(int);
+typedef TwInsertChartNative = Int32 Function(Int32);
+typedef TwInsertChartDart = int Function(int);
 typedef TwInsertImageBytesNative = Int32 Function(
     Pointer<Uint8>, IntPtr, Pointer<Utf8>);
 typedef TwInsertImageBytesDart = int Function(
@@ -1662,8 +1662,14 @@ extension NativeEngineOps on NativeEngine {
     }
   }
 
-  Future<bool> insertTableBlockAsync(int rows, int cols) =>
-      enqueueEdit(() => insertTable(rows, cols));
+  Future<bool> insertTableBlockAsync(int rows, int cols, {String? caretRunId}) async {
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return enqueueEdit(() => insertTable(rows, cols, ptr));
+    } finally {
+      if (caretRunId != null) calloc.free(ptr);
+    }
+  }
 
   Future<bool> deleteTableRowAsync({String? caretRunId}) async {
     final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
@@ -1815,9 +1821,11 @@ extension NativeEngineOps on NativeEngine {
     }
   }
 
-  Future<bool> insertDiagramAsync() => enqueueEdit(() => insertDiagram());
+  Future<bool> insertDiagramAsync({int diagramType = 0}) =>
+      enqueueEdit(() => insertDiagram(diagramType));
 
-  Future<bool> insertChartAsync() => enqueueEdit(() => insertChart());
+  Future<bool> insertChartAsync({int chartType = 0}) =>
+      enqueueEdit(() => insertChart(chartType));
 
   Future<bool> insertImageBytesAsync(Uint8List bytes, String mimeType) async {
     final dataPtr = calloc<Uint8>(bytes.length);
@@ -2005,7 +2013,14 @@ extension NativeEngineOps on NativeEngine {
     }
   }
 
-  bool insertTableBlock(int rows, int cols) => insertTable(rows, cols) == 0;
+  bool insertTableBlock(int rows, int cols, {String? caretRunId}) {
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return insertTable(rows, cols, ptr) == 0;
+    } finally {
+      if (caretRunId != null) calloc.free(ptr);
+    }
+  }
 
   bool insertImageBlock(double width, double height) => insertImage(width, height) == 0;
 

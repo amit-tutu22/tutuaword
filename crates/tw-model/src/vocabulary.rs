@@ -189,6 +189,34 @@ pub struct BookmarkAnchor {
     pub bookmark_id: Option<i32>,
 }
 
+/// SmartArt layout style (Insert → SmartArt gallery).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagramKind {
+    #[default]
+    Process,
+    Hierarchy,
+    Cycle,
+}
+
+impl DiagramKind {
+    pub fn from_i32(value: i32) -> Self {
+        match value {
+            1 => Self::Hierarchy,
+            2 => Self::Cycle,
+            _ => Self::Process,
+        }
+    }
+
+    pub fn as_i32(self) -> i32 {
+        match self {
+            Self::Process => 0,
+            Self::Hierarchy => 1,
+            Self::Cycle => 2,
+        }
+    }
+}
+
 /// Shape kind for floating/inline shapes.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, Hash)]
@@ -272,6 +300,9 @@ pub struct ShapeBlock {
     /// OPC path to the linked chart part (e.g. `word/charts/chart1.xml`).
     #[serde(default)]
     pub chart_part: Option<String>,
+    /// SmartArt layout chosen at insert time.
+    #[serde(default)]
+    pub diagram_kind: DiagramKind,
     /// OPC path to linked diagram data part (F12.S3 hardening).
     #[serde(default)]
     pub diagram_data_part: Option<String>,
@@ -295,6 +326,7 @@ impl ShapeBlock {
             preview_image: None,
             chart_data: None,
             chart_part: None,
+            diagram_kind: DiagramKind::default(),
             diagram_data_part: None,
             diagram_layout_part: None,
         }
@@ -352,12 +384,22 @@ impl ShapeBlock {
     }
 
     pub fn diagram(width: f32, height: f32) -> Self {
-        Self::new(ShapeKind::Diagram, width, height, ShapeStyle::placeholder())
+        Self::diagram_with_kind(width, height, DiagramKind::Process)
+    }
+
+    pub fn diagram_with_kind(width: f32, height: f32, kind: DiagramKind) -> Self {
+        let mut shape = Self::new(ShapeKind::Diagram, width, height, ShapeStyle::placeholder());
+        shape.diagram_kind = kind;
+        shape
     }
 
     pub fn chart(width: f32, height: f32) -> Self {
+        Self::chart_with_kind(width, height, crate::ChartKind::Column)
+    }
+
+    pub fn chart_with_kind(width: f32, height: f32, kind: crate::ChartKind) -> Self {
         let mut shape = Self::new(ShapeKind::Chart, width, height, ShapeStyle::placeholder());
-        shape.chart_data = Some(crate::ChartData::sample_bar());
+        shape.chart_data = Some(crate::ChartData::sample(kind));
         shape
     }
 

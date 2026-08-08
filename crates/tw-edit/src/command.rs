@@ -174,12 +174,16 @@ pub enum Command {
         after_block_id: NodeId,
         width: f32,
         height: f32,
+        #[serde(default)]
+        kind: tw_model::DiagramKind,
     },
     /// Insert a chart placeholder with default sample data (F13.S3).
     InsertChart {
         after_block_id: NodeId,
         width: f32,
         height: f32,
+        #[serde(default)]
+        kind: tw_model::ChartKind,
     },
     /// Replace the editable dataset on a chart shape (F13.S3).
     SetChartData {

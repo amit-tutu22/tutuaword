@@ -23,6 +23,7 @@ fn u_f12_s3_inserted_diagram_export_round_trip() {
             after_block_id: after,
             width: 432.0,
             height: 216.0,
+            kind: Default::default(),
         })
         .unwrap();
 

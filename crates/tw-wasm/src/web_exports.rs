@@ -331,9 +331,15 @@ impl WasmSession {
         self.enqueue_edit(session.insert_page_break_at(caret))
     }
 
-    pub fn insert_table_enqueue(&self, rows: u32, cols: u32) -> Result<u64, String> {
+    pub fn insert_table_enqueue(
+        &self,
+        rows: u32,
+        cols: u32,
+        caret_run_id: Option<&str>,
+    ) -> Result<u64, String> {
         let session = self.session().expect("WasmSession not initialized");
-        self.enqueue_edit(session.insert_table(rows, cols))
+        let caret = parse_run_id(caret_run_id);
+        self.enqueue_edit(session.insert_table_at(caret, rows, cols))
     }
 
     pub fn delete_table_row_enqueue(&self, caret_run_id: Option<&str>) -> Result<u64, String> {
@@ -484,14 +490,16 @@ impl WasmSession {
         self.enqueue_edit(session.insert_word_art(text))
     }
 
-    pub fn insert_diagram_enqueue(&self) -> Result<u64, String> {
+    pub fn insert_diagram_enqueue(&self, diagram_type: i32) -> Result<u64, String> {
         let session = self.session().expect("WasmSession not initialized");
-        self.enqueue_edit(session.insert_diagram())
+        let kind = tw_model::DiagramKind::from_i32(diagram_type);
+        self.enqueue_edit(session.insert_diagram_with_kind(kind))
     }
 
-    pub fn insert_chart_enqueue(&self) -> Result<u64, String> {
+    pub fn insert_chart_enqueue(&self, chart_type: i32) -> Result<u64, String> {
         let session = self.session().expect("WasmSession not initialized");
-        self.enqueue_edit(session.insert_chart())
+        let kind = tw_model::ChartKind::from_i32(chart_type);
+        self.enqueue_edit(session.insert_chart_with_kind(kind))
     }
 
     pub fn insert_image_bytes_enqueue(
@@ -1142,8 +1150,18 @@ pub mod bindgen_exports {
             self.enqueue_op(self.session.insert_page_break_enqueue(caret))
         }
 
-        pub fn insert_table(&mut self, rows: u32, cols: u32) -> Result<f64, JsValue> {
-            self.enqueue_op(self.session.insert_table_enqueue(rows, cols))
+        pub fn insert_table(
+            &mut self,
+            rows: u32,
+            cols: u32,
+            caret_run_id: &str,
+        ) -> Result<f64, JsValue> {
+            let caret = if caret_run_id.is_empty() {
+                None
+            } else {
+                Some(caret_run_id)
+            };
+            self.enqueue_op(self.session.insert_table_enqueue(rows, cols, caret))
         }
 
         pub fn delete_table_row(&mut self, caret_run_id: &str) -> Result<f64, JsValue> {
@@ -1293,12 +1311,12 @@ pub mod bindgen_exports {
             self.enqueue_op(self.session.insert_word_art_enqueue(text.to_string()))
         }
 
-        pub fn insert_diagram(&mut self) -> Result<f64, JsValue> {
-            self.enqueue_op(self.session.insert_diagram_enqueue())
+        pub fn insert_diagram(&mut self, diagram_type: i32) -> Result<f64, JsValue> {
+            self.enqueue_op(self.session.insert_diagram_enqueue(diagram_type))
         }
 
-        pub fn insert_chart(&mut self) -> Result<f64, JsValue> {
-            self.enqueue_op(self.session.insert_chart_enqueue())
+        pub fn insert_chart(&mut self, chart_type: i32) -> Result<f64, JsValue> {
+            self.enqueue_op(self.session.insert_chart_enqueue(chart_type))
         }
 
         pub fn insert_image_bytes(&mut self, data: &[u8], mime_type: &str) -> Result<f64, JsValue> {

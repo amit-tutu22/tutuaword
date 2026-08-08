@@ -23,6 +23,7 @@ fn u_f12_s3_insert_diagram_placeholder() {
             after_block_id: after,
             width: 432.0,
             height: 216.0,
+            kind: Default::default(),
         })
         .unwrap();
 

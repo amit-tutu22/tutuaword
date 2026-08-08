@@ -145,12 +145,14 @@ pub fn apply(
             after_block_id,
             width,
             height,
-        } => block_ops::insert_diagram(doc, *after_block_id, *width, *height)?,
+            kind,
+        } => block_ops::insert_diagram(doc, *after_block_id, *width, *height, *kind)?,
         Command::InsertChart {
             after_block_id,
             width,
             height,
-        } => block_ops::insert_chart(doc, *after_block_id, *width, *height)?,
+            kind,
+        } => block_ops::insert_chart(doc, *after_block_id, *width, *height, *kind)?,
         Command::SetChartData {
             shape_id,
             chart_data,

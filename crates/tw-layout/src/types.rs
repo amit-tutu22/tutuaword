@@ -52,6 +52,9 @@ pub struct TextLine {
     /// X positions immediately after a space character, used for justification.
     pub justify_stops: Vec<f32>,
     pub decorations: Vec<TextDecoration>,
+    /// When true, the line is painted but excluded from caret hit-testing
+    /// (e.g. SmartArt / Chart placeholder captions).
+    pub decorative: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -89,6 +92,10 @@ pub struct ShapeLayout {
     pub fill: Option<u32>,
     pub stroke: Option<u32>,
     pub stroke_width: f32,
+    /// Sample / edited chart dataset for in-editor bar preview (F13.S3).
+    pub chart_data: Option<tw_model::ChartData>,
+    /// SmartArt layout style for placeholder previews.
+    pub diagram_kind: tw_model::DiagramKind,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -158,25 +165,25 @@ pub struct LineMap {
 
 impl LineMap {
     pub fn hit_test(&self, x: f32, y: f32) -> Option<HitTestResult> {
-        for line in &self.lines {
-            if y >= line.y - line.ascent && y <= line.y + line.descent {
-                for &(x_start, x_end, run_id, char_offset) in &line.run_map {
-                    // Empty runs have zero width; give them a clickable caret target.
-                    let end = if x_end <= x_start {
-                        x_start + 4.0
-                    } else {
-                        x_end
-                    };
-                    if x >= x_start && x <= end {
-                        return Some(HitTestResult {
-                            page: 0,
-                            run_id,
-                            char_offset,
-                        });
-                    }
-                }
-                // Click on the blank part of the line → caret at end of line.
-                if let Some((run_id, char_offset)) = line_end_offset(line) {
+        // Gather every line whose vertical band contains `y`. Table cells in the
+        // same row share a baseline, so we must consider them together — otherwise
+        // the leftmost cell's blank-line fallback steals clicks meant for neighbors.
+        let y_matches: Vec<&TextLine> = self
+            .lines
+            .iter()
+            .filter(|line| y >= line.y - line.ascent && y <= line.y + line.descent)
+            .collect();
+
+        // Prefer an exact run/glyph hit across all Y-matching lines first.
+        for line in &y_matches {
+            for &(x_start, x_end, run_id, char_offset) in &line.run_map {
+                // Empty runs have zero width; give them a clickable caret target.
+                let end = if x_end <= x_start {
+                    x_start + 4.0
+                } else {
+                    x_end
+                };
+                if x >= x_start && x <= end {
                     return Some(HitTestResult {
                         page: 0,
                         run_id,
@@ -185,6 +192,19 @@ impl LineMap {
                 }
             }
         }
+
+        // Blank-area click: pick the line that owns this X (column for tables,
+        // sole line for body paragraphs) and put the caret at its end.
+        if let Some(line) = pick_line_for_x(&y_matches, x) {
+            if let Some((run_id, char_offset)) = line_end_offset(line) {
+                return Some(HitTestResult {
+                    page: 0,
+                    run_id,
+                    char_offset,
+                });
+            }
+        }
+
         // Below/above all lines: still land on the first available run so an
         // empty page remains editable without a precise click.
         self.lines.first().and_then(|line| {
@@ -257,6 +277,35 @@ fn line_end_offset(line: &TextLine) -> Option<(NodeId, usize)> {
     let &(x_start, x_end, run_id, char_offset) = line.run_map.get(last_index)?;
     let seg_chars = segment_char_count(line, last_index, x_start, x_end);
     Some((run_id, char_offset + seg_chars))
+}
+
+/// Among lines sharing a Y band, choose the one that owns horizontal position `x`.
+///
+/// Body paragraphs usually contribute a single Y match, so blank clicks anywhere
+/// on that band still resolve. Table cells on one row contribute several matches;
+/// ownership is the rightmost line whose left edge is at or left of `x`.
+fn pick_line_for_x<'a>(lines: &[&'a TextLine], x: f32) -> Option<&'a TextLine> {
+    if lines.is_empty() {
+        return None;
+    }
+    if lines.len() == 1 {
+        return Some(lines[0]);
+    }
+    let mut best: Option<&TextLine> = None;
+    for line in lines {
+        if line.x <= x + 0.5 {
+            best = Some(*line);
+        }
+    }
+    best.or_else(|| {
+        lines
+            .iter()
+            .min_by(|a, b| {
+                a.x.partial_cmp(&b.x)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .copied()
+    })
 }
 
 fn segment_char_count(line: &TextLine, index: usize, x_start: f32, x_end: f32) -> usize {

@@ -127,7 +127,7 @@ abstract class DocumentEngine {
   Future<bool> adjustListLevelAsync({String? caretRunId, required int delta});
   Future<bool> restartNumberingAsync({String? caretRunId});
   Future<bool> continueNumberingAsync({String? caretRunId});
-  Future<bool> insertTableBlockAsync(int rows, int cols);
+  Future<bool> insertTableBlockAsync(int rows, int cols, {String? caretRunId});
   Future<bool> deleteTableRowAsync({String? caretRunId});
   Future<bool> deleteTableColumnAsync({String? caretRunId});
   Future<bool> mergeTableCellsAsync({String? caretRunId});
@@ -158,8 +158,8 @@ abstract class DocumentEngine {
   Future<bool> insertShapeBlockAsync(int shapeType);
   Future<bool> insertTextBoxAsync();
   Future<bool> insertWordArtAsync(String text);
-  Future<bool> insertDiagramAsync();
-  Future<bool> insertChartAsync();
+  Future<bool> insertDiagramAsync({int diagramType = 0});
+  Future<bool> insertChartAsync({int chartType = 0});
   Future<bool> setImageSizeAsync(String imageId, double width, double height);
   Future<bool> replaceImageBytesAsync(
     String imageId,

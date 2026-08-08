@@ -426,6 +426,7 @@ pub fn parse_shape_block(
         preview_image,
         chart_data,
         chart_part,
+        diagram_kind: Default::default(),
         diagram_data_part,
         diagram_layout_part,
     })

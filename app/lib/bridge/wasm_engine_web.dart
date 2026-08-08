@@ -659,8 +659,10 @@ class WasmEngine {
   Future<bool> continueNumberingAsync({String? caretRunId}) =>
       enqueueEdit(() => _enqueueNamed('continue_numbering', [caretRunId ?? '']));
 
-  Future<bool> insertTableBlockAsync(int rows, int cols) =>
-      enqueueEdit(() => _enqueueNamed('insert_table', [rows, cols]));
+  Future<bool> insertTableBlockAsync(int rows, int cols, {String? caretRunId}) =>
+      enqueueEdit(
+        () => _enqueueNamed('insert_table', [rows, cols, caretRunId ?? '']),
+      );
 
   Future<bool> deleteTableRowAsync({String? caretRunId}) =>
       enqueueEdit(() => _enqueueNamed('delete_table_row', [caretRunId ?? '']));
@@ -737,11 +739,11 @@ class WasmEngine {
   Future<bool> insertWordArtAsync(String text) =>
       enqueueEdit(() => _enqueueNamed('insert_word_art', [text]));
 
-  Future<bool> insertDiagramAsync() =>
-      enqueueEdit(() => _enqueueNamed('insert_diagram', []));
+  Future<bool> insertDiagramAsync({int diagramType = 0}) =>
+      enqueueEdit(() => _enqueueNamed('insert_diagram', [diagramType]));
 
-  Future<bool> insertChartAsync() =>
-      enqueueEdit(() => _enqueueNamed('insert_chart', []));
+  Future<bool> insertChartAsync({int chartType = 0}) =>
+      enqueueEdit(() => _enqueueNamed('insert_chart', [chartType]));
 
   Future<bool> insertImageBytesAsync(Uint8List bytes, String mimeType) =>
       enqueueEdit(() => _enqueueNamed('insert_image_bytes', [bytes, mimeType]));

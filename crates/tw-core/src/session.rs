@@ -15,9 +15,9 @@ use tw_edit::{
     delete_table_row_command_for_caret, ensure_header_footer_command_for,
     heading1_command_for_caret, insert_field_command_for, insert_image_bytes_command_for_caret,
     insert_image_command, insert_shape_command, insert_text_box_command,
-    insert_word_art_command, insert_diagram_command, insert_chart_command, replace_image_bytes_command,
+    insert_word_art_command, replace_image_bytes_command,
     insert_nested_table_command_for_caret, insert_page_break_command_for,
-    insert_section_break_command_for, insert_table_command,
+    insert_section_break_command_for, insert_table_command_for_caret,
     insert_table_sum_field_command_for_caret, merge_table_cells_right_command_for_caret,
     numbered_list_command_for_caret, paragraph_style_command_for_caret,
     resize_table_column_command_for_caret, restart_numbering_command_for_caret,
@@ -547,7 +547,18 @@ impl Session {
     }
 
     pub fn insert_table(&self, rows: u32, cols: u32) -> Option<u64> {
-        self.apply_from_document(|doc| insert_table_command(doc, rows, cols))
+        self.insert_table_at(None, rows, cols)
+    }
+
+    pub fn insert_table_at(
+        &self,
+        caret_run_id: Option<NodeId>,
+        rows: u32,
+        cols: u32,
+    ) -> Option<u64> {
+        self.apply_from_document(|doc| {
+            insert_table_command_for_caret(doc, caret_run_id, rows, cols)
+        })
     }
 
     pub fn delete_table_row_at(&self, caret_run_id: Option<NodeId>) -> Option<u64> {
@@ -644,11 +655,23 @@ impl Session {
     }
 
     pub fn insert_diagram(&self) -> Option<u64> {
-        self.apply_from_document(insert_diagram_command)
+        self.insert_diagram_with_kind(tw_model::DiagramKind::Process)
+    }
+
+    pub fn insert_diagram_with_kind(&self, kind: tw_model::DiagramKind) -> Option<u64> {
+        self.apply_from_document(|doc| {
+            tw_edit::command_builders::insert_diagram_command_with_kind(doc, kind)
+        })
     }
 
     pub fn insert_chart(&self) -> Option<u64> {
-        self.apply_from_document(insert_chart_command)
+        self.insert_chart_with_kind(tw_model::ChartKind::Column)
+    }
+
+    pub fn insert_chart_with_kind(&self, kind: tw_model::ChartKind) -> Option<u64> {
+        self.apply_from_document(|doc| {
+            tw_edit::command_builders::insert_chart_command_with_kind(doc, kind)
+        })
     }
 
     pub fn insert_image_bytes(&self, bytes: Vec<u8>, mime_type: String) -> Option<u64> {

@@ -34,6 +34,7 @@ fn u_f13_s3_multi_chart_content_types() {
             after_block_id: after,
             width: 432.0,
             height: 216.0,
+            kind: Default::default(),
         })
         .unwrap();
     let after = last_block_id(&session);
@@ -42,6 +43,7 @@ fn u_f13_s3_multi_chart_content_types() {
             after_block_id: after,
             width: 360.0,
             height: 180.0,
+            kind: Default::default(),
         })
         .unwrap();
 

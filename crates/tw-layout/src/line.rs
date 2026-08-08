@@ -143,6 +143,7 @@ pub fn layout_paragraph(
             list_marker: None,
             justify_stops: Vec::new(),
             decorations: Vec::new(),
+            decorative: false,
         });
         return (lines, line_height);
     }
@@ -324,6 +325,7 @@ pub fn layout_paragraph(
             list_marker: None,
             justify_stops: Vec::new(),
             decorations: Vec::new(),
+            decorative: false,
         });
         current_y += line_height;
     }
@@ -716,6 +718,7 @@ fn blank_line(
         list_marker: None,
         justify_stops: Vec::new(),
         decorations: Vec::new(),
+        decorative: false,
     }
 }
 
@@ -920,6 +923,7 @@ fn shape_line(
         list_marker: None,
         justify_stops,
         decorations,
+        decorative: false,
     };
     (line, width)
 }

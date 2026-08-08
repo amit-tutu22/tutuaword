@@ -16,6 +16,7 @@ fn stress_chart_data_churn() {
 
     for i in 0..500 {
         let data = ChartData {
+            kind: Default::default(),
             categories: vec![format!("C{i}")],
             series: vec![ChartSeries {
                 name: format!("S{i}"),
@@ -32,6 +33,7 @@ fn stress_chart_data_churn() {
     }
 
     let final_data = ChartData {
+        kind: Default::default(),
         categories: vec!["Final".into()],
         series: vec![ChartSeries {
             name: "Value".into(),

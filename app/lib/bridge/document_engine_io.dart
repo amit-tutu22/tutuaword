@@ -312,8 +312,8 @@ class FfiDocumentEngine implements DocumentEngine {
       _inner.continueNumberingAsync(caretRunId: caretRunId);
 
   @override
-  Future<bool> insertTableBlockAsync(int rows, int cols) =>
-      _inner.insertTableBlockAsync(rows, cols);
+  Future<bool> insertTableBlockAsync(int rows, int cols, {String? caretRunId}) =>
+      _inner.insertTableBlockAsync(rows, cols, caretRunId: caretRunId);
 
   @override
   Future<bool> deleteTableRowAsync({String? caretRunId}) =>
@@ -392,10 +392,12 @@ class FfiDocumentEngine implements DocumentEngine {
   Future<bool> insertWordArtAsync(String text) => _inner.insertWordArtAsync(text);
 
   @override
-  Future<bool> insertDiagramAsync() => _inner.insertDiagramAsync();
+  Future<bool> insertDiagramAsync({int diagramType = 0}) =>
+      _inner.insertDiagramAsync(diagramType: diagramType);
 
   @override
-  Future<bool> insertChartAsync() => _inner.insertChartAsync();
+  Future<bool> insertChartAsync({int chartType = 0}) =>
+      _inner.insertChartAsync(chartType: chartType);
 
   @override
   Future<bool> insertImageBytesAsync(Uint8List bytes, String mimeType) =>

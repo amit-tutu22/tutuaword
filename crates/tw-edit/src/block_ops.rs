@@ -275,12 +275,14 @@ pub fn insert_diagram(
     after_block_id: NodeId,
     width: f32,
     height: f32,
+    kind: tw_model::DiagramKind,
 ) -> Result<EditResult, EditError> {
     let (si, bi) = doc
         .find_block_location(after_block_id)
         .ok_or(EditError::BlockNotFound(after_block_id))?;
 
-    let shape = tw_model::ShapeBlock::diagram(width.max(1.0), height.max(1.0));
+    let shape =
+        tw_model::ShapeBlock::diagram_with_kind(width.max(1.0), height.max(1.0), kind);
     let new_id = shape.id;
     doc.sections[si]
         .blocks
@@ -298,12 +300,14 @@ pub fn insert_chart(
     after_block_id: NodeId,
     width: f32,
     height: f32,
+    kind: tw_model::ChartKind,
 ) -> Result<EditResult, EditError> {
     let (si, bi) = doc
         .find_block_location(after_block_id)
         .ok_or(EditError::BlockNotFound(after_block_id))?;
 
-    let shape = tw_model::ShapeBlock::chart(width.max(1.0), height.max(1.0));
+    let shape =
+        tw_model::ShapeBlock::chart_with_kind(width.max(1.0), height.max(1.0), kind);
     let new_id = shape.id;
     doc.sections[si]
         .blocks

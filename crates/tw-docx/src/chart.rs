@@ -76,7 +76,11 @@ pub fn parse_chart_data(xml: &str) -> Option<ChartData> {
     if categories.is_empty() || series.is_empty() {
         return None;
     }
-    Some(ChartData { categories, series })
+    Some(ChartData {
+        kind: Default::default(),
+        categories,
+        series,
+    })
 }
 
 pub fn serialize_chart_xml(data: &ChartData) -> String {

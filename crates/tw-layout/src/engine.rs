@@ -1345,10 +1345,10 @@ impl LayoutEngine {
         let mut lines = Vec::new();
         for b in &page.boxes {
             match b {
-                LayoutBox::TextLine(l) => lines.push(l.clone()),
+                LayoutBox::TextLine(l) if !l.decorative => lines.push(l.clone()),
                 LayoutBox::Table(t) => {
                     for cell in &t.cells {
-                        lines.extend(cell.lines.clone());
+                        lines.extend(cell.lines.iter().filter(|l| !l.decorative).cloned());
                     }
                 }
                 _ => {}
@@ -1830,6 +1830,8 @@ fn layout_shape(shape: &tw_model::ShapeBlock, x: f32, y: f32) -> ShapeLayout {
         fill: shape.style.fill,
         stroke: shape.style.stroke,
         stroke_width: shape.style.stroke_width,
+        chart_data: shape.chart_data.clone(),
+        diagram_kind: shape.diagram_kind,
     }
 }
 
@@ -1875,7 +1877,14 @@ fn layout_diagram_label(
 
     let label = match shape.shape.shape_type {
         ShapeKind::Diagram => "SmartArt",
-        ShapeKind::Chart => "Chart",
+        // Word inserts a titled chart surface; caption doubles as the title.
+        ShapeKind::Chart => {
+            if shape.chart_data.is_some() {
+                "Chart Title"
+            } else {
+                "Chart"
+            }
+        }
         _ => return None,
     };
 
@@ -1889,7 +1898,8 @@ fn layout_diagram_label(
 
     let mut para = tw_model::Paragraph::with_text(label);
     para.format.alignment = Some(Alignment::Center);
-    let label_y = y + shape.shape.height * 0.42;
+    // Keep captions in the top band so chart/diagram previews can use the body.
+    let label_y = y + shape.shape.height * 0.08;
     let (lines, _) = crate::line::layout_paragraph(
         shaper,
         atlas,
@@ -1897,7 +1907,12 @@ fn layout_diagram_label(
         ParagraphFrame::new(x, label_y, shape.shape.width),
         0xFF506070,
     );
-    lines.into_iter().next().map(LayoutBox::TextLine)
+    lines.into_iter().next().map(|mut line| {
+        // Captions sit inside the shape bounds; keep them out of caret hit-testing.
+        line.decorative = true;
+        line.run_map.clear();
+        LayoutBox::TextLine(line)
+    })
 }
 
 fn layout_shape_paragraphs(

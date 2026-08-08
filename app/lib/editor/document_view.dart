@@ -185,7 +185,15 @@ class _DocumentViewState extends State<DocumentView> {
   }
 
   void _scheduleLoad(int index) {
-    if (_snapshots.containsKey(index) || _pending.contains(index)) return;
+    final pageVersion = widget.controller.pageDisplayVersion(index);
+    if (_loadedPageVersions[index] == pageVersion &&
+        _snapshots.containsKey(index)) {
+      return;
+    }
+    if (_pending.contains(index)) return;
+    // Drop a stale snapshot so the pending load is the source of truth.
+    _snapshots.remove(index);
+    _loadedPageVersions.remove(index);
     _pending.add(index);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _loadPage(index);

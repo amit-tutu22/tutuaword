@@ -377,7 +377,11 @@ class _RibbonLargeButtonState extends State<RibbonLargeButton> {
                   children: [
                     Icon(widget.icon, size: WordTheme.largeIconSize, color: color),
                     const SizedBox(height: 2),
-                    Text(widget.label, style: WordTheme.ribbonLabel.copyWith(color: color)),
+                    Text(
+                      widget.label,
+                      textAlign: TextAlign.center,
+                      style: WordTheme.ribbonLabel.copyWith(color: color),
+                    ),
                   ],
                 ),
               ),

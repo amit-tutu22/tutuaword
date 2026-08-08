@@ -160,7 +160,21 @@ impl DisplayListBuilder {
                             .extend_from_slice(&[shape.x, shape.y, shape.width, shape.height]);
                     }
                     if shape.fill.is_none() && shape.stroke.is_none() {
-                        append_shape_placeholder(shape, &mut rect_batch);
+                        match shape.shape_type {
+                            tw_model::ShapeKind::Chart if shape.chart_data.is_some() => {
+                                append_chart_surface(shape, &mut rect_batch);
+                                append_chart_preview(shape, &mut rect_batch, &mut path_batch);
+                            }
+                            tw_model::ShapeKind::Diagram => {
+                                append_shape_placeholder(shape, &mut rect_batch);
+                                append_diagram_preview(
+                                    shape,
+                                    &mut rect_batch,
+                                    &mut path_batch,
+                                );
+                            }
+                            _ => append_shape_placeholder(shape, &mut rect_batch),
+                        }
                     } else {
                         append_shape_geometry(shape, &mut rect_batch, &mut path_batch);
                     }
@@ -464,6 +478,375 @@ fn append_shape_placeholder(shape: &ShapeLayout, rect_batch: &mut RectBatch) {
         border,
         rect_batch,
     );
+}
+
+fn append_diagram_preview(
+    shape: &ShapeLayout,
+    rect_batch: &mut RectBatch,
+    path_batch: &mut PathBatch,
+) {
+    match shape.diagram_kind {
+        tw_model::DiagramKind::Hierarchy => {
+            append_diagram_hierarchy_preview(shape, rect_batch, path_batch)
+        }
+        tw_model::DiagramKind::Cycle => {
+            append_diagram_cycle_preview(shape, rect_batch, path_batch)
+        }
+        tw_model::DiagramKind::Process => {
+            append_diagram_process_preview(shape, rect_batch, path_batch)
+        }
+    }
+}
+
+/// Word-like process SmartArt: three nodes with connecting arrows.
+fn append_diagram_process_preview(
+    shape: &ShapeLayout,
+    rect_batch: &mut RectBatch,
+    path_batch: &mut PathBatch,
+) {
+    const NODE_FILL: u32 = 0xFF5B9BD5;
+    const ARROW: u32 = 0xFF2F5496;
+    let pad_x = shape.width * 0.08;
+    let pad_top = shape.height * 0.28;
+    let pad_bottom = shape.height * 0.18;
+    let body_h = (shape.height - pad_top - pad_bottom).max(24.0);
+    let gap = shape.width * 0.06;
+    let node_w = ((shape.width - pad_x * 2.0 - gap * 2.0) / 3.0).max(28.0);
+    let node_h = body_h.min(shape.height * 0.42).max(20.0);
+    let y = shape.y + pad_top + (body_h - node_h) * 0.5;
+
+    for i in 0..3 {
+        let x = shape.x + pad_x + i as f32 * (node_w + gap);
+        append_rect(x, y, node_w, node_h, NODE_FILL, rect_batch);
+        if i < 2 {
+            let ax1 = x + node_w + 4.0;
+            let ax2 = x + node_w + gap - 4.0;
+            let ay = y + node_h * 0.5;
+            append_path_line(ax1, ay, ax2, ay, ARROW, path_batch);
+            append_path_line(ax2 - 6.0, ay - 5.0, ax2, ay, ARROW, path_batch);
+            append_path_line(ax2 - 6.0, ay + 5.0, ax2, ay, ARROW, path_batch);
+        }
+    }
+}
+
+fn append_diagram_hierarchy_preview(
+    shape: &ShapeLayout,
+    rect_batch: &mut RectBatch,
+    path_batch: &mut PathBatch,
+) {
+    const NODE_FILL: u32 = 0xFF5B9BD5;
+    const LINE: u32 = 0xFF2F5496;
+    let top_w = shape.width * 0.28;
+    let top_h = shape.height * 0.16;
+    let top_x = shape.x + (shape.width - top_w) * 0.5;
+    let top_y = shape.y + shape.height * 0.28;
+    append_rect(top_x, top_y, top_w, top_h, NODE_FILL, rect_batch);
+
+    let mid_y = top_y + top_h + 12.0;
+    append_path_line(
+        top_x + top_w * 0.5,
+        top_y + top_h,
+        top_x + top_w * 0.5,
+        mid_y,
+        LINE,
+        path_batch,
+    );
+
+    let child_w = shape.width * 0.22;
+    let child_h = shape.height * 0.16;
+    let gap = shape.width * 0.06;
+    let row_w = child_w * 3.0 + gap * 2.0;
+    let row_x = shape.x + (shape.width - row_w) * 0.5;
+    append_path_line(row_x + child_w * 0.5, mid_y, row_x + row_w - child_w * 0.5, mid_y, LINE, path_batch);
+
+    for i in 0..3 {
+        let x = row_x + i as f32 * (child_w + gap);
+        append_path_line(x + child_w * 0.5, mid_y, x + child_w * 0.5, mid_y + 8.0, LINE, path_batch);
+        append_rect(x, mid_y + 8.0, child_w, child_h, NODE_FILL, rect_batch);
+    }
+}
+
+fn append_diagram_cycle_preview(
+    shape: &ShapeLayout,
+    rect_batch: &mut RectBatch,
+    path_batch: &mut PathBatch,
+) {
+    const NODE_FILL: u32 = 0xFF5B9BD5;
+    const RING: u32 = 0xFF2F5496;
+    let cx = shape.x + shape.width * 0.5;
+    let cy = shape.y + shape.height * 0.55;
+    let radius = (shape.width.min(shape.height) * 0.22).max(28.0);
+    let segments = 36;
+    let mut prev = (cx + radius, cy);
+    for i in 1..=segments {
+        let t = std::f32::consts::TAU * i as f32 / segments as f32;
+        let next = (cx + radius * t.cos(), cy + radius * t.sin());
+        append_path_line(prev.0, prev.1, next.0, next.1, RING, path_batch);
+        prev = next;
+    }
+    for i in 0..3 {
+        let t = -std::f32::consts::FRAC_PI_2 + std::f32::consts::TAU * i as f32 / 3.0;
+        let nx = cx + radius * t.cos() - 18.0;
+        let ny = cy + radius * t.sin() - 12.0;
+        append_rect(nx, ny, 36.0, 24.0, NODE_FILL, rect_batch);
+    }
+}
+
+const CHART_SERIES_COLORS: [u32; 4] = [0xFF4472C4, 0xFFED7D31, 0xFFA5A5A5, 0xFFFFC000];
+const CHART_AXIS: u32 = 0xFF595959;
+const CHART_GRID: u32 = 0xFFD9D9D9;
+const CHART_BORDER: u32 = 0xFFB0B0B0;
+const CHART_SURFACE: u32 = 0xFFFFFFFF;
+
+fn append_chart_surface(shape: &ShapeLayout, rect_batch: &mut RectBatch) {
+    append_rect(
+        shape.x,
+        shape.y,
+        shape.width,
+        shape.height,
+        CHART_SURFACE,
+        rect_batch,
+    );
+    append_rect(shape.x, shape.y, shape.width, 1.0, CHART_BORDER, rect_batch);
+    append_rect(
+        shape.x,
+        shape.y + shape.height - 1.0,
+        shape.width,
+        1.0,
+        CHART_BORDER,
+        rect_batch,
+    );
+    append_rect(shape.x, shape.y, 1.0, shape.height, CHART_BORDER, rect_batch);
+    append_rect(
+        shape.x + shape.width - 1.0,
+        shape.y,
+        1.0,
+        shape.height,
+        CHART_BORDER,
+        rect_batch,
+    );
+}
+
+/// Word-like chart preview from sample / edited data (column, bar, line, pie).
+fn append_chart_preview(
+    shape: &ShapeLayout,
+    rect_batch: &mut RectBatch,
+    path_batch: &mut PathBatch,
+) {
+    let Some(data) = shape.chart_data.as_ref() else {
+        return;
+    };
+    if data.series.is_empty() || data.categories.is_empty() {
+        return;
+    }
+
+    // Legend swatches (Series 1 / Series 2) along the top-right.
+    let legend_y = shape.y + shape.height * 0.08;
+    let mut legend_x = shape.x + shape.width - 18.0;
+    for (idx, _) in data.series.iter().enumerate().take(4).rev() {
+        let color = CHART_SERIES_COLORS[idx % CHART_SERIES_COLORS.len()];
+        append_rect(legend_x - 28.0, legend_y, 12.0, 8.0, color, rect_batch);
+        legend_x -= 40.0;
+    }
+
+    match data.kind {
+        tw_model::ChartKind::Pie => append_chart_pie(shape, data, rect_batch, path_batch),
+        tw_model::ChartKind::Bar => append_chart_bar(shape, data, rect_batch, path_batch),
+        tw_model::ChartKind::Line => append_chart_line(shape, data, rect_batch, path_batch),
+        tw_model::ChartKind::Column => append_chart_column(shape, data, rect_batch, path_batch),
+    }
+}
+
+fn chart_plot_rect(shape: &ShapeLayout) -> (f32, f32, f32, f32) {
+    let pad_l = shape.width * 0.12;
+    let pad_r = shape.width * 0.08;
+    let pad_t = shape.height * 0.22;
+    let pad_b = shape.height * 0.14;
+    (
+        shape.x + pad_l,
+        shape.y + pad_t,
+        (shape.width - pad_l - pad_r).max(20.0),
+        (shape.height - pad_t - pad_b).max(20.0),
+    )
+}
+
+fn chart_max_value(data: &tw_model::ChartData) -> f64 {
+    data.series
+        .iter()
+        .flat_map(|s| s.values.iter().copied())
+        .fold(0.0_f64, f64::max)
+        .max(1.0)
+}
+
+fn append_chart_axes_and_grid(
+    plot_x: f32,
+    plot_y: f32,
+    plot_w: f32,
+    plot_h: f32,
+    path_batch: &mut PathBatch,
+) {
+    for i in 1..4 {
+        let y = plot_y + plot_h * i as f32 / 4.0;
+        append_path_line(plot_x, y, plot_x + plot_w, y, CHART_GRID, path_batch);
+    }
+    append_path_line(plot_x, plot_y, plot_x, plot_y + plot_h, CHART_AXIS, path_batch);
+    append_path_line(
+        plot_x,
+        plot_y + plot_h,
+        plot_x + plot_w,
+        plot_y + plot_h,
+        CHART_AXIS,
+        path_batch,
+    );
+}
+
+fn append_chart_column(
+    shape: &ShapeLayout,
+    data: &tw_model::ChartData,
+    rect_batch: &mut RectBatch,
+    path_batch: &mut PathBatch,
+) {
+    let (plot_x, plot_y, plot_w, plot_h) = chart_plot_rect(shape);
+    append_chart_axes_and_grid(plot_x, plot_y, plot_w, plot_h, path_batch);
+    let max_v = chart_max_value(data);
+    let n_cats = data.categories.len() as f32;
+    let n_series = data.series.len().max(1) as f32;
+    let slot = plot_w / n_cats;
+    let cluster = (slot * 0.7).max(8.0);
+    let bar_w = (cluster / n_series).max(3.0) - 1.0;
+
+    for (ci, _) in data.categories.iter().enumerate() {
+        for (si, series) in data.series.iter().enumerate() {
+            let Some(&value) = series.values.get(ci) else {
+                continue;
+            };
+            let h = ((value / max_v) as f32 * (plot_h - 4.0)).max(2.0);
+            let cluster_x = plot_x + slot * ci as f32 + (slot - cluster) * 0.5;
+            let x = cluster_x + si as f32 * (bar_w + 1.0);
+            let y = plot_y + plot_h - h;
+            let color = CHART_SERIES_COLORS[si % CHART_SERIES_COLORS.len()];
+            append_rect(x, y, bar_w, h, color, rect_batch);
+        }
+    }
+}
+
+fn append_chart_bar(
+    shape: &ShapeLayout,
+    data: &tw_model::ChartData,
+    rect_batch: &mut RectBatch,
+    path_batch: &mut PathBatch,
+) {
+    let (plot_x, plot_y, plot_w, plot_h) = chart_plot_rect(shape);
+    append_chart_axes_and_grid(plot_x, plot_y, plot_w, plot_h, path_batch);
+    let max_v = chart_max_value(data);
+    let n_cats = data.categories.len() as f32;
+    let n_series = data.series.len().max(1) as f32;
+    let slot = plot_h / n_cats;
+    let cluster = (slot * 0.7).max(8.0);
+    let bar_h = (cluster / n_series).max(3.0) - 1.0;
+
+    for (ci, _) in data.categories.iter().enumerate() {
+        for (si, series) in data.series.iter().enumerate() {
+            let Some(&value) = series.values.get(ci) else {
+                continue;
+            };
+            let w = ((value / max_v) as f32 * (plot_w - 4.0)).max(2.0);
+            let cluster_y = plot_y + slot * ci as f32 + (slot - cluster) * 0.5;
+            let y = cluster_y + si as f32 * (bar_h + 1.0);
+            let color = CHART_SERIES_COLORS[si % CHART_SERIES_COLORS.len()];
+            append_rect(plot_x + 1.0, y, w, bar_h, color, rect_batch);
+        }
+    }
+}
+
+fn append_chart_line(
+    shape: &ShapeLayout,
+    data: &tw_model::ChartData,
+    rect_batch: &mut RectBatch,
+    path_batch: &mut PathBatch,
+) {
+    let (plot_x, plot_y, plot_w, plot_h) = chart_plot_rect(shape);
+    append_chart_axes_and_grid(plot_x, plot_y, plot_w, plot_h, path_batch);
+    let max_v = chart_max_value(data);
+    let n = (data.categories.len().max(1) - 1) as f32;
+
+    for (si, series) in data.series.iter().enumerate() {
+        let color = CHART_SERIES_COLORS[si % CHART_SERIES_COLORS.len()];
+        let mut prev: Option<(f32, f32)> = None;
+        for (ci, &value) in series.values.iter().enumerate() {
+            let x = if n <= 0.0 {
+                plot_x + plot_w * 0.5
+            } else {
+                plot_x + plot_w * (ci as f32 / n)
+            };
+            let y = plot_y + plot_h - ((value / max_v) as f32 * (plot_h - 4.0)).max(2.0);
+            if let Some((px, py)) = prev {
+                append_path_line(px, py, x, y, color, path_batch);
+            }
+            append_rect(x - 2.5, y - 2.5, 5.0, 5.0, color, rect_batch);
+            prev = Some((x, y));
+        }
+    }
+}
+
+fn append_chart_pie(
+    shape: &ShapeLayout,
+    data: &tw_model::ChartData,
+    rect_batch: &mut RectBatch,
+    path_batch: &mut PathBatch,
+) {
+    // Use first series values as slice sizes (Word pie of categories).
+    let Some(series) = data.series.first() else {
+        return;
+    };
+    let total: f64 = series.values.iter().sum::<f64>().max(1.0);
+    let cx = shape.x + shape.width * 0.42;
+    let cy = shape.y + shape.height * 0.55;
+    let radius = (shape.width.min(shape.height) * 0.28).max(24.0);
+
+    let mut angle = -std::f32::consts::FRAC_PI_2;
+    for (i, &value) in series.values.iter().enumerate() {
+        let sweep = (value / total) as f32 * std::f32::consts::TAU;
+        let color = CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.len()];
+        // Dense radial strokes approximate a filled wedge with the path batch.
+        let steps = ((sweep / std::f32::consts::TAU) * 48.0).ceil().max(4.0) as i32;
+        for s in 0..=steps {
+            let t = angle + sweep * s as f32 / steps as f32;
+            let x2 = cx + radius * t.cos();
+            let y2 = cy + radius * t.sin();
+            append_path_line(cx, cy, x2, y2, color, path_batch);
+        }
+        // Slice boundary.
+        let x2 = cx + radius * (angle + sweep).cos();
+        let y2 = cy + radius * (angle + sweep).sin();
+        append_path_line(cx, cy, x2, y2, CHART_AXIS, path_batch);
+        angle += sweep;
+    }
+
+    // Outer ring.
+    let segments = 48;
+    let mut prev = (cx + radius, cy);
+    for i in 1..=segments {
+        let t = std::f32::consts::TAU * i as f32 / segments as f32 - std::f32::consts::FRAC_PI_2;
+        let next = (cx + radius * t.cos(), cy + radius * t.sin());
+        append_path_line(prev.0, prev.1, next.0, next.1, CHART_AXIS, path_batch);
+        prev = next;
+    }
+
+    // Category color key on the right.
+    let mut key_y = shape.y + shape.height * 0.30;
+    for (i, _) in data.categories.iter().enumerate().take(4) {
+        let color = CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.len()];
+        append_rect(
+            shape.x + shape.width * 0.72,
+            key_y,
+            10.0,
+            8.0,
+            color,
+            rect_batch,
+        );
+        key_y += 16.0;
+    }
 }
 
 fn append_shape_geometry(

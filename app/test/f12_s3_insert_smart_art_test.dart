@@ -10,7 +10,9 @@ void main() {
     final controller = createTestEditorController(engine: engine);
     addTearDown(controller.dispose);
 
-    await controller.insertSmartArt();
+    await controller.insertSmartArt(
+      diagramType: EditorController.smartArtProcess,
+    );
     await settleEngineStyle(tester);
 
     expect(controller.sessionController.statusText, contains('SmartArt'));
