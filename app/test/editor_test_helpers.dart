@@ -4,13 +4,31 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tutuaword/bridge/document_session_store.dart';
 import 'package:tutuaword/bridge/mock_native_engine.dart';
 import 'package:tutuaword/editor/document_view.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
+import 'package:tutuaword/editor/recent_symbols.dart';
 
 /// Creates an [EditorController] backed by [MockDocumentEngine] for tests.
-EditorController createTestEditorController({MockDocumentEngine? engine}) =>
-    EditorController.forTest(engine: engine);
+EditorController createTestEditorController({
+  MockDocumentEngine? engine,
+  RecentSymbolsStore? recentSymbols,
+  DocumentSessionStore? sessionStore,
+}) {
+  if (sessionStore != null) {
+    return EditorController(
+      engine: engine ?? MockDocumentEngine(),
+      recentSymbols: recentSymbols ?? RecentSymbolsStore(),
+      sessionStore: sessionStore,
+      enableAutosave: false,
+    );
+  }
+  return EditorController.forTest(
+    engine: engine,
+    recentSymbols: recentSymbols,
+  );
+}
 
 /// Builds a minimal v2 display list with one glyph for widget tests.
 ///

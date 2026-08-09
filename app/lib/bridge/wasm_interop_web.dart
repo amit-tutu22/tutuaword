@@ -16,6 +16,11 @@ Object callMethod(Object target, String method, List<Object?> args) {
   return js_util.callMethod<Object>(target, method, args);
 }
 
+/// Like [callMethod], but allows JS `null`/`undefined` (e.g. empty event queue).
+Object? callMethodOrNull(Object target, String method, List<Object?> args) {
+  return js_util.callMethod<Object?>(target, method, args);
+}
+
 Object? getProperty(Object target, String name) {
   return js_util.getProperty<Object?>(target, name);
 }

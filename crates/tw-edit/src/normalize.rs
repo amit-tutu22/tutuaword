@@ -1,4 +1,4 @@
-use tw_model::Document;
+use tw_model::{Document, RunContent};
 
 pub fn normalize_runs(doc: &mut Document) {
     for para in doc.paragraphs_mut() {
@@ -21,7 +21,10 @@ pub fn normalize_runs(doc: &mut Document) {
 
         let mut to_remove = Vec::new();
         for run in &para.runs {
-            if run.text().is_empty() && para.runs.len() > 1 {
+            if para.runs.len() > 1
+                && matches!(run.content, RunContent::Text(_))
+                && run.text().is_empty()
+            {
                 to_remove.push(run.id);
             }
         }

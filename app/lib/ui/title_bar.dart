@@ -5,9 +5,14 @@ import 'package:tutuaword/ui/ribbon_widgets.dart';
 import 'package:tutuaword/ui/word_theme.dart';
 
 class WordTitleBar extends StatelessWidget {
-  const WordTitleBar({super.key, required this.controller});
+  const WordTitleBar({
+    super.key,
+    required this.controller,
+    this.onHomePressed,
+  });
 
   final EditorController controller;
+  final VoidCallback? onHomePressed;
 
   @override
   Widget build(BuildContext context) {
@@ -47,8 +52,8 @@ class WordTitleBar extends StatelessWidget {
                   const SizedBox(width: WordTheme.trafficLightInset),
                   _QuickAccessIcon(
                     icon: Icons.home_outlined,
-                    tooltip: kComingSoonTooltip,
-                    onPressed: null,
+                    tooltip: onHomePressed == null ? kComingSoonTooltip : 'Home',
+                    onPressed: onHomePressed,
                   ),
                   _QuickAccessIcon(
                     icon: Icons.folder_open_outlined,

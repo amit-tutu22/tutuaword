@@ -4,6 +4,8 @@ use tw_model::Document;
 
 pub type PartName = String;
 
+mod bibliography;
+mod comments;
 pub mod chart;
 pub mod diagram;
 mod export;
@@ -23,6 +25,8 @@ mod xml_util;
 
 pub use export::export_docx;
 pub use import::import_docx;
+pub use bibliography::BIBLIOGRAPHY_PART;
+pub use comments::COMMENTS_PART;
 pub use retention::ImportRetentionReport;
 
 /// Original OPC package retained for passthrough export (ADR-0008).

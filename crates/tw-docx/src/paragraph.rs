@@ -233,6 +233,29 @@ fn parse_paragraph_runs(
                     .and_then(|s| s.strip_suffix("</w:fldSimple>"))
                     .unwrap_or("");
                 let display = extract_plain_text(inner);
+                if let Some(key) = instr
+                    .as_deref()
+                    .and_then(crate::bibliography::parse_citation_key)
+                {
+                    if let Some(r) = retention.as_deref_mut() {
+                        r.record_retained("fldSimple");
+                    }
+                    runs.push(Run {
+                        id: tw_model::NodeId::new(),
+                        format: tw_model::CharFormat::default(),
+                        content: RunContent::CitationRef(tw_model::CitationRef {
+                            source_key: key,
+                            display_text: if display.is_empty() {
+                                None
+                            } else {
+                                Some(display)
+                            },
+                        }),
+                        revision: None,
+                    });
+                    rest = after;
+                    continue;
+                }
                 let field_type = instr
                     .as_deref()
                     .map(parse_field_type)
@@ -276,6 +299,26 @@ fn parse_paragraph_runs(
                         name,
                         bookmark_id,
                     }),
+                    revision: None,
+                });
+                rest = after;
+            }
+            RunLevelTag::OfficeMath => {
+                if let Some(r) = retention.as_deref_mut() {
+                    r.record_encountered("oMath");
+                }
+                let Some((element, after)) = take_element(rest, "m:oMath") else {
+                    break;
+                };
+                if let Some(r) = retention.as_deref_mut() {
+                    r.record_retained("oMath");
+                }
+                runs.push(Run {
+                    id: tw_model::NodeId::new(),
+                    format: tw_model::CharFormat::default(),
+                    content: RunContent::OfficeMath {
+                        xml: element.to_string(),
+                    },
                     revision: None,
                 });
                 rest = after;
@@ -387,7 +430,10 @@ fn parse_run(
         runs.push(Run {
             id: tw_model::NodeId::new(),
             format: format.clone(),
-            content: RunContent::CommentRef(CommentRef { comment_id }),
+            content: RunContent::CommentRef(CommentRef {
+                comment_id,
+                display_number: None,
+            }),
             revision: revision.clone(),
         });
     }
@@ -408,6 +454,26 @@ fn parse_run(
                     revision: revision.clone(),
                 });
             }
+        }
+    }
+
+    if run_xml.contains("<m:oMath") {
+        if let Some(r) = retention.as_deref_mut() {
+            r.record_encountered("oMath");
+        }
+        if let Some((element, _)) = take_element(run_xml, "m:oMath") {
+            if let Some(r) = retention.as_deref_mut() {
+                r.record_retained("oMath");
+            }
+            runs.push(Run {
+                id: tw_model::NodeId::new(),
+                format: format.clone(),
+                content: RunContent::OfficeMath {
+                    xml: element.to_string(),
+                },
+                revision: revision.clone(),
+            });
+            return runs;
         }
     }
 

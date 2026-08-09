@@ -6,7 +6,7 @@ use crate::image::ImageBlock;
 use crate::revision::Revision;
 use crate::table::Table;
 use crate::vocabulary::{
-    BookmarkAnchor, CommentRef, FieldData, FootnoteRef, HeaderFooter, HeaderFooterLinks,
+    BookmarkAnchor, CitationRef, CommentRef, FieldData, FootnoteRef, HeaderFooter, HeaderFooterLinks,
     HeaderFooterType, HyperlinkTarget, InlineImageRef, ShapeBlock,
 };
 use serde::{Deserialize, Serialize};
@@ -55,8 +55,13 @@ pub enum RunContent {
     Field(FieldData),
     InlineImage(InlineImageRef),
     FootnoteRef(FootnoteRef),
+    CitationRef(CitationRef),
     CommentRef(CommentRef),
     Bookmark(BookmarkAnchor),
+    /// Tier C OMML preserve (F14.S1): full `<m:oMath>` or `<m:oMathPara>` element.
+    OfficeMath {
+        xml: String,
+    },
 }
 
 impl RunContent {
@@ -74,21 +79,16 @@ impl RunContent {
                 .unwrap_or("[field]"),
             RunContent::InlineImage(_) => "[image]",
             RunContent::FootnoteRef(note) => {
-                // Stable placeholder; layout may substitute superscript number later.
-                if note.display_number.is_some() {
-                    // Leak is not acceptable; use a thread-local or return owned.
-                    // For &str return we use static placeholders per number bucket — keep simple:
-                    "[fn]"
-                } else {
-                    "[fn]"
-                }
+                let _ = note;
+                "[fn]"
             }
+            RunContent::CitationRef(cite) => cite
+                .display_text
+                .as_deref()
+                .unwrap_or("[cite]"),
             RunContent::CommentRef(_) => "[comment]",
-            RunContent::Bookmark(b) => {
-                // Bookmark names vary; use generic placeholder for &str API.
-                let _ = b;
-                "[bookmark]"
-            }
+            RunContent::Bookmark(_) => "",
+            RunContent::OfficeMath { .. } => "[math]",
         }
     }
 

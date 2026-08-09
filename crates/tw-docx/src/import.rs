@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::io::{Cursor, Read};
 
-use tw_model::{Block, Document, Paragraph};
+use tw_model::{Block, Document, Footnote, Paragraph};
 use zip::ZipArchive;
 
 use crate::paragraph::{paragraph_properties_xml, parse_paragraph_with_retention};
@@ -17,8 +17,8 @@ use crate::styles::{
 };
 use crate::table::{parse_image_block, parse_shape_block, parse_table, MediaResolver};
 use crate::xml_util::{
-    extract_body_xml, extract_plain_text, iter_body_blocks, read_own_attr,
-    split_elements, BlockKind,
+    extract_body_xml, extract_plain_text, iter_body_blocks, read_own_attr, split_elements,
+    BlockKind,
 };
 use crate::{DocxError, DocxPackage, ImportResult};
 
@@ -122,6 +122,9 @@ pub fn import_docx(source: &[u8]) -> Result<ImportResult, DocxError> {
             &package,
             &mut retention,
         );
+        apply_footnotes(&mut doc, &package, &media, &mut retention);
+        apply_comments(&mut doc, &package, &mut retention);
+        apply_bibliography(&mut doc, &package, &mut retention);
         doc
     };
     package.preserved_paragraphs = preserved_paragraphs;
@@ -367,6 +370,29 @@ fn parse_body_blocks(
             BlockKind::Table => {
                 blocks.push(Block::Table(parse_table(chunk, doc)));
             }
+            BlockKind::MathPara => {
+                retention.record_encountered("oMathPara");
+                retention.record_retained("oMathPara");
+                retention.record_encountered("oMath");
+                retention.record_retained("oMath");
+                let mut para = tw_model::Paragraph::new();
+                para.runs = vec![tw_model::Run {
+                    id: tw_model::NodeId::new(),
+                    format: tw_model::CharFormat::default(),
+                    content: tw_model::RunContent::OfficeMath {
+                        xml: chunk.to_string(),
+                    },
+                    revision: None,
+                }];
+                preserved_paragraphs.insert(
+                    para.id,
+                    PreservedParagraph {
+                        xml: chunk.to_string(),
+                        fingerprint: crate::fingerprint::paragraph_fingerprint(&para),
+                    },
+                );
+                blocks.push(Block::Paragraph(para));
+            }
             BlockKind::SectionProps => {
                 section_format = Some(parse_section_properties(chunk));
             }
@@ -468,6 +494,92 @@ fn apply_headers_footers(
             }
         }
     }
+}
+
+fn apply_footnotes(
+    doc: &mut Document,
+    package: &DocxPackage,
+    media: &dyn MediaResolver,
+    retention: &mut ImportRetentionReport,
+) {
+    let Some(xml_bytes) = package.parts.get("word/footnotes.xml") else {
+        return;
+    };
+    let xml = String::from_utf8_lossy(xml_bytes);
+    retention.record_encountered("footnotesPart");
+    for element in split_elements(&xml, "w:footnote") {
+        if element.contains("w:type=\"separator\"")
+            || element.contains("w:type=\"continuationSeparator\"")
+        {
+            continue;
+        }
+        let note_id = read_own_attr(element, "w:id")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        if note_id <= 0 {
+            continue;
+        }
+        let mut discard = crate::preserve::PreservedParagraphMap::new();
+        let mut discard_shapes = crate::preserve::PreservedShapeMap::new();
+        let (blocks, _) = parse_body_blocks(
+            extract_footnote_body(element),
+            doc,
+            media,
+            package,
+            retention,
+            &mut discard,
+            &mut discard_shapes,
+        );
+        doc.footnotes.push(Footnote { id: note_id, blocks });
+    }
+    if !doc.footnotes.is_empty() {
+        retention.record_retained("footnotesPart");
+        doc.renumber_footnotes();
+    }
+}
+
+fn apply_comments(doc: &mut Document, package: &DocxPackage, retention: &mut ImportRetentionReport) {
+    let Some(xml_bytes) = package.parts.get(crate::comments::COMMENTS_PART) else {
+        return;
+    };
+    let xml = String::from_utf8_lossy(xml_bytes);
+    retention.record_encountered("commentsPart");
+    let threads = crate::comments::parse_comments_xml(&xml);
+    for thread in threads {
+        doc.comments.push(thread);
+    }
+    if !doc.comments.is_empty() {
+        retention.record_retained("commentsPart");
+        doc.renumber_comments();
+    }
+}
+
+fn apply_bibliography(
+    doc: &mut Document,
+    package: &DocxPackage,
+    retention: &mut ImportRetentionReport,
+) {
+    let Some(xml_bytes) = package.parts.get(crate::bibliography::BIBLIOGRAPHY_PART) else {
+        return;
+    };
+    let xml = String::from_utf8_lossy(xml_bytes);
+    retention.record_encountered("bibliographyPart");
+    let sources = crate::bibliography::parse_bibliography_xml(&xml);
+    for source in sources {
+        doc.ensure_bibliography_source(source);
+    }
+    if !doc.bibliography_sources.is_empty() {
+        retention.record_retained("bibliographyPart");
+    }
+}
+
+fn extract_footnote_body(xml: &str) -> &str {
+    if let Some(start) = xml.find('>') {
+        if let Some(end) = xml.rfind("</w:footnote>") {
+            return &xml[start + 1..end];
+        }
+    }
+    ""
 }
 
 fn part_for_relationship(relationships: &HashMap<String, String>, ref_id: &str) -> Option<String> {

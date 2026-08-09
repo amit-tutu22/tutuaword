@@ -70,8 +70,7 @@ class NativeEventRouter {
   @visibleForTesting
   void handleWireEvent(int eventType, Uint8List data) {
     if (data.length < 12) return;
-    final bd = ByteData.sublistView(data);
-    onEvent(eventType, bd.getUint64(4, Endian.little));
+    onEvent(eventType, _readLeU64(data, 4));
   }
 
   void onEvent(int eventType, int requestId) {
@@ -139,4 +138,16 @@ class NativeEventRouter {
   /// Events that arrived with no registered waiter, keyed by request id.
   @visibleForTesting
   Map<int, int> get unmatchedEvents => Map.unmodifiable(_earlyEvents);
+}
+
+int _readLeU64(Uint8List bytes, int offset) {
+  final low = bytes[offset] |
+      (bytes[offset + 1] << 8) |
+      (bytes[offset + 2] << 16) |
+      (bytes[offset + 3] << 24);
+  final high = bytes[offset + 4] |
+      (bytes[offset + 5] << 8) |
+      (bytes[offset + 6] << 16) |
+      (bytes[offset + 7] << 24);
+  return low + high * 0x100000000;
 }

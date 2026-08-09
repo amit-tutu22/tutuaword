@@ -111,7 +111,43 @@ void main() {
       final snap = DisplayListSnapshot.fromBytes(truncated);
       expect(snap.imagePayloads.single, isEmpty);
     });
+
+    test('v7 page list parses shape selection after empty image batch', () {
+      final bytes = _buildV7PageDisplayList(
+        shapeId: 'chart-1',
+        shapeRect: const [72.0, 96.0, 432.0, 216.0],
+      );
+
+      final snap = DisplayListSnapshot.fromBytes(bytes);
+      expect(snap.shapeIds, ['chart-1']);
+      expect(snap.shapeRects.length, 4);
+      expect(snap.shapeRects[0], 72.0);
+      expect(snap.shapeRects[2], 432.0);
+    });
   });
+}
+
+Uint8List _buildV7PageDisplayList({
+  required String shapeId,
+  required List<double> shapeRect,
+}) {
+  final writer = _ByteWriter();
+  writer.writeU32(7);
+  writer.writeU64(1);
+  writer.writeF32(612);
+  writer.writeF32(792);
+  _writeGlyphBatch(writer, 0);
+  _writeRectBatch(writer, 0);
+  _writePathBatch(writer, 0);
+  writer.writeU32(0); // empty image batch
+  writer.writeU32(1); // one selectable shape
+  for (final value in shapeRect) {
+    writer.writeF32(value);
+  }
+  final idBytes = shapeId.codeUnits;
+  writer.writeU32(idBytes.length);
+  writer.writeBytes(idBytes);
+  return writer.toBytes();
 }
 
 Uint8List _buildV4DisplayList({

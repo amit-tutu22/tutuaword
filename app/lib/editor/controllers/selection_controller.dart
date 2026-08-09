@@ -83,6 +83,18 @@ class SelectionController extends ChangeNotifier {
     _selectionRects = const [];
   }
 
+  void selectDocRange(DocRange range) {
+    if (_engine == null) return;
+    _caretRunId = range.focus.runId;
+    _caretOffset = range.focus.offset;
+    _selection = range;
+    _caretGeometry = _engine!.caretAtPosition(range.page, range.focus.runId, range.focus.offset) ??
+        _caretGeometry;
+    _refreshSelectionRects();
+    onSelectionChanged();
+    notifyListeners();
+  }
+
   String? defaultRunId() {
     if (_caretRunId != null) return _caretRunId;
     ensureGlyphCaret();
@@ -409,7 +421,8 @@ class SelectionController extends ChangeNotifier {
   Future<void> selectAll() async {
     if (_engine == null) return;
     ensureGlyphCaret();
-    _host.refreshFromEngine();
+    await _host.ensureLayoutReady();
+    _host.refreshFromEngine(full: true);
     final start = _engine!.hitTestPage(0, _marginLeft, _marginTop + _fontSize);
     final end = _engine!.fetchDocumentTailHit(0);
     if (start == null || end == null) return;

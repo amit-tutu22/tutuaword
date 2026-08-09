@@ -25,6 +25,8 @@ pub enum DecorationKind {
     DoubleUnderline,
     Strikethrough,
     Highlight,
+    /// Read-only equation preview frame (F14.S2).
+    MathFrame,
 }
 
 #[derive(Debug, Clone, PartialEq)]

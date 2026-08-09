@@ -133,6 +133,7 @@ class DisplayListSnapshot {
         imageRotations = imageData.$6;
         imageOpacities = imageData.$7;
         imageCropRects = imageData.$8;
+        offset = imageData.$9;
       }
       if (fileVersion >= 7 && offset + 4 <= bytes.length) {
         final shapeData = _readShapeSelectionBatch(bytes, offset);
@@ -310,7 +311,7 @@ class DisplayListSnapshot {
 }
 
 (Float32List, Float32List, List<String>, List<String>, List<Uint8List>, Float32List,
-    Float32List, Float32List)
+    Float32List, Float32List, int)
 _readImageBatch(
   Uint8List bytes,
   int offset,
@@ -326,6 +327,7 @@ _readImageBatch(
       Float32List(0),
       Float32List(0),
       Float32List(0),
+      offset,
     );
   }
   final imageCount = _readU32(bytes, offset);
@@ -396,7 +398,17 @@ _readImageBatch(
       offset += 4;
     }
   }
-  return (transforms, sizes, assetIds, imageIds, payloads, rotations, opacities, cropRects);
+  return (
+    transforms,
+    sizes,
+    assetIds,
+    imageIds,
+    payloads,
+    rotations,
+    opacities,
+    cropRects,
+    offset,
+  );
 }
 
 (List<String>, Float32List, int) _readShapeSelectionBatch(Uint8List bytes, int offset) {
@@ -428,7 +440,18 @@ int _readU32(Uint8List bytes, int offset) {
 }
 
 int _readU64(Uint8List bytes, int offset) {
-  return ByteData.sublistView(bytes, offset, offset + 8).getUint64(0, Endian.little);
+  // dart2js rejects ByteData.getUint64 — assemble LE u64 from bytes.
+  final b0 = bytes[offset];
+  final b1 = bytes[offset + 1];
+  final b2 = bytes[offset + 2];
+  final b3 = bytes[offset + 3];
+  final b4 = bytes[offset + 4];
+  final b5 = bytes[offset + 5];
+  final b6 = bytes[offset + 6];
+  final b7 = bytes[offset + 7];
+  final low = b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
+  final high = b4 | (b5 << 8) | (b6 << 16) | (b7 << 24);
+  return low + high * 0x100000000;
 }
 
 double _readF32(Uint8List bytes, int offset) {

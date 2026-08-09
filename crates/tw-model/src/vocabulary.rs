@@ -175,10 +175,36 @@ pub struct FootnoteRef {
     pub display_number: Option<u32>,
 }
 
+/// Inline citation reference to a bibliography source key (F16.S3).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CitationRef {
+    pub source_key: String,
+    #[serde(default)]
+    pub display_text: Option<String>,
+}
+
+/// Footnote body (paragraphs below the page separator).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Footnote {
+    pub id: i32,
+    pub blocks: Vec<Block>,
+}
+
+impl Footnote {
+    pub fn new(id: i32) -> Self {
+        Self {
+            id,
+            blocks: vec![Block::Paragraph(Paragraph::new())],
+        }
+    }
+}
+
 /// Comment range reference marker.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommentRef {
     pub comment_id: i32,
+    #[serde(default)]
+    pub display_number: Option<u32>,
 }
 
 /// Bookmark start anchor (`w:bookmarkStart`).

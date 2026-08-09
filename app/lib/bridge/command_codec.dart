@@ -156,6 +156,48 @@ class CommandCodec {
         'merge': merge,
       };
 
+  static Map<String, dynamic> setChartData({
+    required String shapeId,
+    required Map<String, dynamic> chartData,
+  }) =>
+      {
+        'type': 'SetChartData',
+        'shape_id': shapeId,
+        'chart_data': chartData,
+      };
+
+  static Map<String, dynamic> insertOfficeMath({
+    required String runId,
+    required int offset,
+    required String xml,
+  }) =>
+      {
+        'type': 'InsertOfficeMath',
+        'run_id': runId,
+        'offset': offset,
+        'xml': xml,
+      };
+
+  static Map<String, dynamic> insertOfficeMathDisplay({
+    required String afterBlockId,
+    required String xml,
+  }) =>
+      {
+        'type': 'InsertOfficeMathDisplay',
+        'after_block_id': afterBlockId,
+        'xml': xml,
+      };
+
+  static Map<String, dynamic> setOfficeMath({
+    required String runId,
+    required String xml,
+  }) =>
+      {
+        'type': 'SetOfficeMath',
+        'run_id': runId,
+        'xml': xml,
+      };
+
   /// Mirror `tw_apply_char_format` command selection for a JSON patch map.
   static List<Map<String, dynamic>> charFormatPatchCommands({
     required String startRunId,
@@ -211,4 +253,30 @@ class CommandCodec {
     }
     return commands;
   }
+
+  static Map<String, dynamic> findReplace({
+    required String startRunId,
+    required int startOffset,
+    required String endRunId,
+    required int endOffset,
+    required String find,
+    required String replace,
+    required bool matchCase,
+    bool useRegex = false,
+    bool useWildcards = false,
+  }) =>
+      {
+        'type': 'FindReplace',
+        'range': docRange(
+          startRunId: startRunId,
+          startOffset: startOffset,
+          endRunId: endRunId,
+          endOffset: endOffset,
+        ),
+        'find': find,
+        'replace': replace,
+        'match_case': matchCase,
+        'use_regex': useRegex,
+        'use_wildcards': useWildcards,
+      };
 }

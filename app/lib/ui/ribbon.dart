@@ -75,7 +75,7 @@ class WordRibbonState extends State<WordRibbon> {
       RibbonTab.insert => InsertTab(controller: widget.controller),
       RibbonTab.design => DesignTab(controller: widget.controller),
       RibbonTab.layout => LayoutTab(controller: widget.controller),
-      RibbonTab.references => const ReferencesTab(),
+      RibbonTab.references => ReferencesTab(controller: widget.controller),
       RibbonTab.mailings => const MailingsTab(),
       RibbonTab.review => ReviewTab(controller: widget.controller),
       RibbonTab.view => ViewTab(controller: widget.controller),

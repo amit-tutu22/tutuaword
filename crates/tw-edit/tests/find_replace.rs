@@ -48,6 +48,8 @@ fn find_replace_across_two_runs() {
             find: "cat".into(),
             replace: "fish".into(),
             match_case: true,
+            use_regex: false,
+            use_wildcards: false,
         })
         .unwrap();
 
@@ -83,6 +85,8 @@ fn find_replace_case_insensitive() {
             find: "foo".into(),
             replace: "bar".into(),
             match_case: false,
+            use_regex: false,
+            use_wildcards: false,
         })
         .unwrap();
 
@@ -118,6 +122,8 @@ fn find_replace_no_match_leaves_text_unchanged() {
             find: "missing".into(),
             replace: "nope".into(),
             match_case: true,
+            use_regex: false,
+            use_wildcards: false,
         })
         .unwrap();
 
@@ -153,6 +159,8 @@ fn find_replace_undo_restores_original() {
             find: "one".into(),
             replace: "1".into(),
             match_case: true,
+            use_regex: false,
+            use_wildcards: false,
         })
         .unwrap();
     session.undo().unwrap();

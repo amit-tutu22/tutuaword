@@ -1,6 +1,6 @@
 //! Build [`Command`] values from document context (caret, first paragraph, etc.).
 
-use tw_model::{Block, Document, NodeId, NumberingRef};
+use tw_model::{BibliographySource, Block, Document, NodeId, NumberingRef};
 
 use crate::{paragraph_id_for_run, Command};
 
@@ -556,6 +556,121 @@ pub fn insert_field_command_for(
     }
 }
 
+pub fn insert_footnote_command_for(run_id: NodeId, offset: usize) -> Command {
+    Command::InsertFootnote { run_id, offset }
+}
+
+pub fn insert_comment_command_for(
+    run_id: NodeId,
+    offset: usize,
+    body_text: impl Into<String>,
+) -> Command {
+    Command::InsertComment {
+        run_id,
+        offset,
+        body_text: body_text.into(),
+    }
+}
+
+pub fn insert_table_of_contents_command_for(
+    doc: &Document,
+    caret_run_id: Option<NodeId>,
+    page_numbers: Vec<u32>,
+) -> Option<Command> {
+    Some(Command::InsertTableOfContents {
+        after_block_id: block_id_from_caret(doc, caret_run_id)?,
+        page_numbers,
+    })
+}
+
+pub fn add_bibliography_source_command(source: BibliographySource) -> Command {
+    Command::AddBibliographySource { source }
+}
+
+pub fn insert_citation_command_for(
+    run_id: NodeId,
+    offset: usize,
+    source_key: impl Into<String>,
+) -> Command {
+    Command::InsertCitation {
+        run_id,
+        offset,
+        source_key: source_key.into(),
+    }
+}
+
+pub fn insert_bibliography_command_for(
+    doc: &Document,
+    caret_run_id: Option<NodeId>,
+) -> Option<Command> {
+    Some(Command::InsertBibliography {
+        after_block_id: block_id_from_caret(doc, caret_run_id)?,
+    })
+}
+
+pub fn insert_bookmark_command_for(
+    run_id: NodeId,
+    offset: usize,
+    name: impl Into<String>,
+) -> Command {
+    Command::InsertBookmark {
+        run_id,
+        offset,
+        name: name.into(),
+    }
+}
+
+pub fn insert_cross_reference_command_for(
+    run_id: NodeId,
+    offset: usize,
+    bookmark_name: impl Into<String>,
+) -> Command {
+    Command::InsertCrossReference {
+        run_id,
+        offset,
+        bookmark_name: bookmark_name.into(),
+    }
+}
+
+pub fn insert_index_command_for(
+    doc: &Document,
+    caret_run_id: Option<NodeId>,
+) -> Option<Command> {
+    Some(Command::InsertIndex {
+        after_block_id: block_id_from_caret(doc, caret_run_id)?,
+    })
+}
+
+pub fn insert_office_math_command_for(
+    run_id: NodeId,
+    offset: usize,
+    xml: impl Into<String>,
+) -> Command {
+    Command::InsertOfficeMath {
+        run_id,
+        offset,
+        xml: xml.into(),
+    }
+}
+
+pub fn insert_office_math_display_command_for_caret(
+    doc: &Document,
+    caret_run_id: Option<NodeId>,
+    xml: impl Into<String>,
+) -> Option<Command> {
+    Some(Command::InsertOfficeMathDisplay {
+        after_block_id: block_id_from_caret(doc, caret_run_id)?,
+        xml: xml.into(),
+    })
+}
+
+pub fn set_office_math_command_for(run_id: NodeId, xml: impl Into<String>) -> Command {
+    Command::SetOfficeMath {
+        run_id,
+        xml: xml.into(),
+    }
+}
+
 pub fn section_index_for_caret(doc: &Document, caret_run_id: Option<NodeId>) -> usize {
     caret_run_id
         .and_then(|run_id| doc.find_run_location(run_id).map(|loc| loc.section_index))
@@ -581,4 +696,20 @@ fn block_id_from_caret(doc: &Document, caret_run_id: Option<NodeId>) -> Option<N
         Block::ShapeBlock(s) => Some(s.id),
         _ => None,
     })
+}
+
+pub fn accept_revision_at_caret(
+    doc: &Document,
+    caret_run_id: Option<NodeId>,
+) -> Option<Command> {
+    let run_id = caret_run_id?;
+    tw_model::revision_at_run(doc, run_id).map(|run_id| Command::AcceptRevision { run_id })
+}
+
+pub fn reject_revision_at_caret(
+    doc: &Document,
+    caret_run_id: Option<NodeId>,
+) -> Option<Command> {
+    let run_id = caret_run_id?;
+    tw_model::revision_at_run(doc, run_id).map(|run_id| Command::RejectRevision { run_id })
 }

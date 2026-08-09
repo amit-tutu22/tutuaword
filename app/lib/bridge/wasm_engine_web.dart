@@ -7,6 +7,8 @@ import 'package:flutter/material.dart';
 import 'package:tutuaword/bridge/command_codec.dart';
 import 'package:tutuaword/bridge/document_properties.dart';
 import 'package:tutuaword/bridge/engine_types.dart';
+import 'package:tutuaword/bridge/find_format_filter.dart';
+import 'package:tutuaword/bridge/find_match.dart';
 import 'package:tutuaword/bridge/native_event_router.dart';
 import 'package:tutuaword/bridge/wasm_interop.dart';
 
@@ -35,14 +37,18 @@ class WasmEngine {
     }
   }
 
-  int _pump() => callMethod(_engine, 'pump', []) as int;
+  int _pump() {
+    final count = callMethod(_engine, 'pump', []) as int;
+    _drainEvents();
+    return count;
+  }
 
   Object _invoke(String method, List<Object?> args) =>
       callMethod(_engine, method, args);
 
   void _drainEvents() {
     while (true) {
-      final json = callMethod(_engine, 'popEvent', []);
+      final json = callMethodOrNull(_engine, 'pop_event', []);
       if (json == null) break;
       _handleEventJson(json.toString());
     }
@@ -240,6 +246,38 @@ class WasmEngine {
   String? fetchSectionFormat({String? caretRunId}) {
     try {
       return _invoke('get_section_format_json', [caretRunId ?? '']) as String?;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String? fetchChartDataJson(String shapeId) {
+    try {
+      return _invoke('get_chart_data_json', [shapeId]) as String?;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String? latestChartId() {
+    try {
+      return _invoke('latest_chart_id', []) as String?;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String? fetchOfficeMathXml(String runId) {
+    try {
+      return _invoke('get_office_math_xml', [runId]) as String?;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String? latestOfficeMathRunId() {
+    try {
+      return _invoke('latest_office_math_run_id', []) as String?;
     } catch (_) {
       return null;
     }
@@ -618,6 +656,63 @@ class WasmEngine {
   }) =>
       enqueueEdit(() => _enqueueNamed('insert_field', [runId, offset, fieldType]));
 
+  Future<bool> insertFootnoteAsync({
+    required String runId,
+    required int offset,
+  }) =>
+      enqueueEdit(() => _enqueueNamed('insert_footnote', [runId, offset]));
+
+  Future<bool> insertCommentAsync({
+    required String runId,
+    required int offset,
+    String bodyText = '',
+  }) =>
+      enqueueEdit(
+        () => _enqueueNamed('insert_comment', [runId, offset, bodyText]),
+      );
+
+  Future<bool> insertTableOfContentsAsync({String? caretRunId}) =>
+      enqueueEdit(() => _enqueueNamed('insert_table_of_contents', [caretRunId ?? '']));
+
+  Future<bool> addBibliographySourceAsync({
+    required String key,
+    required String author,
+    required String title,
+    required String year,
+  }) =>
+      enqueueEdit(
+        () => _enqueueNamed('add_bibliography_source', [key, author, title, year]),
+      );
+
+  Future<bool> insertCitationAsync({
+    required String runId,
+    required int offset,
+    required String sourceKey,
+  }) =>
+      enqueueEdit(() => _enqueueNamed('insert_citation', [runId, offset, sourceKey]));
+
+  Future<bool> insertBibliographyAsync({String? caretRunId}) =>
+      enqueueEdit(() => _enqueueNamed('insert_bibliography', [caretRunId ?? '']));
+
+  Future<bool> insertBookmarkAsync({
+    required String runId,
+    required int offset,
+    required String name,
+  }) =>
+      enqueueEdit(() => _enqueueNamed('insert_bookmark', [runId, offset, name]));
+
+  Future<bool> insertCrossReferenceAsync({
+    required String runId,
+    required int offset,
+    required String bookmarkName,
+  }) =>
+      enqueueEdit(
+        () => _enqueueNamed('insert_cross_reference', [runId, offset, bookmarkName]),
+      );
+
+  Future<bool> insertIndexAsync({String? caretRunId}) =>
+      enqueueEdit(() => _enqueueNamed('insert_index', [caretRunId ?? '']));
+
   bool setCurrentPageIndex(int page) =>
       _enqueueNamed('set_current_page', [page]) == 0;
 
@@ -745,6 +840,34 @@ class WasmEngine {
   Future<bool> insertChartAsync({int chartType = 0}) =>
       enqueueEdit(() => _enqueueNamed('insert_chart', [chartType]));
 
+  Future<bool> setChartDataAsync(String shapeId, Map<String, dynamic> chartData) =>
+      enqueueEdit(
+        () => _enqueueNamed('set_chart_data_json', [shapeId, jsonEncode(chartData)]),
+      );
+
+  Future<bool> insertOfficeMathAsync({
+    required String runId,
+    required int offset,
+    required String xml,
+  }) =>
+      enqueueEdit(
+        () => _enqueueNamed('insert_office_math', [runId, offset, xml]),
+      );
+
+  Future<bool> insertOfficeMathDisplayAsync({
+    String? caretRunId,
+    required String xml,
+  }) =>
+      enqueueEdit(
+        () => _enqueueNamed('insert_office_math_display', [caretRunId, xml]),
+      );
+
+  Future<bool> setOfficeMathAsync(String runId, String xml) =>
+      enqueueEdit(() => _enqueueNamed('set_office_math_xml', [runId, xml]));
+
+  Future<bool> deleteBlockAsync(String blockId) =>
+      enqueueEdit(() => _enqueueNamed('delete_block', [blockId]));
+
   Future<bool> insertImageBytesAsync(Uint8List bytes, String mimeType) =>
       enqueueEdit(() => _enqueueNamed('insert_image_bytes', [bytes, mimeType]));
 
@@ -813,12 +936,114 @@ class WasmEngine {
     }
   }
 
+  List<String>? grammarCheckIssues() {
+    try {
+      final text = _invoke('grammar_check', []) as String;
+      if (text.isEmpty) return [];
+      return text.split('\n');
+    } catch (_) {
+      return null;
+    }
+  }
+
+  List<FindMatch>? findMatches(
+    String query,
+    bool matchCase, {
+    bool useRegex = false,
+    bool useWildcards = false,
+    FindFormatFilter formatFilter = FindFormatFilter.none,
+  }) {
+    try {
+      final text = _invoke('find_matches', [
+            query,
+            matchCase,
+            useRegex,
+            useWildcards,
+            formatFilter.isActive ? formatFilter.encode() : '',
+          ]) as String? ??
+          '[]';
+      final decoded = jsonDecode(text);
+      if (decoded is! List) return [];
+      return decoded
+          .whereType<Map>()
+          .map((entry) => FindMatch.fromJson(Map<String, dynamic>.from(entry)))
+          .toList();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<int?> replaceAll(
+    String find,
+    String replace,
+    bool matchCase, {
+    bool useRegex = false,
+    bool useWildcards = false,
+  }) async {
+    if (find.isEmpty) return null;
+    final count = findMatches(
+          find,
+          matchCase,
+          useRegex: useRegex,
+          useWildcards: useWildcards,
+        )?.length ??
+        0;
+    if (count == 0) return 0;
+    final startJson = _invoke('hit_test', [0, 72.0, 83.0]) as String?;
+    final tailJson = _invoke('document_tail_hit', [0]) as String?;
+    if (startJson == null || tailJson == null) return null;
+    final start = jsonDecode(startJson) as Map<String, dynamic>;
+    final tail = jsonDecode(tailJson) as Map<String, dynamic>;
+    final ok = await enqueueEdit(() => dispatchCommand(CommandCodec.findReplace(
+          startRunId: start['run_id'] as String,
+          startOffset: start['char_offset'] as int,
+          endRunId: tail['run_id'] as String,
+          endOffset: tail['char_offset'] as int,
+          find: find,
+          replace: replace,
+          matchCase: matchCase,
+          useRegex: useRegex,
+          useWildcards: useWildcards,
+        )));
+    return ok ? count : null;
+  }
+
+  String? compareDocumentText(String otherText) {
+    try {
+      return _invoke('compare_document_text', [otherText]) as String?;
+    } catch (_) {
+      return null;
+    }
+  }
+
   bool setTrackChangesEnabled(bool enabled) =>
       _enqueueNamed('set_track_changes', [enabled]) == 0;
+
+  bool setReadOnlyEnabled(bool enabled) =>
+      _enqueueNamed('set_read_only', [enabled]) == 0;
 
   bool acceptAllRevisions() =>
       _enqueueNamed('accept_all_revisions', []) == 0;
 
   bool rejectAllRevisions() =>
       _enqueueNamed('reject_all_revisions', []) == 0;
+
+  bool acceptRevisionAtCaret({String? caretRunId}) {
+    if (caretRunId == null) return false;
+    return _enqueueNamed('accept_revision_at', [caretRunId]) == 0;
+  }
+
+  bool rejectRevisionAtCaret({String? caretRunId}) {
+    if (caretRunId == null) return false;
+    return _enqueueNamed('reject_revision_at', [caretRunId]) == 0;
+  }
+
+  String? adjacentRevisionRunId(String? caretRunId, {required bool forward}) {
+    if (caretRunId == null) return null;
+    try {
+      return _invoke('adjacent_revision_run', [caretRunId, forward]) as String?;
+    } catch (_) {
+      return null;
+    }
+  }
 }

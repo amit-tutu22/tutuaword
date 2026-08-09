@@ -1,5 +1,6 @@
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:tutuaword/editor/display_list.dart';
 import 'package:tutuaword/editor/document_painter.dart';
@@ -8,6 +9,7 @@ import 'package:tutuaword/editor/glyph_editor_surface.dart';
 import 'package:tutuaword/editor/navigation_pane.dart';
 import 'package:tutuaword/editor/style_inspector_pane.dart';
 import 'package:tutuaword/editor/rulers.dart';
+import 'package:tutuaword/editor/web_glyph_text_input.dart';
 import 'package:tutuaword/ui/word_theme.dart';
 
 class DocumentView extends StatefulWidget {
@@ -242,42 +244,45 @@ class _DocumentViewState extends State<DocumentView> {
   }
 
   Widget _buildCanvas(BuildContext context, EditorController controller) {
-    return ListView.builder(
-      controller: _scrollController,
-      padding: const EdgeInsets.symmetric(vertical: _pageGap),
-      itemCount: controller.pageCount,
-      itemExtent: _pageExtent,
-      itemBuilder: (context, index) {
-        _scheduleLoad(index);
-        // In text-fallback mode a single TextEditingController is shared with
-        // the controller, so only the active page may host the editor.
-        final readOnly = !controller.isPageEditable(index);
-        return Center(
-          child: Transform.scale(
-            scale: controller.zoom,
-            alignment: Alignment.topCenter,
-            child: ClipRect(
-              clipBehavior: Clip.hardEdge,
-              child: SizedBox(
-                width: controller.pageWidth,
-                height: controller.pageHeight,
-                child: GestureDetector(
-                  onTap: readOnly ? () => controller.setCurrentPage(index) : null,
-                  child: _PageCanvas(
-                    key: ValueKey('page-$index-${controller.pageDisplayVersion(index)}'),
-                    controller: controller,
-                    pageIndex: index,
-                    snapshot: _snapshots[index],
-                    atlasImage: _atlasImage,
-                    images: _images,
-                    readOnly: readOnly,
+    return Stack(
+      children: [
+        ListView.builder(
+          controller: _scrollController,
+          padding: const EdgeInsets.symmetric(vertical: _pageGap),
+          itemCount: controller.pageCount,
+          itemExtent: _pageExtent,
+          itemBuilder: (context, index) {
+            _scheduleLoad(index);
+            final readOnly = !controller.isPageEditable(index);
+            return Center(
+              child: Transform.scale(
+                scale: controller.zoom,
+                alignment: Alignment.topCenter,
+                child: ClipRect(
+                  clipBehavior: Clip.hardEdge,
+                  child: SizedBox(
+                    width: controller.pageWidth,
+                    height: controller.pageHeight,
+                    child: GestureDetector(
+                      onTap: readOnly ? () => controller.setCurrentPage(index) : null,
+                      child: _PageCanvas(
+                        key: ValueKey('page-$index-${controller.pageDisplayVersion(index)}'),
+                        controller: controller,
+                        pageIndex: index,
+                        snapshot: _snapshots[index],
+                        atlasImage: _atlasImage,
+                        images: _images,
+                        readOnly: readOnly,
+                      ),
+                    ),
                   ),
                 ),
               ),
-            ),
-          ),
-        );
-      },
+            );
+          },
+        ),
+        if (kIsWeb) WebGlyphTextInput(controller: controller),
+      ],
     );
   }
 }

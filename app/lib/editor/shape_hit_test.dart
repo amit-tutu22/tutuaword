@@ -12,6 +12,14 @@ class ShapeBounds {
   final String shapeId;
   final int index;
   final Rect rect;
+
+  /// True when [point] lies near the frame edge (Word-like table/textbox select).
+  bool containsNearBorder(Offset point, {double band = 10}) {
+    if (!rect.contains(point)) return false;
+    final inset = rect.deflate(band);
+    if (inset.width <= 0 || inset.height <= 0) return true;
+    return !inset.contains(point);
+  }
 }
 
 ShapeBounds? hitTestShape(DisplayListSnapshot snapshot, Offset point) {

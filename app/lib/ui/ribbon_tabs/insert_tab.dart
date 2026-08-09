@@ -3,6 +3,7 @@ import 'package:tutuaword/editor/editor_controller.dart';
 import 'package:tutuaword/ui/illustration_pickers.dart';
 import 'package:tutuaword/ui/ribbon_widgets.dart';
 import 'package:tutuaword/ui/shape_picker.dart';
+import 'package:tutuaword/ui/symbol_dialog.dart';
 import 'package:tutuaword/ui/table_size_picker.dart';
 
 class InsertTab extends StatelessWidget {
@@ -31,12 +32,22 @@ class InsertTab extends StatelessWidget {
     final selected = await ChartPicker.show(context);
     if (selected == null) return;
     await controller.insertChart(chartType: selected);
+    if (!context.mounted) return;
+    await controller.editChartData(context);
   }
 
   Future<void> _insertShape(BuildContext context) async {
     final selected = await ShapePicker.show(context);
     if (selected == null) return;
     await controller.insertShape(selected);
+  }
+
+  Future<void> _insertEquation(BuildContext context) async {
+    await controller.insertEquation(context);
+  }
+
+  Future<void> _insertSymbol(BuildContext context) async {
+    await controller.insertSymbol(context);
   }
 
   @override
@@ -236,7 +247,24 @@ class InsertTab extends StatelessWidget {
             child: Row(
               children: [
                 RibbonLargeButton(icon: Icons.text_fields, label: 'Text\nBox', onPressed: null),
-                RibbonLargeButton(icon: Icons.functions, label: 'Symbol', onPressed: null),
+                Builder(
+                  builder: (context) => RibbonLargeButton(
+                    key: const Key('insert_equation'),
+                    icon: Icons.functions,
+                    label: 'Equation',
+                    tooltip: 'Insert Equation',
+                    onPressed: () => _insertEquation(context),
+                  ),
+                ),
+                Builder(
+                  builder: (context) => RibbonLargeButton(
+                    key: const Key('insert_symbol'),
+                    icon: Icons.abc,
+                    label: 'Symbol',
+                    tooltip: 'Insert Symbol',
+                    onPressed: () => _insertSymbol(context),
+                  ),
+                ),
               ],
             ),
           ),

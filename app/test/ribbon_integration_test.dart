@@ -57,6 +57,31 @@ void main() {
       );
     });
 
+    testWidgets('Title bar Home icon switches to Home ribbon tab', (tester) async {
+      final ribbonKey = GlobalKey<WordRibbonState>();
+      await pumpWide(
+        tester,
+        Column(
+          children: [
+            WordTitleBar(
+              controller: controller,
+              onHomePressed: () =>
+                  ribbonKey.currentState?.selectTab(RibbonTab.home),
+            ),
+            WordRibbon(key: ribbonKey, controller: controller),
+          ],
+        ),
+      );
+
+      await tester.tap(find.text('Insert'));
+      await tester.pump();
+      expect(find.byType(HomeTab), findsNothing);
+
+      await tester.tap(find.byIcon(Icons.home_outlined));
+      await tester.pump();
+      expect(find.byType(HomeTab), findsOneWidget);
+    });
+
     testWidgets('Title bar displays default document title', (tester) async {
       await pumpWide(tester, WordTitleBar(controller: controller));
 

@@ -71,6 +71,9 @@ fn wait_for_bytes(session: &tw_core::Session, request_id: u64) -> Result<Vec<u8>
             BridgeEvent::SpellCheckResult { misspellings, .. } => {
                 Ok(misspellings.join("\n").into_bytes())
             }
+            BridgeEvent::GrammarCheckResult { issues, .. } => {
+                Ok(issues.join("\n").into_bytes())
+            }
             BridgeEvent::Error { message, .. } => Err(message.clone()),
             _ => Err("unexpected response".into()),
         },
@@ -132,6 +135,63 @@ impl WasmSession {
             .spell_check()
             .ok_or_else(|| "engine shut down".to_string())?;
         wait_for_bytes(session, request_id)
+    }
+
+    pub fn grammar_check_and_wait(&self) -> Result<Vec<u8>, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let request_id = session
+            .grammar_check()
+            .ok_or_else(|| "engine shut down".to_string())?;
+        wait_for_bytes(session, request_id)
+    }
+
+    pub fn compare_document_text(&self, other: &str) -> String {
+        let session = self.session().expect("WasmSession not initialized");
+        let summary = session.compare_with_text(other);
+        format!(
+            "insertions:{} deletions:{}",
+            summary.insertion_count, summary.deletion_count
+        )
+    }
+
+    pub fn find_matches_json(
+        &self,
+        query: &str,
+        match_case: bool,
+        use_regex: bool,
+        use_wildcards: bool,
+        format_json: &str,
+    ) -> String {
+        let session = self.session().expect("WasmSession not initialized");
+        let format = if format_json.is_empty() {
+            None
+        } else {
+            serde_json::from_str::<tw_edit::FindFormatFilter>(format_json).ok()
+        };
+        let matches = session.find_matches(
+            query,
+            match_case,
+            use_regex,
+            use_wildcards,
+            format.as_ref(),
+        );
+        #[derive(serde::Serialize)]
+        struct MatchOut {
+            start_run_id: String,
+            start: usize,
+            end_run_id: String,
+            end: usize,
+        }
+        let payload: Vec<MatchOut> = matches
+            .iter()
+            .map(|m| MatchOut {
+                start_run_id: m.start.run_id.to_string(),
+                start: m.start.char_offset,
+                end_run_id: m.end.run_id.to_string(),
+                end: m.end.char_offset,
+            })
+            .collect();
+        serde_json::to_string(&payload).unwrap_or_else(|_| "[]".to_string())
     }
 
     pub fn enqueue_edit(&self, request_id: Option<u64>) -> Result<u64, String> {
@@ -311,6 +371,87 @@ impl WasmSession {
         let run = parse_run_id(Some(run_id)).ok_or_else(|| "run id required".to_string())?;
         let field = parse_field_type_name(field_type)?;
         self.enqueue_edit(session.insert_field_at(run, offset, field))
+    }
+
+    pub fn insert_footnote_enqueue(&self, run_id: &str, offset: usize) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let run = parse_run_id(Some(run_id)).ok_or_else(|| "run id required".to_string())?;
+        self.enqueue_edit(session.insert_footnote_at(run, offset))
+    }
+
+    pub fn insert_comment_enqueue(
+        &self,
+        run_id: &str,
+        offset: usize,
+        body_text: &str,
+    ) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let run = parse_run_id(Some(run_id)).ok_or_else(|| "run id required".to_string())?;
+        self.enqueue_edit(session.insert_comment_at(run, offset, body_text))
+    }
+
+    pub fn insert_table_of_contents_enqueue(&self, caret_run_id: Option<&str>) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let caret = parse_run_id(caret_run_id);
+        self.enqueue_edit(session.insert_table_of_contents_at(caret))
+    }
+
+    pub fn add_bibliography_source_enqueue(
+        &self,
+        key: &str,
+        author: &str,
+        title: &str,
+        year: &str,
+    ) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        self.enqueue_edit(session.add_bibliography_source(tw_model::BibliographySource::new(
+            key, author, title, year,
+        )))
+    }
+
+    pub fn insert_citation_enqueue(
+        &self,
+        run_id: &str,
+        offset: usize,
+        source_key: &str,
+    ) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let run = parse_run_id(Some(run_id)).ok_or_else(|| "run id required".to_string())?;
+        self.enqueue_edit(session.insert_citation_at(run, offset, source_key))
+    }
+
+    pub fn insert_bibliography_enqueue(&self, caret_run_id: Option<&str>) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let caret = parse_run_id(caret_run_id);
+        self.enqueue_edit(session.insert_bibliography_at(caret))
+    }
+
+    pub fn insert_bookmark_enqueue(
+        &self,
+        run_id: &str,
+        offset: usize,
+        name: &str,
+    ) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let run = parse_run_id(Some(run_id)).ok_or_else(|| "run id required".to_string())?;
+        self.enqueue_edit(session.insert_bookmark_at(run, offset, name))
+    }
+
+    pub fn insert_cross_reference_enqueue(
+        &self,
+        run_id: &str,
+        offset: usize,
+        bookmark_name: &str,
+    ) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let run = parse_run_id(Some(run_id)).ok_or_else(|| "run id required".to_string())?;
+        self.enqueue_edit(session.insert_cross_reference_at(run, offset, bookmark_name))
+    }
+
+    pub fn insert_index_enqueue(&self, caret_run_id: Option<&str>) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let caret = parse_run_id(caret_run_id);
+        self.enqueue_edit(session.insert_index_at(caret))
     }
 
     pub fn apply_bullet_list_enqueue(&self, caret_run_id: Option<&str>) -> Result<u64, String> {
@@ -502,6 +643,93 @@ impl WasmSession {
         self.enqueue_edit(session.insert_chart_with_kind(kind))
     }
 
+    pub fn chart_data_json(&self, shape_id: &str) -> Result<String, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let id = uuid::Uuid::parse_str(shape_id)
+            .map(tw_model::NodeId::from_uuid)
+            .map_err(|e| e.to_string())?;
+        session
+            .chart_data_json(id)
+            .ok_or_else(|| "chart data not found".to_string())
+    }
+
+    pub fn latest_chart_id(&self) -> Result<String, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        session
+            .latest_chart_id()
+            .map(|id| id.to_string())
+            .ok_or_else(|| "no chart in document".to_string())
+    }
+
+    pub fn set_chart_data_enqueue(&self, shape_id: &str, chart_json: &str) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let id = uuid::Uuid::parse_str(shape_id)
+            .map(tw_model::NodeId::from_uuid)
+            .map_err(|e| e.to_string())?;
+        let chart_data: tw_model::ChartData =
+            serde_json::from_str(chart_json).map_err(|e| e.to_string())?;
+        self.enqueue_edit(session.set_chart_data(id, Some(chart_data)))
+    }
+
+    pub fn insert_office_math_enqueue(
+        &self,
+        run_id: &str,
+        offset: usize,
+        xml: &str,
+    ) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let id = uuid::Uuid::parse_str(run_id)
+            .map(tw_model::NodeId::from_uuid)
+            .map_err(|e| e.to_string())?;
+        self.enqueue_edit(session.insert_office_math_at(id, offset, xml.to_string()))
+    }
+
+    pub fn insert_office_math_display_enqueue(
+        &self,
+        caret_run_id: Option<&str>,
+        xml: &str,
+    ) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let caret = caret_run_id
+            .and_then(|s| uuid::Uuid::parse_str(s).ok())
+            .map(tw_model::NodeId::from_uuid);
+        self.enqueue_edit(session.insert_office_math_display(caret, xml.to_string()))
+    }
+
+    pub fn set_office_math_enqueue(&self, run_id: &str, xml: &str) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let id = uuid::Uuid::parse_str(run_id)
+            .map(tw_model::NodeId::from_uuid)
+            .map_err(|e| e.to_string())?;
+        self.enqueue_edit(session.set_office_math(id, xml.to_string()))
+    }
+
+    pub fn office_math_xml(&self, run_id: &str) -> Result<String, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let id = uuid::Uuid::parse_str(run_id)
+            .map(tw_model::NodeId::from_uuid)
+            .map_err(|e| e.to_string())?;
+        session
+            .office_math_xml(id)
+            .ok_or_else(|| "not an equation run".to_string())
+    }
+
+    pub fn latest_office_math_run_id(&self) -> Result<String, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        session
+            .latest_office_math_run_id()
+            .map(|id| id.to_string())
+            .ok_or_else(|| "no equation in document".to_string())
+    }
+
+    pub fn delete_block_enqueue(&self, block_id: &str) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let id = uuid::Uuid::parse_str(block_id)
+            .map(tw_model::NodeId::from_uuid)
+            .map_err(|e| e.to_string())?;
+        self.enqueue_edit(session.delete_block(id))
+    }
+
     pub fn insert_image_bytes_enqueue(
         &self,
         bytes: Vec<u8>,
@@ -607,6 +835,11 @@ impl WasmSession {
         self.enqueue_edit(session.set_track_changes(enabled))
     }
 
+    pub fn set_read_only_enqueue(&self, enabled: bool) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        self.enqueue_edit(session.set_read_only(enabled))
+    }
+
     pub fn accept_all_revisions_enqueue(&self) -> Result<u64, String> {
         let session = self.session().expect("WasmSession not initialized");
         self.enqueue_edit(session.accept_all_revisions())
@@ -615,6 +848,27 @@ impl WasmSession {
     pub fn reject_all_revisions_enqueue(&self) -> Result<u64, String> {
         let session = self.session().expect("WasmSession not initialized");
         self.enqueue_edit(session.reject_all_revisions())
+    }
+
+    pub fn accept_revision_at_enqueue(&self, caret_run: &str) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let caret = parse_run_id(Some(caret_run)).ok_or_else(|| "invalid run id".to_string())?;
+        self.enqueue_edit(session.accept_revision_at(Some(caret)))
+    }
+
+    pub fn reject_revision_at_enqueue(&self, caret_run: &str) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let caret = parse_run_id(Some(caret_run)).ok_or_else(|| "invalid run id".to_string())?;
+        self.enqueue_edit(session.reject_revision_at(Some(caret)))
+    }
+
+    pub fn adjacent_revision_run(&self, caret_run: &str, forward: bool) -> Result<String, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let caret = parse_run_id(Some(caret_run)).ok_or_else(|| "invalid run id".to_string())?;
+        session
+            .adjacent_revision_run(Some(caret), forward)
+            .map(|id| id.to_string())
+            .ok_or_else(|| "no revision".to_string())
     }
 
     pub fn clear_format_enqueue(
@@ -925,6 +1179,35 @@ pub mod bindgen_exports {
             }
         }
 
+        pub fn grammar_check(&mut self) -> Result<String, JsValue> {
+            match self.session.grammar_check_and_wait() {
+                Ok(bytes) => {
+                    self.last_error.clear();
+                    Ok(String::from_utf8_lossy(&bytes).into_owned())
+                }
+                Err(e) => {
+                    self.record_error(e.clone());
+                    Err(JsValue::from_str(&e))
+                }
+            }
+        }
+
+        pub fn compare_document_text(&self, other: &str) -> String {
+            self.session.compare_document_text(other)
+        }
+
+        pub fn find_matches(
+            &self,
+            query: &str,
+            match_case: bool,
+            use_regex: bool,
+            use_wildcards: bool,
+            format_json: &str,
+        ) -> String {
+            self.session
+                .find_matches_json(query, match_case, use_regex, use_wildcards, format_json)
+        }
+
         pub fn dispatch(&mut self, data: &[u8]) -> Result<f64, JsValue> {
             let id = self
                 .session
@@ -1123,6 +1406,96 @@ pub mod bindgen_exports {
             self.enqueue_op(self.session.insert_field_enqueue(run_id, offset as usize, field_type))
         }
 
+        pub fn insert_footnote(&mut self, run_id: &str, offset: u32) -> Result<f64, JsValue> {
+            self.enqueue_op(self.session.insert_footnote_enqueue(run_id, offset as usize))
+        }
+
+        pub fn insert_comment(
+            &mut self,
+            run_id: &str,
+            offset: u32,
+            body_text: &str,
+        ) -> Result<f64, JsValue> {
+            self.enqueue_op(
+                self.session
+                    .insert_comment_enqueue(run_id, offset as usize, body_text),
+            )
+        }
+
+        pub fn insert_table_of_contents(&mut self, caret_run_id: &str) -> Result<f64, JsValue> {
+            let caret = if caret_run_id.is_empty() {
+                None
+            } else {
+                Some(caret_run_id)
+            };
+            self.enqueue_op(self.session.insert_table_of_contents_enqueue(caret))
+        }
+
+        pub fn add_bibliography_source(
+            &mut self,
+            key: &str,
+            author: &str,
+            title: &str,
+            year: &str,
+        ) -> Result<f64, JsValue> {
+            self.enqueue_op(self.session.add_bibliography_source_enqueue(key, author, title, year))
+        }
+
+        pub fn insert_citation(
+            &mut self,
+            run_id: &str,
+            offset: u32,
+            source_key: &str,
+        ) -> Result<f64, JsValue> {
+            self.enqueue_op(
+                self.session
+                    .insert_citation_enqueue(run_id, offset as usize, source_key),
+            )
+        }
+
+        pub fn insert_bibliography(&mut self, caret_run_id: &str) -> Result<f64, JsValue> {
+            let caret = if caret_run_id.is_empty() {
+                None
+            } else {
+                Some(caret_run_id)
+            };
+            self.enqueue_op(self.session.insert_bibliography_enqueue(caret))
+        }
+
+        pub fn insert_bookmark(
+            &mut self,
+            run_id: &str,
+            offset: u32,
+            name: &str,
+        ) -> Result<f64, JsValue> {
+            self.enqueue_op(
+                self.session
+                    .insert_bookmark_enqueue(run_id, offset as usize, name),
+            )
+        }
+
+        pub fn insert_cross_reference(
+            &mut self,
+            run_id: &str,
+            offset: u32,
+            bookmark_name: &str,
+        ) -> Result<f64, JsValue> {
+            self.enqueue_op(self.session.insert_cross_reference_enqueue(
+                run_id,
+                offset as usize,
+                bookmark_name,
+            ))
+        }
+
+        pub fn insert_index(&mut self, caret_run_id: &str) -> Result<f64, JsValue> {
+            let caret = if caret_run_id.is_empty() {
+                None
+            } else {
+                Some(caret_run_id)
+            };
+            self.enqueue_op(self.session.insert_index_enqueue(caret))
+        }
+
         pub fn apply_bullet_list(&mut self, caret_run_id: &str) -> Result<f64, JsValue> {
             let caret = if caret_run_id.is_empty() {
                 None
@@ -1319,6 +1692,70 @@ pub mod bindgen_exports {
             self.enqueue_op(self.session.insert_chart_enqueue(chart_type))
         }
 
+        pub fn get_chart_data_json(&self, shape_id: &str) -> Result<String, JsValue> {
+            self.session
+                .chart_data_json(shape_id)
+                .map_err(|e| JsValue::from_str(&e))
+        }
+
+        pub fn latest_chart_id(&self) -> Result<String, JsValue> {
+            self.session
+                .latest_chart_id()
+                .map_err(|e| JsValue::from_str(&e))
+        }
+
+        pub fn set_chart_data_json(
+            &mut self,
+            shape_id: &str,
+            chart_json: &str,
+        ) -> Result<f64, JsValue> {
+            self.enqueue_op(self.session.set_chart_data_enqueue(shape_id, chart_json))
+        }
+
+        pub fn insert_office_math(
+            &mut self,
+            run_id: &str,
+            offset: u32,
+            xml: &str,
+        ) -> Result<f64, JsValue> {
+            self.enqueue_op(self.session.insert_office_math_enqueue(
+                run_id,
+                offset as usize,
+                xml,
+            ))
+        }
+
+        pub fn insert_office_math_display(
+            &mut self,
+            caret_run_id: Option<String>,
+            xml: &str,
+        ) -> Result<f64, JsValue> {
+            self.enqueue_op(self.session.insert_office_math_display_enqueue(
+                caret_run_id.as_deref(),
+                xml,
+            ))
+        }
+
+        pub fn set_office_math_xml(&mut self, run_id: &str, xml: &str) -> Result<f64, JsValue> {
+            self.enqueue_op(self.session.set_office_math_enqueue(run_id, xml))
+        }
+
+        pub fn get_office_math_xml(&self, run_id: &str) -> Result<String, JsValue> {
+            self.session
+                .office_math_xml(run_id)
+                .map_err(|e| JsValue::from_str(&e))
+        }
+
+        pub fn latest_office_math_run_id(&self) -> Result<String, JsValue> {
+            self.session
+                .latest_office_math_run_id()
+                .map_err(|e| JsValue::from_str(&e))
+        }
+
+        pub fn delete_block(&mut self, block_id: &str) -> Result<f64, JsValue> {
+            self.enqueue_op(self.session.delete_block_enqueue(block_id))
+        }
+
         pub fn insert_image_bytes(&mut self, data: &[u8], mime_type: &str) -> Result<f64, JsValue> {
             self.enqueue_op(
                 self.session
@@ -1419,12 +1856,30 @@ pub mod bindgen_exports {
             self.enqueue_op(self.session.set_track_changes_enqueue(enabled))
         }
 
+        pub fn set_read_only(&mut self, enabled: bool) -> Result<f64, JsValue> {
+            self.enqueue_op(self.session.set_read_only_enqueue(enabled))
+        }
+
         pub fn accept_all_revisions(&mut self) -> Result<f64, JsValue> {
             self.enqueue_op(self.session.accept_all_revisions_enqueue())
         }
 
         pub fn reject_all_revisions(&mut self) -> Result<f64, JsValue> {
             self.enqueue_op(self.session.reject_all_revisions_enqueue())
+        }
+
+        pub fn accept_revision_at(&mut self, caret_run: &str) -> Result<f64, JsValue> {
+            self.enqueue_op(self.session.accept_revision_at_enqueue(caret_run))
+        }
+
+        pub fn reject_revision_at(&mut self, caret_run: &str) -> Result<f64, JsValue> {
+            self.enqueue_op(self.session.reject_revision_at_enqueue(caret_run))
+        }
+
+        pub fn adjacent_revision_run(&self, caret_run: &str, forward: bool) -> Result<String, JsValue> {
+            self.session
+                .adjacent_revision_run(caret_run, forward)
+                .map_err(|e| JsValue::from_str(&e))
         }
 
         pub fn pump(&mut self) -> u32 {

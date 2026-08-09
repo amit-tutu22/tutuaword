@@ -30,6 +30,13 @@ pub fn document_fingerprint(doc: &Document) -> u64 {
         format.footer_text.hash(&mut hasher);
         hash_blocks(&section.blocks, &mut hasher);
     }
+    doc.bibliography_sources.len().hash(&mut hasher);
+    for source in &doc.bibliography_sources {
+        source.key.hash(&mut hasher);
+        source.author.hash(&mut hasher);
+        source.title.hash(&mut hasher);
+        source.year.hash(&mut hasher);
+    }
     hasher.finish()
 }
 
@@ -135,6 +142,11 @@ fn hash_paragraph(para: &Paragraph, hasher: &mut DefaultHasher) {
                 6u8.hash(hasher);
                 note.note_id.hash(hasher);
             }
+            RunContent::CitationRef(cite) => {
+                11u8.hash(hasher);
+                cite.source_key.hash(hasher);
+                cite.display_text.hash(hasher);
+            }
             RunContent::CommentRef(c) => {
                 7u8.hash(hasher);
                 c.comment_id.hash(hasher);
@@ -142,6 +154,10 @@ fn hash_paragraph(para: &Paragraph, hasher: &mut DefaultHasher) {
             RunContent::Bookmark(b) => {
                 8u8.hash(hasher);
                 b.name.hash(hasher);
+            }
+            RunContent::OfficeMath { xml } => {
+                10u8.hash(hasher);
+                xml.hash(hasher);
             }
             _ => {
                 9u8.hash(hasher);

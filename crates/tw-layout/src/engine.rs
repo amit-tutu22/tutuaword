@@ -1456,6 +1456,20 @@ fn flush_page(
     }
 
     let footer_y = format.page_height - format.margin_bottom * 0.75;
+    if let Some(footnote_boxes) = layout_footnote_band(
+        doc,
+        &page_boxes,
+        format,
+        shaper,
+        atlas,
+        format.margin_left,
+        content_width,
+        tab_interval,
+        margin_color,
+        field_ctx,
+    ) {
+        page_boxes.extend(footnote_boxes);
+    }
     if let Some(footer_boxes) = layout_header_footer_band(
         doc.resolved_footer(section_index, hf_type),
         format,
@@ -1483,6 +1497,12 @@ fn flush_page(
         tab_interval,
     );
 
+    page_boxes.extend(layout_comment_margin_markers(
+        &page_boxes,
+        doc,
+        format,
+    ));
+
     pages.push(PageLayout {
         page_index,
         width: format.page_width,
@@ -1494,6 +1514,162 @@ fn flush_page(
         boxes: page_boxes,
     });
     lines.clear();
+}
+
+fn layout_footnote_band(
+    doc: &Document,
+    page_boxes: &[LayoutBox],
+    format: &tw_model::SectionFormat,
+    shaper: &mut TextShaper,
+    atlas: &mut GlyphAtlas,
+    x: f32,
+    content_width: f32,
+    tab_interval: f32,
+    margin_color: u32,
+    field_ctx: FieldEvalContext,
+) -> Option<Vec<LayoutBox>> {
+    let note_ids = footnote_ids_on_page(page_boxes, doc);
+    if note_ids.is_empty() {
+        return None;
+    }
+
+    let separator_color = tw_model::Color {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 255,
+    }
+    .to_argb();
+    let mut y = format.page_height - format.margin_bottom;
+    let mut out = vec![LayoutBox::Rect {
+        x,
+        y,
+        width: content_width * 0.2,
+        height: 1.0,
+        color: separator_color,
+    }];
+    y += 8.0;
+
+    for note_id in note_ids {
+        let Some(footnote) = doc.footnote_by_id(note_id) else {
+            continue;
+        };
+        let display_number = footnote_display_number(page_boxes, doc, note_id);
+
+        let mut prefixed_blocks = footnote.blocks.clone();
+        if let Some(Block::Paragraph(para)) = prefixed_blocks.first_mut() {
+            let mut first = para.clone();
+            if first.runs.is_empty() {
+                first.runs.push(Run::new_text(""));
+            }
+            let prefix = format!("{} ", display_number);
+            if let Some(run) = first.runs.first_mut() {
+                if let RunContent::Text(text) = &mut run.content {
+                    if !text.starts_with(&prefix) {
+                        text.insert_str(0, &prefix);
+                    }
+                }
+            }
+            prefixed_blocks[0] = Block::Paragraph(first);
+        }
+
+        let band = layout_margin_blocks(
+            doc,
+            &prefixed_blocks,
+            shaper,
+            atlas,
+            x,
+            y,
+            content_width,
+            tab_interval,
+            margin_color,
+            field_ctx,
+        );
+        for item in band {
+            if let LayoutBox::TextLine(line) = item {
+                y = line.y + line.ascent + line.descent + 4.0;
+                out.push(LayoutBox::TextLine(line));
+            }
+        }
+        y += 4.0;
+    }
+
+    Some(out)
+}
+
+fn footnote_display_number(page_boxes: &[LayoutBox], doc: &Document, note_id: i32) -> u32 {
+    for item in page_boxes {
+        let LayoutBox::TextLine(line) = item else {
+            continue;
+        };
+        for (_, _, run_id, _) in &line.run_map {
+            let Some(run) = doc.run_by_id(*run_id) else {
+                continue;
+            };
+            if let RunContent::FootnoteRef(note) = &run.content {
+                if note.note_id == note_id {
+                    return note.display_number.unwrap_or(note_id.max(1) as u32);
+                }
+            }
+        }
+    }
+    note_id.max(1) as u32
+}
+
+fn footnote_ids_on_page(page_boxes: &[LayoutBox], doc: &Document) -> Vec<i32> {
+    let mut ids = Vec::new();
+    for item in page_boxes {
+        let LayoutBox::TextLine(line) = item else {
+            continue;
+        };
+        for (_, _, run_id, _) in &line.run_map {
+            let Some(run) = doc.run_by_id(*run_id) else {
+                continue;
+            };
+            if let tw_model::RunContent::FootnoteRef(note) = &run.content {
+                if !ids.contains(&note.note_id) {
+                    ids.push(note.note_id);
+                }
+            }
+        }
+    }
+    ids
+}
+
+/// Right-margin markers for comment anchors (F17.S3).
+fn layout_comment_margin_markers(
+    page_boxes: &[LayoutBox],
+    doc: &Document,
+    format: &tw_model::SectionFormat,
+) -> Vec<LayoutBox> {
+    const COMMENT_MARKER_COLOR: u32 = 0xFFFFA500;
+    let marker_x = format.page_width - format.margin_right + 4.0;
+    let mut markers = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for item in page_boxes {
+        let LayoutBox::TextLine(line) = item else {
+            continue;
+        };
+        for (_, _, run_id, _) in &line.run_map {
+            let Some(run) = doc.run_by_id(*run_id) else {
+                continue;
+            };
+            let tw_model::RunContent::CommentRef(c) = &run.content else {
+                continue;
+            };
+            if !seen.insert(c.comment_id) {
+                continue;
+            }
+            markers.push(LayoutBox::Rect {
+                x: marker_x,
+                y: line.y - line.ascent,
+                width: 6.0,
+                height: line.line_height.max(12.0),
+                color: COMMENT_MARKER_COLOR,
+            });
+        }
+    }
+    markers
 }
 
 fn layout_header_footer_band(
@@ -2126,8 +2302,10 @@ fn split_paragraph_at_page_breaks(para: &tw_model::Paragraph) -> Vec<ParagraphSe
             }
             RunContent::InlineImage(_)
             | RunContent::FootnoteRef(_)
+            | RunContent::CitationRef(_)
             | RunContent::CommentRef(_)
-            | RunContent::Bookmark(_) => {
+            | RunContent::Bookmark(_)
+            | RunContent::OfficeMath { .. } => {
                 current.runs.push(run.clone());
             }
             _ => {

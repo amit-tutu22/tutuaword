@@ -63,6 +63,8 @@ class DocumentSessionController extends ChangeNotifier {
   String? _infoMessage;
   bool _trackChanges = false;
   List<String> _spellMisspellings = const [];
+  List<String> _grammarIssues = const [];
+  String? _compareSummary;
   int _editGeneration = 0;
   int _lastAutosavedGeneration = 0;
   bool _autosaveInFlight = false;
@@ -74,6 +76,8 @@ class DocumentSessionController extends ChangeNotifier {
   String? get infoMessage => _infoMessage;
   bool get trackChanges => _trackChanges;
   List<String> get spellMisspellings => _spellMisspellings;
+  List<String> get grammarIssues => _grammarIssues;
+  String? get compareSummary => _compareSummary;
   int get editGeneration => _editGeneration;
 
   List<String> get recentDocuments =>
@@ -605,6 +609,54 @@ class DocumentSessionController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void acceptRevisionAtCaret() {
+    if (_host.engine != null) {
+      final ok = _host.engine!.acceptRevisionAtCaret(
+        caretRunId: _selection.defaultRunId(),
+      );
+      _statusText = ok ? 'Accepted revision at caret' : 'No revision at caret';
+      if (ok) markDocumentDirty();
+    }
+    notifyListeners();
+    onSessionChanged();
+  }
+
+  void rejectRevisionAtCaret() {
+    if (_host.engine != null) {
+      final ok = _host.engine!.rejectRevisionAtCaret(
+        caretRunId: _selection.defaultRunId(),
+      );
+      _statusText = ok ? 'Rejected revision at caret' : 'No revision at caret';
+      if (ok) markDocumentDirty();
+    }
+    notifyListeners();
+    onSessionChanged();
+  }
+
+  void gotoNextRevision() {
+    final caret = _selection.defaultRunId();
+    final next = _host.engine?.adjacentRevisionRunId(caret, forward: true);
+    if (next != null) {
+      _selection.setCaret(next, 0, page: _selection.caretPage);
+      _statusText = 'Next change';
+    } else {
+      _statusText = 'No tracked changes';
+    }
+    notifyListeners();
+  }
+
+  void gotoPreviousRevision() {
+    final caret = _selection.defaultRunId();
+    final prev = _host.engine?.adjacentRevisionRunId(caret, forward: false);
+    if (prev != null) {
+      _selection.setCaret(prev, 0, page: _selection.caretPage);
+      _statusText = 'Previous change';
+    } else {
+      _statusText = 'No tracked changes';
+    }
+    notifyListeners();
+  }
+
   Future<void> spellCheckDocument() async {
     if (_host.engine != null) {
       // Blocks this isolate — see NativeEngineOps.spellCheckMisspellings.
@@ -627,6 +679,63 @@ class DocumentSessionController extends ChangeNotifier {
       _statusText = 'Spell check: no issues';
     }
     notifyListeners();
+  }
+
+  Future<void> grammarCheckDocument() async {
+    if (_host.engine != null) {
+      final issues = _host.engine!.grammarCheckIssues();
+      if (issues == null) {
+        _statusText = 'Grammar check failed';
+        notifyListeners();
+        return;
+      }
+      _grammarIssues = issues;
+      _statusText = issues.isEmpty
+          ? 'No grammar issues found'
+          : 'Grammar check: ${issues.length} issue(s)';
+      if (issues.isNotEmpty) {
+        _infoMessage =
+            'Grammar check found ${issues.length} issue(s): ${issues.take(3).join("; ")}';
+      }
+    } else {
+      _grammarIssues = const [];
+      _statusText = 'Grammar check: no issues';
+    }
+    notifyListeners();
+  }
+
+  Future<void> proofDocument() async {
+    await spellCheckDocument();
+    await grammarCheckDocument();
+  }
+
+  void compareWithText(String otherText) {
+    if (_host.engine != null) {
+      final summary = _host.engine!.compareDocumentText(otherText);
+      _compareSummary = summary;
+      _statusText = summary == null
+          ? 'Compare failed'
+          : 'Compare complete ($summary)';
+    } else {
+      _compareSummary = null;
+      _statusText = 'Compare unavailable';
+    }
+    notifyListeners();
+  }
+
+  void toggleRestrictEditing() {
+    if (_host.engine != null) {
+      final next = !_documentReadOnly;
+      final ok = _host.engine!.setReadOnlyEnabled(next);
+      if (ok) {
+        _documentReadOnly = next;
+        _statusText = next ? 'Editing restricted' : 'Editing allowed';
+      } else {
+        _statusText = 'Restrict editing failed';
+      }
+    }
+    notifyListeners();
+    onSessionChanged();
   }
 
   Future<void> applyEngineStyle(

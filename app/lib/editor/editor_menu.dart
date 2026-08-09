@@ -243,6 +243,11 @@ class EditorMenuBar extends StatelessWidget {
               shortcut: const SingleActivator(LogicalKeyboardKey.keyA, meta: true),
               onSelected: controller.selectAll,
             ),
+            PlatformMenuItem(
+              label: 'Find…',
+              shortcut: const SingleActivator(LogicalKeyboardKey.keyF, meta: true),
+              onSelected: controller.openFindPane,
+            ),
           ],
         ),
       ],

@@ -83,6 +83,26 @@ pub fn run_layout_text(run: &Run, ctx: Option<&FieldEvalContext>) -> String {
                     .clone()
                     .unwrap_or_else(|| "[field]".to_string())
             }),
+        RunContent::OfficeMath { xml } => {
+            let preview = crate::extract_omml_preview_text(xml);
+            if preview.is_empty() {
+                "?".to_string()
+            } else {
+                preview
+            }
+        }
+        RunContent::FootnoteRef(note) => note
+            .display_number
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| note.note_id.to_string()),
+        RunContent::CitationRef(cite) => cite
+            .display_text
+            .clone()
+            .unwrap_or_else(|| format!("[{}]", cite.source_key)),
+        RunContent::CommentRef(c) => c
+            .display_number
+            .map(|n| format!("[C{n}]"))
+            .unwrap_or_else(|| format!("[C{}]", c.comment_id)),
         _ => run.text().to_string(),
     }
 }

@@ -9,6 +9,7 @@ class DocumentSessionStore {
   DocumentSessionStore({required Directory root}) : _root = root;
 
   static const maxRecentFiles = 10;
+  static const maxRecentSymbols = 12;
   static const defaultAutosaveInterval = Duration(seconds: 60);
 
   final Directory _root;
@@ -36,6 +37,8 @@ class DocumentSessionStore {
   File get _draftFile => File(p.join(autosaveDir.path, 'draft.twdoc'));
 
   File get _recentFile => File(p.join(_root.path, 'recent.json'));
+
+  File get _recentSymbolsFile => File(p.join(_root.path, 'recent_symbols.json'));
 
   File get _settingsFile => File(p.join(_root.path, 'settings.json'));
 
@@ -119,6 +122,23 @@ class DocumentSessionStore {
     await saveRecentEntries(
       paths.map((path) => RecentDocumentEntry(path: path)).toList(),
     );
+  }
+
+  List<String> loadRecentSymbolIds() {
+    if (!_recentSymbolsFile.existsSync()) return const [];
+    try {
+      final decoded =
+          jsonDecode(_recentSymbolsFile.readAsStringSync()) as List<dynamic>;
+      return decoded.whereType<String>().where((id) => id.isNotEmpty).toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<void> saveRecentSymbolIds(List<String> ids) async {
+    await _root.create(recursive: true);
+    final trimmed = ids.take(maxRecentSymbols).toList();
+    await _recentSymbolsFile.writeAsString('${jsonEncode(trimmed)}\n', flush: true);
   }
 
   List<RecentDocumentEntry> bumpRecentEntry(

@@ -19,8 +19,374 @@ pub use undo::{TransactionGuard, UndoEntry};
 pub use range::paragraph_id_for_run;
 pub use run_text::{run_char_len, run_char_len_by_id, run_slice, run_slice_by_id, run_with_id};
 
+/// A non-mutating find hit inside the document (F18.S1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FindMatch {
+    pub start: DocPosition,
+    pub end: DocPosition,
+}
+
+/// Optional formatting constraints for find (F18.S4).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FindFormatFilter {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bold: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub italic: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style_name: Option<String>,
+}
+
+impl FindFormatFilter {
+    pub fn is_active(&self) -> bool {
+        self.bold.is_some() || self.italic.is_some() || self.style_name.is_some()
+    }
+}
+
+fn run_matches_format_filter(
+    doc: &Document,
+    run: &Run,
+    para_style_id: Option<StyleId>,
+    filter: &FindFormatFilter,
+) -> bool {
+    let effective = doc
+        .styles
+        .resolve_char_format(para_style_id, &run.format);
+    if let Some(want_bold) = filter.bold {
+        if effective.bold.unwrap_or(false) != want_bold {
+            return false;
+        }
+    }
+    if let Some(want_italic) = filter.italic {
+        if effective.italic.unwrap_or(false) != want_italic {
+            return false;
+        }
+    }
+    if let Some(ref name) = filter.style_name {
+        let style_match = para_style_id
+            .and_then(|id| doc.styles.paragraph_styles.get(&id))
+            .is_some_and(|style| style.name.eq_ignore_ascii_case(name));
+        if !style_match {
+            return false;
+        }
+    }
+    true
+}
+
+fn collect_format_only_matches(
+    doc: &Document,
+    range: &DocRange,
+    start_loc: &tw_model::RunLocation,
+    end_loc: &tw_model::RunLocation,
+    filter: &FindFormatFilter,
+) -> Result<Vec<FindMatch>, EditError> {
+    let mut matches = Vec::new();
+    for (si, section) in doc.sections.iter().enumerate() {
+        for (bi, block) in section.blocks.iter().enumerate() {
+            if (si, tw_model::BlockZone::Body.sort_key(), bi) < start_loc.block_key()
+                || (si, tw_model::BlockZone::Body.sort_key(), bi) > end_loc.block_key()
+            {
+                continue;
+            }
+            let tw_model::Block::Paragraph(para) = block else {
+                continue;
+            };
+            for run in &para.runs {
+                if !run_in_doc_range(run.id, *start_loc, *end_loc, doc) {
+                    continue;
+                }
+                if !run_matches_format_filter(doc, run, para.style_id, filter) {
+                    continue;
+                }
+                let run_start = if run.id == range.start.run_id {
+                    range.start.char_offset
+                } else {
+                    0
+                };
+                let run_end = if run.id == range.end.run_id {
+                    range.end.char_offset
+                } else {
+                    run_char_len_by_id(doc, run.id)
+                };
+                if run_start >= run_end {
+                    continue;
+                }
+                matches.push(FindMatch {
+                    start: DocPosition {
+                        run_id: run.id,
+                        char_offset: run_start,
+                    },
+                    end: DocPosition {
+                        run_id: run.id,
+                        char_offset: run_end,
+                    },
+                });
+            }
+        }
+    }
+    Ok(matches)
+}
+
+/// Span covering visible body content from the first to last text run.
+pub fn document_body_range(doc: &Document) -> Option<DocRange> {
+    let mut first: Option<NodeId> = None;
+    let mut last: Option<(NodeId, usize)> = None;
+    for section in &doc.sections {
+        for block in &section.blocks {
+            let Some(para) = block.paragraph() else {
+                continue;
+            };
+            for run in &para.runs {
+                if run.text().is_empty() {
+                    continue;
+                }
+                if first.is_none() {
+                    first = Some(run.id);
+                }
+                last = Some((run.id, run_char_len_by_id(doc, run.id)));
+            }
+        }
+    }
+    Some(DocRange {
+        start: DocPosition {
+            run_id: first?,
+            char_offset: 0,
+        },
+        end: DocPosition {
+            run_id: last?.0,
+            char_offset: last?.1,
+        },
+    })
+}
+
+/// Collect every `find` occurrence inside `range` without mutating the document.
+pub fn find_matches(
+    doc: &Document,
+    range: &DocRange,
+    find: &str,
+    match_case: bool,
+    use_regex: bool,
+    use_wildcards: bool,
+    format: Option<&FindFormatFilter>,
+) -> Result<Vec<FindMatch>, EditError> {
+    let format_active = format.is_some_and(|f| f.is_active());
+    if find.is_empty() && !format_active {
+        return Ok(Vec::new());
+    }
+    let range = crate::range::normalize_range(doc, range)?;
+    let start_loc = doc
+        .find_run_location(range.start.run_id)
+        .ok_or(EditError::RunNotFound(range.start.run_id))?;
+    let end_loc = doc
+        .find_run_location(range.end.run_id)
+        .ok_or(EditError::RunNotFound(range.end.run_id))?;
+
+    let mut matches = if find.is_empty() {
+        collect_format_only_matches(doc, &range, &start_loc, &end_loc, format.unwrap())?
+    } else {
+        find_text_matches(doc, &range, find, match_case, use_regex, use_wildcards, &start_loc, &end_loc)?
+    };
+
+    if format_active && !find.is_empty() {
+        if let Some(filter) = format {
+            matches.retain(|m| {
+                doc.find_run_location(m.start.run_id)
+                    .and_then(|loc| {
+                        doc.sections
+                            .get(loc.section_index)?
+                            .blocks
+                            .get(loc.block_index)?
+                            .paragraph()
+                    })
+                    .and_then(|para| {
+                        para.runs
+                            .iter()
+                            .find(|run| run.id == m.start.run_id)
+                            .map(|run| (run, para.style_id))
+                    })
+                    .is_some_and(|(run, style_id)| {
+                        run_matches_format_filter(doc, run, style_id, filter)
+                    })
+            });
+        }
+    }
+
+    matches.sort_by(|a, b| {
+        position_ord(doc, &a.start)
+            .unwrap_or((0, 0, 0, 0, 0))
+            .cmp(&position_ord(doc, &b.start).unwrap_or((0, 0, 0, 0, 0)))
+    });
+    Ok(matches)
+}
+
+fn find_text_matches(
+    doc: &Document,
+    range: &DocRange,
+    find: &str,
+    match_case: bool,
+    use_regex: bool,
+    use_wildcards: bool,
+    start_loc: &tw_model::RunLocation,
+    end_loc: &tw_model::RunLocation,
+) -> Result<Vec<FindMatch>, EditError> {
+    let pattern = compile_find_pattern(find, match_case, use_regex, use_wildcards)?;
+    let find_len = find.chars().count();
+    let mut matches = Vec::new();
+
+    for (si, section) in doc.sections.iter().enumerate() {
+        for (bi, block) in section.blocks.iter().enumerate() {
+            if (si, tw_model::BlockZone::Body.sort_key(), bi) < start_loc.block_key()
+                || (si, tw_model::BlockZone::Body.sort_key(), bi) > end_loc.block_key()
+            {
+                continue;
+            }
+            let tw_model::Block::Paragraph(para) = block else {
+                continue;
+            };
+            for run in &para.runs {
+                if !run_in_doc_range(run.id, *start_loc, *end_loc, doc) {
+                    continue;
+                }
+                let run_start = if run.id == range.start.run_id {
+                    range.start.char_offset
+                } else {
+                    0
+                };
+                let run_end = if run.id == range.end.run_id {
+                    range.end.char_offset
+                } else {
+                    run_char_len_by_id(doc, run.id)
+                };
+                if run_start >= run_end {
+                    continue;
+                }
+
+                let slice = run_slice_by_id(doc, run.id, run_start..run_end);
+                match &pattern {
+                    FindPattern::Literal => {
+                        let mut search_from = 0usize;
+                        let slice_len = slice.chars().count();
+                        while search_from < slice_len {
+                            let tail: String = slice.chars().skip(search_from).collect();
+                            if let Some(rel) = find_in(&tail, find, match_case) {
+                                let abs_start = run_start + search_from + rel;
+                                let abs_end = abs_start + find_len;
+                                matches.push(FindMatch {
+                                    start: DocPosition {
+                                        run_id: run.id,
+                                        char_offset: abs_start,
+                                    },
+                                    end: DocPosition {
+                                        run_id: run.id,
+                                        char_offset: abs_end,
+                                    },
+                                });
+                                search_from += rel + find_len;
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    FindPattern::Regex(re) => {
+                        for (rel_start, rel_end) in regex_matches_in(&slice, re) {
+                            matches.push(FindMatch {
+                                start: DocPosition {
+                                    run_id: run.id,
+                                    char_offset: run_start + rel_start,
+                                },
+                                end: DocPosition {
+                                    run_id: run.id,
+                                    char_offset: run_start + rel_end,
+                                },
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(matches)
+}
+
+fn position_ord(
+    doc: &Document,
+    pos: &DocPosition,
+) -> Result<(usize, u8, usize, usize, usize), EditError> {
+    let loc = doc
+        .find_run_location(pos.run_id)
+        .ok_or(EditError::RunNotFound(pos.run_id))?;
+    Ok((
+        loc.section_index,
+        loc.zone.sort_key(),
+        loc.block_index,
+        loc.run_index,
+        pos.char_offset,
+    ))
+}
+
+use serde::{Deserialize, Serialize};
+
 use access::{with_paragraph_mut, with_run_mut};
-use tw_model::{CharFormat, Document, DocumentTheme, FieldData, FieldType, NodeId, NumberingRef, ParaFormat, Revision, RevisionType, Run, RunContent, StyleId, StyleSheetError, field_instruction, resolve_theme};
+use regex::Regex;
+use tw_model::{BibliographySource, Block, CharFormat, CommentThread, Document, DocumentTheme, FieldData, FieldType, Footnote, FootnoteRef, NodeId, NumberingRef, ParaFormat, Revision, RevisionType, Run, RunContent, StyleId, StyleSheetError, bookmark_run, build_bibliography_blocks, build_index_blocks, build_toc_blocks, citation_ref_run, cross_ref_field_data, document_outline, field_instruction, resolve_theme};
+
+enum FindPattern {
+    Literal,
+    Regex(Regex),
+}
+
+fn compile_find_pattern(
+    find: &str,
+    match_case: bool,
+    use_regex: bool,
+    use_wildcards: bool,
+) -> Result<FindPattern, EditError> {
+    if use_wildcards {
+        let converted = wildcard_to_regex(find);
+        return Ok(FindPattern::Regex(compile_regex(&converted, match_case)?));
+    }
+    if use_regex {
+        return Ok(FindPattern::Regex(compile_regex(find, match_case)?));
+    }
+    Ok(FindPattern::Literal)
+}
+
+fn compile_regex(pattern: &str, match_case: bool) -> Result<Regex, EditError> {
+    let full = if match_case {
+        pattern.to_string()
+    } else {
+        format!("(?i){pattern}")
+    };
+    Regex::new(&full).map_err(|err| EditError::InvalidRegex(err.to_string()))
+}
+
+fn wildcard_to_regex(pattern: &str) -> String {
+    let mut out = String::from("(?:");
+    for ch in pattern.chars() {
+        match ch {
+            '?' => out.push('.'),
+            '*' => out.push_str(".*?"),
+            '\\' | '.' | '+' | '^' | '$' | '|' | '(' | ')' | '[' | ']' | '{' | '}' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            _ => out.push(ch),
+        }
+    }
+    out.push(')');
+    out
+}
+
+fn regex_matches_in(haystack: &str, re: &Regex) -> Vec<(usize, usize)> {
+    re.find_iter(haystack)
+        .map(|m| {
+            let char_start = haystack[..m.start()].chars().count();
+            let char_end = haystack[..m.end()].chars().count();
+            (char_start, char_end)
+        })
+        .collect()
+}
 
 pub fn apply(
     doc: &mut Document,
@@ -237,6 +603,48 @@ pub fn apply(
             offset,
             field_type,
         } => insert_field(doc, *run_id, *offset, field_type.clone())?,
+        Command::InsertFootnote { run_id, offset } => {
+            insert_footnote(doc, *run_id, *offset)?
+        }
+        Command::InsertComment {
+            run_id,
+            offset,
+            body_text,
+        } => insert_comment(doc, *run_id, *offset, body_text.clone())?,
+        Command::InsertTableOfContents {
+            after_block_id,
+            page_numbers,
+        } => insert_table_of_contents(doc, *after_block_id, page_numbers.clone())?,
+        Command::AddBibliographySource { source } => add_bibliography_source(doc, source.clone())?,
+        Command::InsertCitation {
+            run_id,
+            offset,
+            source_key,
+        } => insert_citation(doc, *run_id, *offset, source_key.clone())?,
+        Command::InsertBibliography { after_block_id } => {
+            insert_bibliography(doc, *after_block_id)?
+        }
+        Command::InsertBookmark {
+            run_id,
+            offset,
+            name,
+        } => insert_bookmark(doc, *run_id, *offset, name.clone())?,
+        Command::InsertCrossReference {
+            run_id,
+            offset,
+            bookmark_name,
+        } => insert_cross_reference(doc, *run_id, *offset, bookmark_name.clone())?,
+        Command::InsertIndex { after_block_id } => insert_index(doc, *after_block_id)?,
+        Command::InsertOfficeMath {
+            run_id,
+            offset,
+            xml,
+        } => insert_office_math(doc, *run_id, *offset, xml.clone())?,
+        Command::InsertOfficeMathDisplay {
+            after_block_id,
+            xml,
+        } => block_ops::insert_office_math_display(doc, *after_block_id, xml.clone())?,
+        Command::SetOfficeMath { run_id, xml } => set_office_math(doc, *run_id, xml.clone())?,
         Command::MergeSection { section_index } => {
             block_ops::merge_section(doc, *section_index)?
         }
@@ -356,9 +764,23 @@ pub fn apply(
             find,
             replace,
             match_case,
-        } => find_replace(doc, range, find, replace, *match_case)?,
+            use_regex,
+            use_wildcards,
+        } => find_replace(
+            doc,
+            range,
+            find,
+            replace,
+            *match_case,
+            *use_regex,
+            *use_wildcards,
+        )?,
         Command::RestoreFindReplace { segments } => restore_find_replace(doc, segments)?,
         Command::DeleteBlock { id } => block_ops::delete_block(doc, *id)?,
+        Command::InsertBlockBefore {
+            before_block_id,
+            block,
+        } => block_ops::insert_block_before(doc, *before_block_id, block.clone())?,
         Command::InsertBlock {
             after_block_id,
             block,
@@ -580,6 +1002,652 @@ fn insert_field(
     })
 }
 
+fn insert_footnote(
+    doc: &mut Document,
+    run_id: NodeId,
+    offset: usize,
+) -> Result<EditResult, EditError> {
+    let loc = doc
+        .find_run_location(run_id)
+        .ok_or(EditError::RunNotFound(run_id))?;
+
+    let note_id = doc.next_footnote_id();
+    doc.footnotes.push(Footnote::new(note_id));
+
+    let mut format = doc
+        .run_at(loc)
+        .ok_or(EditError::RunNotFound(run_id))?
+        .format
+        .clone();
+    format.superscript = Some(true);
+
+    if offset == 0 {
+        if let Some(para) = doc.paragraph_at_loc(loc) {
+            if let Some(run) = para.runs.get(loc.run_index) {
+                if matches!(&run.content, RunContent::Text(text) if text.is_empty()) {
+                    with_run_mut(doc, run_id, |run| {
+                        run.format = format.clone();
+                        run.content = RunContent::FootnoteRef(FootnoteRef {
+                            note_id,
+                            display_number: None,
+                        });
+                    })
+                    .ok_or(EditError::RunNotFound(run_id))?;
+                    doc.renumber_footnotes();
+                    return Ok(EditResult {
+                        affected_nodes: vec![run_id],
+                        created_node_id: Some(run_id),
+                        seed_run_id: Some(run_id),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+    }
+
+    let mut insert_at = loc.run_index;
+
+    if doc
+        .run_at(loc)
+        .is_some_and(|run| matches!(run.content, RunContent::Text(_)))
+    {
+        let char_len = run_char_len_by_id(doc, run_id);
+        if offset > 0 && offset < char_len {
+            split_run_at(doc, loc, run_id, offset)?;
+            insert_at = loc.run_index + 1;
+        } else if offset >= char_len {
+            insert_at = loc.run_index + 1;
+        }
+    }
+
+    let footnote_run = Run {
+        id: NodeId::new(),
+        format,
+        content: RunContent::FootnoteRef(FootnoteRef {
+            note_id,
+            display_number: None,
+        }),
+        revision: None,
+    };
+    let ref_id = footnote_run.id;
+
+    doc.paragraph_at_loc_mut(loc)
+        .ok_or(EditError::RunNotFound(run_id))?
+        .runs
+        .insert(insert_at, footnote_run);
+
+    doc.renumber_footnotes();
+
+    Ok(EditResult {
+        affected_nodes: vec![ref_id],
+        created_node_id: Some(ref_id),
+        seed_run_id: Some(ref_id),
+        ..Default::default()
+    })
+}
+
+fn insert_comment(
+    doc: &mut Document,
+    run_id: NodeId,
+    offset: usize,
+    body_text: String,
+) -> Result<EditResult, EditError> {
+    let loc = doc
+        .find_run_location(run_id)
+        .ok_or(EditError::RunNotFound(run_id))?;
+
+    let comment_id = doc.next_comment_id();
+    let author = doc.settings.author_name.clone();
+    doc.comments.push(CommentThread::new(
+        comment_id,
+        run_id,
+        offset,
+        author,
+        body_text,
+    ));
+
+    let mut format = doc
+        .run_at(loc)
+        .ok_or(EditError::RunNotFound(run_id))?
+        .format
+        .clone();
+    format.highlight = Some(tw_model::Color {
+        r: 255,
+        g: 255,
+        b: 0,
+        a: 64,
+    });
+
+    if offset == 0 {
+        if let Some(para) = doc.paragraph_at_loc(loc) {
+            if let Some(run) = para.runs.get(loc.run_index) {
+                if matches!(&run.content, RunContent::Text(text) if text.is_empty()) {
+                    with_run_mut(doc, run_id, |run| {
+                        run.format = format.clone();
+                        run.content = RunContent::CommentRef(tw_model::CommentRef {
+                            comment_id,
+                            display_number: None,
+                        });
+                    })
+                    .ok_or(EditError::RunNotFound(run_id))?;
+                    doc.renumber_comments();
+                    return Ok(EditResult {
+                        affected_nodes: vec![run_id],
+                        created_node_id: Some(run_id),
+                        seed_run_id: Some(run_id),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+    }
+
+    let mut insert_at = loc.run_index;
+
+    if doc
+        .run_at(loc)
+        .is_some_and(|run| matches!(run.content, RunContent::Text(_)))
+    {
+        let char_len = run_char_len_by_id(doc, run_id);
+        if offset > 0 && offset < char_len {
+            split_run_at(doc, loc, run_id, offset)?;
+            insert_at = loc.run_index + 1;
+        } else if offset >= char_len {
+            insert_at = loc.run_index + 1;
+        }
+    }
+
+    let comment_run = Run {
+        id: NodeId::new(),
+        format,
+        content: RunContent::CommentRef(tw_model::CommentRef {
+            comment_id,
+            display_number: None,
+        }),
+        revision: None,
+    };
+    let ref_id = comment_run.id;
+
+    doc.paragraph_at_loc_mut(loc)
+        .ok_or(EditError::RunNotFound(run_id))?
+        .runs
+        .insert(insert_at, comment_run);
+
+    doc.renumber_comments();
+
+    Ok(EditResult {
+        affected_nodes: vec![ref_id],
+        created_node_id: Some(ref_id),
+        seed_run_id: Some(ref_id),
+        ..Default::default()
+    })
+}
+
+fn insert_table_of_contents(
+    doc: &mut Document,
+    after_block_id: NodeId,
+    page_numbers: Vec<u32>,
+) -> Result<EditResult, EditError> {
+    let (si, bi) = doc
+        .find_block_location(after_block_id)
+        .ok_or(EditError::BlockNotFound(after_block_id))?;
+
+    let outline = document_outline(doc);
+    let entries: Vec<_> = outline
+        .into_iter()
+        .zip(page_numbers.into_iter().chain(std::iter::repeat(1)))
+        .map(|(entry, page)| (entry, page.max(1)))
+        .collect();
+
+    let blocks = build_toc_blocks(&entries);
+    if blocks.is_empty() {
+        return Err(EditError::InvalidRange);
+    }
+
+    let mut affected = Vec::with_capacity(blocks.len());
+    let mut first_created = None;
+
+    for (i, block) in blocks.into_iter().enumerate() {
+        let new_id = match &block {
+            Block::Paragraph(p) => p.id,
+            Block::Table(t) => t.id,
+            Block::ImageBlock(i) => i.id,
+            Block::ShapeBlock(s) => s.id,
+            _ => return Err(EditError::InvalidRange),
+        };
+        doc.sections[si].blocks.insert(bi + 1 + i, block);
+        affected.push(new_id);
+        if i == 0 {
+            first_created = Some(new_id);
+        }
+    }
+
+    Ok(EditResult {
+        affected_nodes: affected,
+        created_node_id: first_created,
+        ..Default::default()
+    })
+}
+
+fn add_bibliography_source(
+    doc: &mut Document,
+    source: BibliographySource,
+) -> Result<EditResult, EditError> {
+    doc.ensure_bibliography_source(source.clone());
+    Ok(EditResult {
+        affected_nodes: vec![],
+        ..Default::default()
+    })
+}
+
+fn insert_citation(
+    doc: &mut Document,
+    run_id: NodeId,
+    offset: usize,
+    source_key: String,
+) -> Result<EditResult, EditError> {
+    let source = doc
+        .bibliography_source_by_key(&source_key)
+        .cloned()
+        .ok_or(EditError::InvalidRange)?;
+
+    let loc = doc
+        .find_run_location(run_id)
+        .ok_or(EditError::RunNotFound(run_id))?;
+
+    if offset == 0 {
+        if let Some(para) = doc.paragraph_at_loc(loc) {
+            if let Some(run) = para.runs.get(loc.run_index) {
+                if matches!(&run.content, RunContent::Text(text) if text.is_empty()) {
+                    let cite = citation_ref_run(&source);
+                    let cite_id = cite.id;
+                    with_run_mut(doc, run_id, |run| {
+                        *run = cite;
+                    })
+                    .ok_or(EditError::RunNotFound(run_id))?;
+                    return Ok(EditResult {
+                        affected_nodes: vec![cite_id],
+                        created_node_id: Some(cite_id),
+                        seed_run_id: Some(cite_id),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+    }
+
+    let format = doc
+        .run_at(loc)
+        .ok_or(EditError::RunNotFound(run_id))?
+        .format
+        .clone();
+    let mut insert_at = loc.run_index;
+
+    if doc
+        .run_at(loc)
+        .is_some_and(|run| matches!(run.content, RunContent::Text(_)))
+    {
+        let char_len = run_char_len_by_id(doc, run_id);
+        if offset > 0 && offset < char_len {
+            split_run_at(doc, loc, run_id, offset)?;
+            insert_at = loc.run_index + 1;
+        } else if offset >= char_len {
+            insert_at = loc.run_index + 1;
+        }
+    }
+
+    let mut cite = citation_ref_run(&source);
+    cite.format = format;
+    let cite_id = cite.id;
+
+    doc.paragraph_at_loc_mut(loc)
+        .ok_or(EditError::RunNotFound(run_id))?
+        .runs
+        .insert(insert_at, cite);
+
+    Ok(EditResult {
+        affected_nodes: vec![cite_id],
+        created_node_id: Some(cite_id),
+        seed_run_id: Some(cite_id),
+        ..Default::default()
+    })
+}
+
+fn insert_bibliography(
+    doc: &mut Document,
+    after_block_id: NodeId,
+) -> Result<EditResult, EditError> {
+    let (si, bi) = doc
+        .find_block_location(after_block_id)
+        .ok_or(EditError::BlockNotFound(after_block_id))?;
+
+    let blocks = build_bibliography_blocks(doc);
+    if blocks.is_empty() {
+        return Err(EditError::InvalidRange);
+    }
+
+    let mut affected = Vec::with_capacity(blocks.len());
+    let mut first_created = None;
+
+    for (i, block) in blocks.into_iter().enumerate() {
+        let new_id = match &block {
+            Block::Paragraph(p) => p.id,
+            Block::Table(t) => t.id,
+            Block::ImageBlock(i) => i.id,
+            Block::ShapeBlock(s) => s.id,
+            _ => return Err(EditError::InvalidRange),
+        };
+        doc.sections[si].blocks.insert(bi + 1 + i, block);
+        affected.push(new_id);
+        if i == 0 {
+            first_created = Some(new_id);
+        }
+    }
+
+    Ok(EditResult {
+        affected_nodes: affected,
+        created_node_id: first_created,
+        ..Default::default()
+    })
+}
+
+fn insert_bookmark(
+    doc: &mut Document,
+    run_id: NodeId,
+    offset: usize,
+    name: String,
+) -> Result<EditResult, EditError> {
+    if name.trim().is_empty() || tw_model::bookmark_exists(doc, &name) {
+        return Err(EditError::InvalidRange);
+    }
+
+    let loc = doc
+        .find_run_location(run_id)
+        .ok_or(EditError::RunNotFound(run_id))?;
+    let bookmark_id = doc.next_bookmark_id();
+
+    if offset == 0 {
+        if let Some(para) = doc.paragraph_at_loc(loc) {
+            if let Some(run) = para.runs.get(loc.run_index) {
+                if matches!(&run.content, RunContent::Text(text) if text.is_empty()) {
+                    let bookmark = bookmark_run(name, bookmark_id);
+                    let id = bookmark.id;
+                    with_run_mut(doc, run_id, |run| *run = bookmark)
+                        .ok_or(EditError::RunNotFound(run_id))?;
+                    return Ok(EditResult {
+                        affected_nodes: vec![id],
+                        created_node_id: Some(id),
+                        seed_run_id: Some(id),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+    }
+
+    let format = doc
+        .run_at(loc)
+        .ok_or(EditError::RunNotFound(run_id))?
+        .format
+        .clone();
+    let mut insert_at = loc.run_index;
+
+    if doc
+        .run_at(loc)
+        .is_some_and(|run| matches!(run.content, RunContent::Text(_)))
+    {
+        let char_len = run_char_len_by_id(doc, run_id);
+        if offset > 0 && offset < char_len {
+            split_run_at(doc, loc, run_id, offset)?;
+            insert_at = loc.run_index + 1;
+        } else if offset >= char_len {
+            insert_at = loc.run_index + 1;
+        }
+    }
+
+    let mut bookmark = bookmark_run(name, bookmark_id);
+    bookmark.format = format;
+    let bookmark_id_run = bookmark.id;
+
+    let para = doc
+        .paragraph_at_loc_mut(loc)
+        .ok_or(EditError::RunNotFound(run_id))?;
+    para.runs.insert(insert_at, bookmark);
+
+    Ok(EditResult {
+        affected_nodes: vec![bookmark_id_run],
+        created_node_id: Some(bookmark_id_run),
+        seed_run_id: Some(bookmark_id_run),
+        ..Default::default()
+    })
+}
+
+fn insert_cross_reference(
+    doc: &mut Document,
+    run_id: NodeId,
+    offset: usize,
+    bookmark_name: String,
+) -> Result<EditResult, EditError> {
+    let field = cross_ref_field_data(doc, &bookmark_name).ok_or(EditError::InvalidRange)?;
+    insert_field_with_data(doc, run_id, offset, field)
+}
+
+fn insert_field_with_data(
+    doc: &mut Document,
+    run_id: NodeId,
+    offset: usize,
+    field: FieldData,
+) -> Result<EditResult, EditError> {
+    let loc = doc
+        .find_run_location(run_id)
+        .ok_or(EditError::RunNotFound(run_id))?;
+
+    if offset == 0 {
+        if let Some(para) = doc.paragraph_at_loc(loc) {
+            if let Some(run) = para.runs.get(loc.run_index) {
+                if matches!(&run.content, RunContent::Text(text) if text.is_empty()) {
+                    with_run_mut(doc, run_id, |run| {
+                        run.content = RunContent::Field(field.clone());
+                    })
+                    .ok_or(EditError::RunNotFound(run_id))?;
+                    return Ok(EditResult {
+                        affected_nodes: vec![run_id],
+                        created_node_id: Some(run_id),
+                        seed_run_id: Some(run_id),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+    }
+
+    let format = doc
+        .run_at(loc)
+        .ok_or(EditError::RunNotFound(run_id))?
+        .format
+        .clone();
+    let mut insert_at = loc.run_index;
+
+    if doc
+        .run_at(loc)
+        .is_some_and(|run| matches!(run.content, RunContent::Text(_)))
+    {
+        let char_len = run_char_len_by_id(doc, run_id);
+        if offset > 0 && offset < char_len {
+            split_run_at(doc, loc, run_id, offset)?;
+            insert_at = loc.run_index + 1;
+        } else if offset >= char_len {
+            insert_at = loc.run_index + 1;
+        }
+    }
+
+    let field_run = Run {
+        id: NodeId::new(),
+        format,
+        content: RunContent::Field(field),
+        revision: None,
+    };
+    let field_id = field_run.id;
+
+    doc.paragraph_at_loc_mut(loc)
+        .ok_or(EditError::RunNotFound(run_id))?
+        .runs
+        .insert(insert_at, field_run);
+
+    Ok(EditResult {
+        affected_nodes: vec![field_id],
+        created_node_id: Some(field_id),
+        seed_run_id: Some(field_id),
+        ..Default::default()
+    })
+}
+
+fn insert_index(
+    doc: &mut Document,
+    after_block_id: NodeId,
+) -> Result<EditResult, EditError> {
+    let (si, bi) = doc
+        .find_block_location(after_block_id)
+        .ok_or(EditError::BlockNotFound(after_block_id))?;
+
+    let blocks = build_index_blocks(doc);
+    if blocks.is_empty() {
+        return Err(EditError::InvalidRange);
+    }
+
+    let mut affected = Vec::with_capacity(blocks.len());
+    let mut first_created = None;
+
+    for (i, block) in blocks.into_iter().enumerate() {
+        let new_id = match &block {
+            Block::Paragraph(p) => p.id,
+            Block::Table(t) => t.id,
+            Block::ImageBlock(i) => i.id,
+            Block::ShapeBlock(s) => s.id,
+            _ => return Err(EditError::InvalidRange),
+        };
+        doc.sections[si].blocks.insert(bi + 1 + i, block);
+        affected.push(new_id);
+        if i == 0 {
+            first_created = Some(new_id);
+        }
+    }
+
+    Ok(EditResult {
+        affected_nodes: affected,
+        created_node_id: first_created,
+        ..Default::default()
+    })
+}
+
+fn insert_office_math(
+    doc: &mut Document,
+    run_id: NodeId,
+    offset: usize,
+    xml: String,
+) -> Result<EditResult, EditError> {
+    if xml.trim().is_empty() {
+        return Err(EditError::InvalidRange);
+    }
+
+    let loc = doc
+        .find_run_location(run_id)
+        .ok_or(EditError::RunNotFound(run_id))?;
+
+    if offset == 0 {
+        if let Some(para) = doc.paragraph_at_loc(loc) {
+            if let Some(run) = para.runs.get(loc.run_index) {
+                if matches!(&run.content, RunContent::Text(text) if text.is_empty()) {
+                    with_run_mut(doc, run_id, |run| {
+                        run.content = RunContent::OfficeMath { xml };
+                    })
+                    .ok_or(EditError::RunNotFound(run_id))?;
+                    return Ok(EditResult {
+                        affected_nodes: vec![run_id],
+                        created_node_id: Some(run_id),
+                        seed_run_id: Some(run_id),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+    }
+
+    let format = doc
+        .run_at(loc)
+        .ok_or(EditError::RunNotFound(run_id))?
+        .format
+        .clone();
+    let mut insert_at = loc.run_index;
+
+    if doc
+        .run_at(loc)
+        .is_some_and(|run| matches!(run.content, RunContent::Text(_)))
+    {
+        let char_len = run_char_len_by_id(doc, run_id);
+        if offset > 0 && offset < char_len {
+            split_run_at(doc, loc, run_id, offset)?;
+            insert_at = loc.run_index + 1;
+        } else if offset >= char_len {
+            insert_at = loc.run_index + 1;
+        }
+    }
+
+    let math_run = Run {
+        id: NodeId::new(),
+        format,
+        content: RunContent::OfficeMath { xml },
+        revision: None,
+    };
+    let math_id = math_run.id;
+
+    doc.paragraph_at_loc_mut(loc)
+        .ok_or(EditError::RunNotFound(run_id))?
+        .runs
+        .insert(insert_at, math_run);
+
+    Ok(EditResult {
+        affected_nodes: vec![math_id],
+        created_node_id: Some(math_id),
+        seed_run_id: Some(math_id),
+        ..Default::default()
+    })
+}
+
+fn set_office_math(
+    doc: &mut Document,
+    run_id: NodeId,
+    xml: String,
+) -> Result<EditResult, EditError> {
+    if xml.trim().is_empty() {
+        return Err(EditError::InvalidRange);
+    }
+
+    let loc = doc
+        .find_run_location(run_id)
+        .ok_or(EditError::RunNotFound(run_id))?;
+    let run = doc
+        .run_at(loc)
+        .ok_or(EditError::RunNotFound(run_id))?;
+    let RunContent::OfficeMath { xml: old_xml } = &run.content else {
+        return Err(EditError::RunNotFound(run_id));
+    };
+    let old_xml = old_xml.clone();
+
+    with_run_mut(doc, run_id, |run| {
+        if let RunContent::OfficeMath { xml: existing } = &mut run.content {
+            *existing = xml;
+        }
+    })
+    .ok_or(EditError::RunNotFound(run_id))?;
+
+    Ok(EditResult {
+        affected_nodes: vec![run_id],
+        old_office_math_xml: Some(old_xml),
+        ..Default::default()
+    })
+}
+
 fn insert_text(
     doc: &mut Document,
     run_id: NodeId,
@@ -670,12 +1738,49 @@ fn delete_doc_range(
         .find_run_location(range.end.run_id)
         .ok_or(EditError::RunNotFound(range.end.run_id))?;
 
+    let end_is_doc_tail = !doc.sections.iter().enumerate().any(|(si, section)| {
+        section.blocks.iter().enumerate().any(|(bi, block)| {
+            let key = (si, tw_model::BlockZone::Body.sort_key(), bi);
+            if key < end_loc.block_key() {
+                return false;
+            }
+            let Some(para) = block.paragraph() else {
+                return false;
+            };
+            para.runs.iter().any(|run| {
+                let Some(loc) = doc.find_run_location(run.id) else {
+                    return false;
+                };
+                loc.block_key() > end_loc.block_key()
+                    || (loc.block_key() == end_loc.block_key()
+                        && run.id != range.end.run_id
+                        && run_char_len_by_id(doc, run.id) > 0)
+            })
+        })
+    });
+
     let mut segments = Vec::new();
+    let mut blocks_to_delete = Vec::new();
     for (si, section) in doc.sections.iter().enumerate() {
         for (bi, block) in section.blocks.iter().enumerate() {
-            if (si, tw_model::BlockZone::Body.sort_key(), bi) < start_loc.block_key()
-                || (si, tw_model::BlockZone::Body.sort_key(), bi) > end_loc.block_key()
-            {
+            let block_key = (si, tw_model::BlockZone::Body.sort_key(), bi);
+            // Non-paragraph blocks inside the selection, plus trailing objects
+            // after the last text when deleting through the document tail
+            // (Select All → Delete).
+            let trailing_object = end_is_doc_tail && block_key > end_loc.block_key();
+            let interior_object =
+                block_key > start_loc.block_key() && block_key < end_loc.block_key();
+            if interior_object || trailing_object {
+                if let Some(id) = match block {
+                    Block::Table(t) => Some(t.id),
+                    Block::ShapeBlock(s) => Some(s.id),
+                    Block::ImageBlock(i) => Some(i.id),
+                    _ => None,
+                } {
+                    blocks_to_delete.push(id);
+                }
+            }
+            if block_key < start_loc.block_key() || block_key > end_loc.block_key() {
                 continue;
             }
             let Some(para) = block.paragraph() else {
@@ -709,6 +1814,13 @@ fn delete_doc_range(
         undo_segments.push((run_id, start, deleted, String::new()));
         delete_range(doc, run_id, start, end)?;
         affected.push(run_id);
+    }
+
+    // Delete interior blocks after text so indices stay stable during the text pass.
+    for id in blocks_to_delete.into_iter().rev() {
+        if let Ok(result) = block_ops::delete_block(doc, id) {
+            affected.extend(result.affected_nodes);
+        }
     }
 
     Ok(EditResult {
@@ -1702,7 +2814,10 @@ fn find_in(haystack: &str, needle: &str, match_case: bool) -> Option<usize> {
     }
     let needle_chars: Vec<char> = needle.chars().collect();
     let hay_chars: Vec<char> = haystack.chars().collect();
-    for start in 0..=hay_chars.len().saturating_sub(needle_chars.len()) {
+    if needle_chars.len() > hay_chars.len() {
+        return None;
+    }
+    for start in 0..=hay_chars.len() - needle_chars.len() {
         let matched = needle_chars.iter().enumerate().all(|(i, &nc)| {
             let hc = hay_chars[start + i];
             if match_case {
@@ -1724,10 +2839,13 @@ fn find_replace(
     find: &str,
     replace: &str,
     match_case: bool,
+    use_regex: bool,
+    use_wildcards: bool,
 ) -> Result<EditResult, EditError> {
     if find.is_empty() {
         return Err(EditError::InvalidRange);
     }
+    let pattern = compile_find_pattern(find, match_case, use_regex, use_wildcards)?;
     let range = crate::range::normalize_range(doc, range)?;
     let start_loc = doc
         .find_run_location(range.start.run_id)
@@ -1771,29 +2889,41 @@ fn find_replace(
 
                 let slice = run_slice_by_id(doc, run.id, run_start..run_end);
                 let mut matches = Vec::new();
-                let mut search_from = 0usize;
-                let slice_len = slice.chars().count();
-                while search_from < slice_len {
-                    let tail: String = slice.chars().skip(search_from).collect();
-                    if let Some(rel) = find_in(&tail, find, match_case) {
-                        let abs = run_start + search_from + rel;
-                        matches.push(abs);
-                        search_from += rel + find_len;
-                    } else {
-                        break;
+                match &pattern {
+                    FindPattern::Literal => {
+                        let mut search_from = 0usize;
+                        let slice_len = slice.chars().count();
+                        while search_from < slice_len {
+                            let tail: String = slice.chars().skip(search_from).collect();
+                            if let Some(rel) = find_in(&tail, find, match_case) {
+                                let abs = run_start + search_from + rel;
+                                matches.push((abs, abs + find_len, find.to_string()));
+                                search_from += rel + find_len;
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    FindPattern::Regex(re) => {
+                        for (rel_start, rel_end) in regex_matches_in(&slice, re) {
+                            let abs_start = run_start + rel_start;
+                            let abs_end = run_start + rel_end;
+                            let matched =
+                                run_slice_by_id(doc, run.id, abs_start..abs_end);
+                            matches.push((abs_start, abs_end, matched));
+                        }
                     }
                 }
 
-                for abs_start in matches.into_iter().rev() {
-                    pending.push((run.id, abs_start));
+                for (abs_start, abs_end, matched) in matches.into_iter().rev() {
+                    pending.push((run.id, abs_start, abs_end, matched));
                 }
             }
         }
     }
 
-    for (run_id, abs_start) in pending {
-        let abs_end = abs_start + find_len;
-        undo_segments.push((run_id, abs_start, find.to_string(), replace.to_string()));
+    for (run_id, abs_start, abs_end, matched) in pending {
+        undo_segments.push((run_id, abs_start, matched.clone(), replace.to_string()));
         delete_range(doc, run_id, abs_start, abs_end)?;
         insert_text(doc, run_id, abs_start, replace)?;
         affected.push(run_id);
@@ -1801,7 +2931,8 @@ fn find_replace(
 
     Ok(EditResult {
         affected_nodes: affected,
-        find_replace_undo: Some(undo_segments),
+        find_replace_undo: Some(undo_segments.clone()),
+        replacement_count: undo_segments.len(),
         ..Default::default()
     })
 }
@@ -2256,6 +3387,8 @@ mod phase2_tests {
                 find: "foo".into(),
                 replace: "baz".into(),
                 match_case: true,
+                use_regex: false,
+                use_wildcards: false,
             })
             .unwrap();
         assert_eq!(

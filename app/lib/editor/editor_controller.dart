@@ -16,14 +16,21 @@ import 'package:tutuaword/bridge/mock_native_engine.dart';
 import 'package:tutuaword/bridge/outline_entry.dart';
 import 'package:tutuaword/editor/controllers/document_session_controller.dart';
 import 'package:tutuaword/editor/controllers/engine_host.dart';
+import 'package:tutuaword/editor/controllers/find_controller.dart';
 import 'package:tutuaword/editor/controllers/formatting_controller.dart';
 import 'package:tutuaword/editor/controllers/selection_controller.dart';
 import 'package:tutuaword/editor/controllers/view_controller.dart';
 import 'package:tutuaword/editor/doc_range.dart';
 import 'package:tutuaword/editor/document_edit_zone.dart';
+import 'package:tutuaword/editor/chart_data.dart';
+import 'package:tutuaword/editor/equation_omml.dart';
 import 'package:tutuaword/editor/display_list.dart';
+import 'package:tutuaword/editor/recent_symbols.dart';
 import 'package:tutuaword/editor/image_hit_test.dart';
 import 'package:tutuaword/editor/shape_hit_test.dart';
+import 'package:tutuaword/ui/chart_data_dialog.dart';
+import 'package:tutuaword/ui/equation_dialog.dart';
+import 'package:tutuaword/ui/symbol_dialog.dart';
 import 'package:tutuaword/ui/paragraph_borders_dialog.dart';
 import 'package:tutuaword/ui/paragraph_spacing_dialog.dart';
 import 'package:tutuaword/ui/page_setup.dart';
@@ -56,16 +63,24 @@ class EditorController extends ChangeNotifier {
   EditorController({
     DocumentEngine? engine,
     DocumentSessionStore? sessionStore,
+    RecentSymbolsStore? recentSymbols,
     bool enableAutosave = true,
     Duration? autosaveInterval,
     bool useMockWhenEngineMissing = false,
-  }) : _host = EngineHost(engine: engine ?? (useMockWhenEngineMissing ? MockDocumentEngine() : loadDocumentEngine())) {
+  })  : _recentSymbols = recentSymbols ?? RecentSymbolsStore.instance,
+        _sessionStore = sessionStore,
+        _host = EngineHost(engine: engine ?? (useMockWhenEngineMissing ? MockDocumentEngine() : loadDocumentEngine())) {
     _view = ViewController();
     _selection = SelectionController(
       host: _host,
       onSelectionChanged: () => _formatting.syncFromCaret(),
     );
     _formatting = FormattingController(host: _host, selection: _selection);
+    _find = FindController(
+      host: _host,
+      selection: _selection,
+      onFindChanged: notifyListeners,
+    );
     _session = DocumentSessionController(
       host: _host,
       selection: _selection,
@@ -90,25 +105,36 @@ class EditorController extends ChangeNotifier {
     for (final sub in _subControllers) {
       sub.addListener(notifyListeners);
     }
+
+    if (_sessionStore != null) {
+      _recentSymbols.loadIds(_sessionStore!.loadRecentSymbolIds());
+    }
   }
 
   /// [_host] is included so a coalesced display refresh repaints even when the
   /// edit that triggered it already notified optimistically.
   List<ChangeNotifier> get _subControllers =>
-      [_host, _view, _selection, _formatting, _session];
+      [_host, _view, _selection, _formatting, _find, _session];
 
   /// In-memory engine for widget/unit tests (R2.4).
-  factory EditorController.forTest({MockDocumentEngine? engine}) {
+  factory EditorController.forTest({
+    MockDocumentEngine? engine,
+    RecentSymbolsStore? recentSymbols,
+  }) {
     return EditorController(
       engine: engine ?? MockDocumentEngine(),
+      recentSymbols: recentSymbols ?? RecentSymbolsStore(),
       enableAutosave: false,
     );
   }
 
   final EngineHost _host;
+  final RecentSymbolsStore _recentSymbols;
+  final DocumentSessionStore? _sessionStore;
   late final ViewController _view;
   late final SelectionController _selection;
   late final FormattingController _formatting;
+  late final FindController _find;
   late final DocumentSessionController _session;
   String _documentThemeName = 'Office';
   DocumentEditZone _editZone = DocumentEditZone.body;
@@ -137,6 +163,22 @@ class EditorController extends ChangeNotifier {
   // ── Engine / rendering ────────────────────────────────────────────────────
   bool get isEngineConnected => _host.isConnected;
   bool get usesGlyphRendering => _host.isConnected;
+
+  /// Focus target for [WebGlyphTextInput] on Flutter web.
+  final FocusNode webGlyphFocusNode = FocusNode();
+
+  void focusGlyphInput() {
+    if (!kIsWeb) return;
+    if (!webGlyphFocusNode.canRequestFocus) return;
+    webGlyphFocusNode.requestFocus();
+    // Flutter web sometimes drops DOM focus after rebuild; retry once.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (webGlyphFocusNode.canRequestFocus && !webGlyphFocusNode.hasFocus) {
+        webGlyphFocusNode.requestFocus();
+      }
+    });
+  }
+
   bool get preferTextRendering => false;
   Uint8List get displayListBytes => _host.displayListBytes;
   double get pageWidth => _host.pageWidth;
@@ -194,7 +236,31 @@ class EditorController extends ChangeNotifier {
   String? get infoMessage => _session.infoMessage;
   bool get trackChanges => _session.trackChanges;
   List<String> get spellMisspellings => _session.spellMisspellings;
+  List<String> get grammarIssues => _session.grammarIssues;
+  String? get compareSummary => _session.compareSummary;
+  bool get findPaneVisible => _find.paneVisible;
+  String get findQuery => _find.query;
+  String get findReplaceText => _find.replaceText;
+  bool get findMatchCase => _find.matchCase;
+  bool get findUseRegex => _find.useRegex;
+  bool get findUseWildcards => _find.useWildcards;
+  bool get findBold => _find.findBold;
+  String get findStyleName => _find.findStyleName;
+  String get findStatusText => _find.statusText;
+  void openFindPane({String? initialQuery}) => _find.openPane(initialQuery: initialQuery);
+  void closeFindPane() => _find.closePane();
+  void setFindQuery(String value) => _find.setQuery(value);
+  void setFindReplaceText(String value) => _find.setReplaceText(value);
+  Future<int?> replaceAll() => _find.replaceAll();
+  void toggleFindMatchCase() => _find.toggleMatchCase();
+  void toggleFindUseRegex() => _find.toggleUseRegex();
+  void toggleFindUseWildcards() => _find.toggleUseWildcards();
+  void toggleFindBold() => _find.toggleFindBold();
+  void setFindStyleName(String value) => _find.setFindStyleName(value);
+  void findNext() => _find.findNext();
+  void findPrevious() => _find.findPrevious();
   List<String> get recentDocuments => _session.recentDocuments;
+  RecentSymbolsStore get recentSymbols => _recentSymbols;
   Duration get autosaveInterval => _session.autosaveInterval;
   String get documentTitle => _session.documentTitle;
   int get wordCount => _session.wordCount;
@@ -329,6 +395,7 @@ class EditorController extends ChangeNotifier {
 
   void selectDiagram(int pageIndex, ShapeBounds bounds) {
     clearImageSelection();
+    _selection.collapseToCaret();
     _selectedDiagramId = bounds.shapeId;
     _selectedDiagramPage = pageIndex;
     _selectedDiagramRect = bounds.rect;
@@ -345,14 +412,49 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Selects a chart / SmartArt / shape / table object.
+  ///
+  /// First click selects the object. A second click inside an already-selected
+  /// object that contains text (table cell / text box) falls through so the
+  /// caret can be placed for editing. Border clicks always keep object selection.
   bool trySelectDiagramAt(int pageIndex, Offset point, DisplayListSnapshot snapshot) {
     final hit = hitTestShape(snapshot, point);
     if (hit == null) {
       clearDiagramSelection();
       return false;
     }
+
+    final nearBorder = hit.containsNearBorder(point);
+    final textHit = _host.engine?.hitTestPage(pageIndex, point.dx, point.dy);
+    // First click on editable text inside a table/shape selects text, not the
+    // object. Border clicks still select the object frame (Word-like).
+    if (textHit != null && !nearBorder) {
+      clearDiagramSelection();
+      return false;
+    }
+
     selectDiagram(pageIndex, hit);
     return true;
+  }
+
+  bool get hasSelectedObject => hasSelectedDiagram || hasSelectedImage;
+
+  Future<bool> deleteSelectedObject() async {
+    if (!_host.isConnected || _host.engine == null) return false;
+    final blockId = _selectedDiagramId ?? _selectedImageId;
+    if (blockId == null) return false;
+    final ok = await _host.performNativeEdit(
+      () => _host.engine!.deleteBlockAsync(blockId),
+      full: true,
+    );
+    if (ok) {
+      clearDiagramSelection();
+      clearImageSelection();
+      _session.markDocumentDirty();
+      _session.setStatusText('Object deleted');
+      notifyListeners();
+    }
+    return ok;
   }
 
   ImageResizeHandle? imageHandleAt(Offset point) {
@@ -433,7 +535,7 @@ class EditorController extends ChangeNotifier {
       final file = result.files.single;
       Uint8List? bytes = file.bytes;
       if (bytes == null && file.path != null) {
-        bytes = await File(file.path!).readAsBytes();
+        bytes = Uint8List.fromList(await File(file.path!).readAsBytes());
       }
       if (bytes == null || bytes.isEmpty) {
         _session.setStatusText('Replace failed: empty file');
@@ -720,6 +822,7 @@ class EditorController extends ChangeNotifier {
   String get selectedText => _selection.selectedText();
 
   bool get canCutOrCopy => selectedText.isNotEmpty;
+  bool get canDelete => canCutOrCopy || hasSelectedObject;
 
   Future<void> copySelection() async {
     final text = selectedText;
@@ -728,6 +831,10 @@ class EditorController extends ChangeNotifier {
   }
 
   Future<void> cutSelection() async {
+    if (hasSelectedObject) {
+      await deleteSelectedObject();
+      return;
+    }
     if (!canCutOrCopy) return;
     final text = selectedText;
     await Clipboard.setData(ClipboardData(text: text));
@@ -775,6 +882,10 @@ class EditorController extends ChangeNotifier {
   }
 
   Future<void> deleteSelection() async {
+    if (hasSelectedObject) {
+      await deleteSelectedObject();
+      return;
+    }
     if (!canCutOrCopy) return;
     await _selection.deleteGlyphSelection();
     _session.markDocumentDirty();
@@ -861,6 +972,10 @@ class EditorController extends ChangeNotifier {
 
   Future<void> deleteGlyphBackward() async {
     if (_host.engine == null) return;
+    if (hasSelectedObject) {
+      await deleteSelectedObject();
+      return;
+    }
     if (_selection.hasGlyphSelection) {
       await _selection.deleteGlyphSelection();
       _session.markDocumentDirty();
@@ -891,6 +1006,10 @@ class EditorController extends ChangeNotifier {
 
   Future<void> deleteGlyphForward() async {
     if (_host.engine == null) return;
+    if (hasSelectedObject) {
+      await deleteSelectedObject();
+      return;
+    }
     if (_selection.hasGlyphSelection) {
       await _selection.deleteGlyphSelection();
       _session.markDocumentDirty();
@@ -947,7 +1066,15 @@ class EditorController extends ChangeNotifier {
   void toggleTrackChanges() => _session.toggleTrackChanges();
   void acceptAllRevisions() => _session.acceptAllRevisions();
   void rejectAllRevisions() => _session.rejectAllRevisions();
+  void acceptRevisionAtCaret() => _session.acceptRevisionAtCaret();
+  void rejectRevisionAtCaret() => _session.rejectRevisionAtCaret();
+  void gotoNextRevision() => _session.gotoNextRevision();
+  void gotoPreviousRevision() => _session.gotoPreviousRevision();
   Future<void> spellCheckDocument() => _session.spellCheckDocument();
+  Future<void> grammarCheckDocument() => _session.grammarCheckDocument();
+  Future<void> proofDocument() => _session.proofDocument();
+  void compareWithText(String otherText) => _session.compareWithText(otherText);
+  void toggleRestrictEditing() => _session.toggleRestrictEditing();
   void clearInfoMessage() => _session.clearInfoMessage();
 
   Future<void> insertTable({int rows = 3, int cols = 3}) async {
@@ -1044,7 +1171,202 @@ class EditorController extends ChangeNotifier {
       label,
       full: true,
     );
+    final chartId = _host.engine?.latestChartId();
+    if (chartId != null) {
+      selectDiagramById(chartId);
+    }
     notifyListeners();
+  }
+
+  /// Selects a shape/chart by id, resolving its page rect from display lists.
+  void selectDiagramById(String shapeId) {
+    clearImageSelection();
+    _selection.collapseToCaret();
+    for (var page = 0; page < pageCount; page++) {
+      final snap = DisplayListSnapshot.fromBytes(_host.displayListForPage(page));
+      final index = snap.shapeIds.indexOf(shapeId);
+      if (index < 0 || snap.shapeRects.length < (index + 1) * 4) continue;
+      final rect = Rect.fromLTWH(
+        snap.shapeRects[index * 4],
+        snap.shapeRects[index * 4 + 1],
+        snap.shapeRects[index * 4 + 2],
+        snap.shapeRects[index * 4 + 3],
+      );
+      selectDiagram(page, ShapeBounds(shapeId: shapeId, index: index, rect: rect));
+      return;
+    }
+    _selectedDiagramId = shapeId;
+    _selectedDiagramPage = _view.currentPage;
+    _selectedDiagramRect = null;
+    notifyListeners();
+  }
+
+  /// Opens Edit Data for [shapeId] (or the selected / latest chart).
+  Future<bool> editChartData(
+    BuildContext context, {
+    String? shapeId,
+  }) async {
+    if (!_host.isConnected || _host.engine == null) return false;
+    final id = shapeId ?? _selectedDiagramId ?? _host.engine!.latestChartId();
+    if (id == null) return false;
+
+    final json = _host.engine!.fetchChartDataJson(id);
+    if (json == null || json.isEmpty) return false;
+
+    ChartDataModel initial;
+    try {
+      initial = ChartDataModel.fromJson(
+        jsonDecode(json) as Map<String, dynamic>,
+      );
+    } catch (_) {
+      return false;
+    }
+
+    final edited = await ChartDataDialog.show(context, initial: initial);
+    if (edited == null) return true; // dismissed — still a chart interaction
+
+    final ok = await _host.performNativeEdit(
+      () => _host.engine!.setChartDataAsync(id, edited.toJson()),
+      full: true,
+    );
+    if (ok) {
+      _session.setStatusText('Chart data updated');
+      _session.markDocumentDirty();
+      selectDiagramById(id);
+      notifyListeners();
+    } else {
+      final err = _host.engine?.getLastError();
+      _session.setStatusText(
+        (err != null && err.isNotEmpty) ? err : 'Chart data update failed',
+      );
+    }
+    return ok;
+  }
+
+  /// Double-click / Edit Data entry: open chart sheet when the hit is a chart.
+  Future<bool> editChartDataAt(
+    BuildContext context,
+    int pageIndex,
+    Offset point,
+    DisplayListSnapshot snapshot,
+  ) async {
+    final hit = hitTestShape(snapshot, point);
+    if (hit == null) return false;
+    selectDiagram(pageIndex, hit);
+    return editChartData(context, shapeId: hit.shapeId);
+  }
+
+  /// Opens Insert Equation from the ribbon (F14.S3).
+  Future<void> insertEquation(BuildContext context) async {
+    if (!_host.isConnected) return;
+    final edited = await EquationDialog.show(
+      context,
+      initial: EquationModel.plain(text: 'x', display: true),
+    );
+    if (edited == null) return;
+    await _applyEquationInsert(edited);
+  }
+
+  Future<void> _applyEquationInsert(EquationModel model) async {
+    final xml = model.toOmml();
+    final runId = _selection.defaultRunId();
+    if (model.display) {
+      await _session.applyEngineStyle(
+        () => _host.engine!.insertOfficeMathDisplayAsync(
+          caretRunId: runId,
+          xml: xml,
+        ),
+        'Equation inserted',
+        full: true,
+      );
+    } else {
+      if (runId == null) return;
+      await _session.applyEngineStyle(
+        () => _host.engine!.insertOfficeMathAsync(
+          runId: runId,
+          offset: _selection.caretOffset,
+          xml: xml,
+        ),
+        'Equation inserted',
+        full: true,
+      );
+    }
+    final mathRunId = _host.engine?.latestOfficeMathRunId();
+    if (mathRunId != null) {
+      _selection.setCaret(mathRunId, 1, page: _selection.caretPage);
+      _selection.syncCaretGeometry();
+    }
+    notifyListeners();
+  }
+
+  /// Opens Insert Symbol from the ribbon (F15.S1).
+  Future<void> insertSymbol(BuildContext context) async {
+    if (!_host.isConnected) return;
+    final symbol = await SymbolDialog.show(context, recentStore: _recentSymbols);
+    if (symbol == null || symbol.isEmpty) return;
+    await insertSymbolCharacter(symbol);
+  }
+
+  /// Inserts [symbol] at the caret via `InsertText` (F15.S1).
+  Future<void> insertSymbolCharacter(String symbol) async {
+    if (!_host.isConnected || symbol.isEmpty) return;
+    _selection.ensureGlyphCaret();
+    final runId = _selection.defaultRunId();
+    if (runId == null) return;
+    final offset = _selection.caretOffset;
+    final edit = _host.performNativeEdit(
+      () => _host.engine!.tryInsertTextAsync(runId, offset, symbol),
+      dirtyPage: _selection.caretPage,
+    );
+    final optimistic = offset + symbol.length;
+    _selection.afterInsert(runId, optimistic);
+    _session.markDocumentDirty();
+    notifyListeners();
+    if (!await edit) {
+      _rollbackCaret(runId, from: optimistic, to: offset);
+      final err = _host.engine?.getLastError();
+      _session.setStatusText(
+        (err != null && err.isNotEmpty) ? err : 'Symbol insert failed',
+      );
+    } else {
+      _session.setStatusText('Symbol inserted');
+      _recentSymbols.recordCharacter(symbol);
+      await _sessionStore?.saveRecentSymbolIds(_recentSymbols.exportIds());
+      if (_selection.caretRunId == runId && _selection.caretOffset == optimistic) {
+        _selection.syncCaretGeometry();
+      }
+    }
+    notifyListeners();
+  }
+
+  /// Edit an existing equation run (F14.S3).
+  Future<bool> editEquation(
+    BuildContext context, {
+    String? runId,
+  }) async {
+    if (!_host.isConnected || _host.engine == null) return false;
+    final id = runId ?? _selection.caretRunId ?? _host.engine!.latestOfficeMathRunId();
+    if (id == null) return false;
+
+    final xml = _host.engine!.fetchOfficeMathXml(id);
+    if (xml == null || xml.isEmpty) return false;
+
+    final initial = EquationOmml.fromOmml(xml) ?? EquationModel.plain(text: 'x');
+    final edited = await EquationDialog.show(context, initial: initial);
+    if (edited == null) return true;
+
+    final ok = await _host.performNativeEdit(
+      () => _host.engine!.setOfficeMathAsync(id, edited.toOmml()),
+      full: true,
+    );
+    if (ok) {
+      _session.setStatusText('Equation updated');
+      _session.markDocumentDirty();
+      _selection.setCaret(id, 1, page: _selection.caretPage);
+      _selection.syncCaretGeometry();
+      notifyListeners();
+    }
+    return ok;
   }
 
   Future<void> deleteTableRow() async {
@@ -1248,7 +1570,7 @@ class EditorController extends ChangeNotifier {
       final file = result.files.single;
       Uint8List? bytes = file.bytes;
       if (bytes == null && file.path != null) {
-        bytes = await File(file.path!).readAsBytes();
+        bytes = Uint8List.fromList(await File(file.path!).readAsBytes());
       }
       if (bytes == null || bytes.isEmpty) {
         _session.setStatusText('Insert failed: empty file');
@@ -1518,6 +1840,145 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Inserts a footnote reference at the caret (F16.S1).
+  Future<void> insertFootnote(BuildContext context) async {
+    if (!_host.isConnected) return;
+    _selection.ensureGlyphCaret();
+    final runId = _selection.defaultRunId();
+    if (runId == null) return;
+    await _session.applyEngineStyle(
+      () => _host.engine!.insertFootnoteAsync(
+        runId: runId,
+        offset: _selection.caretOffset,
+      ),
+      'Footnote inserted',
+      full: true,
+    );
+    notifyListeners();
+  }
+
+  /// Inserts a comment anchor at the caret (F17.S3).
+  Future<void> insertComment(BuildContext context) async {
+    if (!_host.isConnected) return;
+    _selection.ensureGlyphCaret();
+    final runId = _selection.defaultRunId();
+    if (runId == null) return;
+    await _session.applyEngineStyle(
+      () => _host.engine!.insertCommentAsync(
+        runId: runId,
+        offset: _selection.caretOffset,
+        bodyText: 'Comment',
+      ),
+      'Comment inserted',
+      full: true,
+    );
+    notifyListeners();
+  }
+
+  /// Materializes a table of contents from heading styles (F16.S2).
+  Future<void> insertTableOfContents(BuildContext context) async {
+    if (!_host.isConnected) return;
+    _selection.ensureGlyphCaret();
+    final runId = _selection.defaultRunId();
+    await _session.applyEngineStyle(
+      () => _host.engine!.insertTableOfContentsAsync(caretRunId: runId),
+      'Table of contents inserted',
+      full: true,
+    );
+    notifyListeners();
+  }
+
+  /// Inserts a citation for the default sample source (F16.S3).
+  Future<void> insertCitation(BuildContext context) async {
+    if (!_host.isConnected) return;
+    _selection.ensureGlyphCaret();
+    final runId = _selection.defaultRunId();
+    if (runId == null) return;
+    const key = 'Smith2020';
+    await _session.applyEngineStyle(
+      () async {
+        await _host.engine!.addBibliographySourceAsync(
+          key: key,
+          author: 'Smith, John',
+          title: 'Example Research',
+          year: '2020',
+        );
+        return _host.engine!.insertCitationAsync(
+          runId: runId,
+          offset: _selection.caretOffset,
+          sourceKey: key,
+        );
+      },
+      'Citation inserted',
+      full: true,
+    );
+    notifyListeners();
+  }
+
+  /// Materializes a bibliography section from cited sources (F16.S3).
+  Future<void> insertBibliography(BuildContext context) async {
+    if (!_host.isConnected) return;
+    _selection.ensureGlyphCaret();
+    final runId = _selection.defaultRunId();
+    await _session.applyEngineStyle(
+      () => _host.engine!.insertBibliographyAsync(caretRunId: runId),
+      'Bibliography inserted',
+      full: true,
+    );
+    notifyListeners();
+  }
+
+  /// Inserts a bookmark anchor at the caret (F16.S4).
+  Future<void> insertBookmark(BuildContext context) async {
+    if (!_host.isConnected) return;
+    _selection.ensureGlyphCaret();
+    final runId = _selection.defaultRunId();
+    if (runId == null) return;
+    const name = 'SectionRef';
+    await _session.applyEngineStyle(
+      () => _host.engine!.insertBookmarkAsync(
+        runId: runId,
+        offset: _selection.caretOffset,
+        name: name,
+      ),
+      'Bookmark inserted',
+      full: true,
+    );
+    notifyListeners();
+  }
+
+  /// Inserts a REF field pointing at [SectionRef] (F16.S4).
+  Future<void> insertCrossReference(BuildContext context) async {
+    if (!_host.isConnected) return;
+    _selection.ensureGlyphCaret();
+    final runId = _selection.defaultRunId();
+    if (runId == null) return;
+    const bookmarkName = 'SectionRef';
+    await _session.applyEngineStyle(
+      () => _host.engine!.insertCrossReferenceAsync(
+        runId: runId,
+        offset: _selection.caretOffset,
+        bookmarkName: bookmarkName,
+      ),
+      'Cross-reference inserted',
+      full: true,
+    );
+    notifyListeners();
+  }
+
+  /// Materializes an index from bookmark targets (F16.S4).
+  Future<void> insertIndex(BuildContext context) async {
+    if (!_host.isConnected) return;
+    _selection.ensureGlyphCaret();
+    final runId = _selection.defaultRunId();
+    await _session.applyEngineStyle(
+      () => _host.engine!.insertIndexAsync(caretRunId: runId),
+      'Index inserted',
+      full: true,
+    );
+    notifyListeners();
+  }
+
   // ── Legacy stubs (removed TextField path) ─────────────────────────────────
   @Deprecated('TextField fallback removed in R2.4')
   void attachTextEditor(TextEditingController c, FocusNode f) {}
@@ -1593,6 +2054,9 @@ class EditorController extends ChangeNotifier {
   @override
   void dispose() {
     _session.disposeSession();
+    if (kIsWeb) {
+      webGlyphFocusNode.dispose();
+    }
     for (final sub in _subControllers) {
       sub.removeListener(notifyListeners);
     }

@@ -13,7 +13,16 @@ use tw_edit::{
     bullet_list_command_for_caret,
     continue_numbering_command_for_caret, delete_table_column_command_for_caret,
     delete_table_row_command_for_caret, ensure_header_footer_command_for,
-    heading1_command_for_caret, insert_field_command_for, insert_image_bytes_command_for_caret,
+    heading1_command_for_caret, insert_field_command_for, insert_footnote_command_for,
+    insert_comment_command_for,
+    insert_table_of_contents_command_for,
+    insert_bibliography_command_for, insert_bookmark_command_for,
+    insert_cross_reference_command_for, insert_index_command_for,
+    insert_citation_command_for, add_bibliography_source_command,
+    accept_revision_at_caret, reject_revision_at_caret,
+    insert_image_bytes_command_for_caret,
+    insert_office_math_command_for, insert_office_math_display_command_for_caret,
+    set_office_math_command_for,
     insert_image_command, insert_shape_command, insert_text_box_command,
     insert_word_art_command, replace_image_bytes_command,
     insert_nested_table_command_for_caret, insert_page_break_command_for,
@@ -265,6 +274,45 @@ impl Session {
         self.send_command(BridgeCommand::SpellCheckDocument)
     }
 
+    pub fn grammar_check(&self) -> Option<u64> {
+        self.send_command(BridgeCommand::GrammarCheckDocument)
+    }
+
+    pub fn set_read_only(&self, enabled: bool) -> Option<u64> {
+        self.send_command(BridgeCommand::SetReadOnly { enabled })
+    }
+
+    pub fn compare_with_text(&self, other: &str) -> tw_model::DocumentCompareSummary {
+        let cache = self.layout_cache.read();
+        let doc = cache.document();
+        tw_model::compare_text(&crate::snapshot::document_plain_text(doc), other)
+    }
+
+    pub fn find_matches(
+        &self,
+        query: &str,
+        match_case: bool,
+        use_regex: bool,
+        use_wildcards: bool,
+        format: Option<&tw_edit::FindFormatFilter>,
+    ) -> Vec<tw_edit::FindMatch> {
+        let cache = self.layout_cache.read();
+        let doc = cache.document();
+        let Some(range) = tw_edit::document_body_range(doc) else {
+            return Vec::new();
+        };
+        tw_edit::find_matches(
+            doc,
+            &range,
+            query,
+            match_case,
+            use_regex,
+            use_wildcards,
+            format,
+        )
+        .unwrap_or_default()
+    }
+
     pub fn set_track_changes(&self, enabled: bool) -> Option<u64> {
         self.send_command(BridgeCommand::ToggleTrackChanges { enabled })
     }
@@ -275,6 +323,25 @@ impl Session {
 
     pub fn reject_all_revisions(&self) -> Option<u64> {
         self.apply(Command::RejectAllRevisions)
+    }
+
+    pub fn accept_revision_at(&self, caret_run_id: Option<NodeId>) -> Option<u64> {
+        self.apply_from_document(|doc| accept_revision_at_caret(doc, caret_run_id))
+    }
+
+    pub fn reject_revision_at(&self, caret_run_id: Option<NodeId>) -> Option<u64> {
+        self.apply_from_document(|doc| reject_revision_at_caret(doc, caret_run_id))
+    }
+
+    pub fn adjacent_revision_run(
+        &self,
+        caret_run_id: Option<NodeId>,
+        forward: bool,
+    ) -> Option<NodeId> {
+        let caret = caret_run_id?;
+        let cache = self.layout_cache.read();
+        let doc = cache.document();
+        tw_model::adjacent_revision_run(doc, caret, forward)
     }
 
     /// Returns the next buffered or freshly received event (any request id).
@@ -674,6 +741,103 @@ impl Session {
         })
     }
 
+    /// JSON for the editable dataset on a chart shape, if present.
+    pub fn chart_data_json(&self, shape_id: tw_model::NodeId) -> Option<String> {
+        let doc = self.document();
+        let (si, bi) = doc.find_block_location(shape_id)?;
+        let shape = doc.sections.get(si)?.blocks.get(bi)?.shape()?;
+        if shape.shape.shape_type != tw_model::ShapeKind::Chart {
+            return None;
+        }
+        let data = shape.chart_data.as_ref()?;
+        serde_json::to_string(data).ok()
+    }
+
+    /// Most recently inserted chart block id (document order, last wins).
+    pub fn latest_chart_id(&self) -> Option<tw_model::NodeId> {
+        let doc = self.document();
+        for section in doc.sections.iter().rev() {
+            for block in section.blocks.iter().rev() {
+                if let Some(shape) = block.shape() {
+                    if shape.shape.shape_type == tw_model::ShapeKind::Chart {
+                        return Some(shape.id);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    pub fn set_chart_data(
+        &self,
+        shape_id: tw_model::NodeId,
+        chart_data: Option<tw_model::ChartData>,
+    ) -> Option<u64> {
+        self.apply(Command::SetChartData {
+            shape_id,
+            chart_data,
+        })
+    }
+
+    /// Insert inline OMML at the caret — F14.S3.
+    pub fn insert_office_math_at(
+        &self,
+        run_id: tw_model::NodeId,
+        offset: usize,
+        xml: String,
+    ) -> Option<u64> {
+        self.apply(insert_office_math_command_for(run_id, offset, xml))
+    }
+
+    /// Insert a display equation block after the caret paragraph — F14.S3.
+    pub fn insert_office_math_display(
+        &self,
+        caret_run_id: Option<tw_model::NodeId>,
+        xml: String,
+    ) -> Option<u64> {
+        self.apply_from_document(|doc| {
+            insert_office_math_display_command_for_caret(doc, caret_run_id, xml)
+        })
+    }
+
+    /// Replace OMML on an existing equation run — F14.S3.
+    pub fn set_office_math(&self, run_id: tw_model::NodeId, xml: String) -> Option<u64> {
+        self.apply(set_office_math_command_for(run_id, xml))
+    }
+
+    /// OMML XML stored on [run_id], if it is an equation run.
+    pub fn office_math_xml(&self, run_id: tw_model::NodeId) -> Option<String> {
+        let doc = self.document();
+        let loc = doc.find_run_location(run_id)?;
+        let run = doc.run_at(loc)?;
+        match &run.content {
+            tw_model::RunContent::OfficeMath { xml } => Some(xml.clone()),
+            _ => None,
+        }
+    }
+
+    /// Most recently inserted equation run id (document order, last wins).
+    pub fn latest_office_math_run_id(&self) -> Option<tw_model::NodeId> {
+        let doc = self.document();
+        let mut last = None;
+        for section in &doc.sections {
+            for block in &section.blocks {
+                if let Some(para) = block.paragraph() {
+                    for run in &para.runs {
+                        if matches!(run.content, tw_model::RunContent::OfficeMath { .. }) {
+                            last = Some(run.id);
+                        }
+                    }
+                }
+            }
+        }
+        last
+    }
+
+    pub fn delete_block(&self, id: tw_model::NodeId) -> Option<u64> {
+        self.apply(Command::DeleteBlock { id })
+    }
+
     pub fn insert_image_bytes(&self, bytes: Vec<u8>, mime_type: String) -> Option<u64> {
         self.insert_image_bytes_at(bytes, mime_type, None)
     }
@@ -829,6 +993,83 @@ impl Session {
         field_type: FieldType,
     ) -> Option<u64> {
         self.apply(insert_field_command_for(run_id, offset, field_type))
+    }
+
+    pub fn insert_footnote_at(&self, run_id: NodeId, offset: usize) -> Option<u64> {
+        self.apply(insert_footnote_command_for(run_id, offset))
+    }
+
+    pub fn insert_comment_at(
+        &self,
+        run_id: NodeId,
+        offset: usize,
+        body_text: impl Into<String>,
+    ) -> Option<u64> {
+        self.apply(insert_comment_command_for(run_id, offset, body_text))
+    }
+
+    pub fn insert_table_of_contents_at(
+        &self,
+        caret_run_id: Option<NodeId>,
+    ) -> Option<u64> {
+        let cache = self.layout_cache.read();
+        let doc = cache.document();
+        let page_numbers: Vec<u32> = cache
+            .document_outline_with_pages()
+            .into_iter()
+            .map(|(_, page)| page.max(1))
+            .collect();
+        let command =
+            insert_table_of_contents_command_for(doc, caret_run_id, page_numbers)?;
+        drop(cache);
+        self.apply(command)
+    }
+
+    pub fn add_bibliography_source(&self, source: tw_model::BibliographySource) -> Option<u64> {
+        self.apply(add_bibliography_source_command(source))
+    }
+
+    pub fn insert_citation_at(
+        &self,
+        run_id: NodeId,
+        offset: usize,
+        source_key: &str,
+    ) -> Option<u64> {
+        self.apply(insert_citation_command_for(
+            run_id,
+            offset,
+            source_key.to_string(),
+        ))
+    }
+
+    pub fn insert_bibliography_at(&self, caret_run_id: Option<NodeId>) -> Option<u64> {
+        self.apply_from_document(|doc| insert_bibliography_command_for(doc, caret_run_id))
+    }
+
+    pub fn insert_bookmark_at(
+        &self,
+        run_id: NodeId,
+        offset: usize,
+        name: &str,
+    ) -> Option<u64> {
+        self.apply(insert_bookmark_command_for(run_id, offset, name.to_string()))
+    }
+
+    pub fn insert_cross_reference_at(
+        &self,
+        run_id: NodeId,
+        offset: usize,
+        bookmark_name: &str,
+    ) -> Option<u64> {
+        self.apply(insert_cross_reference_command_for(
+            run_id,
+            offset,
+            bookmark_name.to_string(),
+        ))
+    }
+
+    pub fn insert_index_at(&self, caret_run_id: Option<NodeId>) -> Option<u64> {
+        self.apply_from_document(|doc| insert_index_command_for(doc, caret_run_id))
     }
 
     pub fn paste_html_at(&self, run_id: tw_model::NodeId, offset: usize, html: Vec<u8>) -> Option<u64> {
@@ -1051,6 +1292,29 @@ impl SyncSession {
 
     pub fn import(data: &[u8]) -> Document {
         NativeFormat::import(data).unwrap()
+    }
+
+    pub fn find_matches(
+        &self,
+        query: &str,
+        match_case: bool,
+        use_regex: bool,
+        use_wildcards: bool,
+        format: Option<&tw_edit::FindFormatFilter>,
+    ) -> Vec<tw_edit::FindMatch> {
+        let Some(range) = tw_edit::document_body_range(&self.edit.document) else {
+            return Vec::new();
+        };
+        tw_edit::find_matches(
+            &self.edit.document,
+            &range,
+            query,
+            match_case,
+            use_regex,
+            use_wildcards,
+            format,
+        )
+        .unwrap_or_default()
     }
 }
 

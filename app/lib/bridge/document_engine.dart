@@ -2,6 +2,8 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:tutuaword/bridge/document_properties.dart';
+import 'package:tutuaword/bridge/find_format_filter.dart';
+import 'package:tutuaword/bridge/find_match.dart';
 import 'package:tutuaword/bridge/engine_types.dart';
 import 'package:tutuaword/editor/doc_range.dart';
 
@@ -26,6 +28,18 @@ abstract class DocumentEngine {
   String? fetchDocumentOutline();
   DocumentProperties fetchDocumentProperties();
   bool isDocumentReadOnly();
+
+  /// JSON [`ChartData`] for [shapeId], or null when missing / not a chart.
+  String? fetchChartDataJson(String shapeId);
+
+  /// UUID of the last chart block in document order, if any.
+  String? latestChartId();
+
+  /// OMML XML for [runId], or null when missing / not an equation run.
+  String? fetchOfficeMathXml(String runId);
+
+  /// UUID of the last equation run in document order, if any.
+  String? latestOfficeMathRunId();
 
   /// True while [page] awaits background reflow, so [hitTestPage] on it returns
   /// null for "not laid out yet" rather than "nothing here".
@@ -113,6 +127,39 @@ abstract class DocumentEngine {
     required int offset,
     required String fieldType,
   });
+  Future<bool> insertFootnoteAsync({
+    required String runId,
+    required int offset,
+  });
+  Future<bool> insertCommentAsync({
+    required String runId,
+    required int offset,
+    String bodyText = '',
+  });
+  Future<bool> insertTableOfContentsAsync({String? caretRunId});
+  Future<bool> addBibliographySourceAsync({
+    required String key,
+    required String author,
+    required String title,
+    required String year,
+  });
+  Future<bool> insertCitationAsync({
+    required String runId,
+    required int offset,
+    required String sourceKey,
+  });
+  Future<bool> insertBibliographyAsync({String? caretRunId});
+  Future<bool> insertBookmarkAsync({
+    required String runId,
+    required int offset,
+    required String name,
+  });
+  Future<bool> insertCrossReferenceAsync({
+    required String runId,
+    required int offset,
+    required String bookmarkName,
+  });
+  Future<bool> insertIndexAsync({String? caretRunId});
   bool setCurrentPageIndex(int page);
   Future<bool> applyHeading1StyleAsync({String? caretRunId});
   Future<bool> applyNormalStyleAtAsync({String? caretRunId});
@@ -160,6 +207,18 @@ abstract class DocumentEngine {
   Future<bool> insertWordArtAsync(String text);
   Future<bool> insertDiagramAsync({int diagramType = 0});
   Future<bool> insertChartAsync({int chartType = 0});
+  Future<bool> setChartDataAsync(String shapeId, Map<String, dynamic> chartData);
+  Future<bool> insertOfficeMathAsync({
+    required String runId,
+    required int offset,
+    required String xml,
+  });
+  Future<bool> insertOfficeMathDisplayAsync({
+    String? caretRunId,
+    required String xml,
+  });
+  Future<bool> setOfficeMathAsync(String runId, String xml);
+  Future<bool> deleteBlockAsync(String blockId);
   Future<bool> setImageSizeAsync(String imageId, double width, double height);
   Future<bool> replaceImageBytesAsync(
     String imageId,
@@ -189,9 +248,29 @@ abstract class DocumentEngine {
   Future<bool> redoEditAsync();
 
   List<String>? spellCheckMisspellings();
+  List<String>? grammarCheckIssues();
+  List<FindMatch>? findMatches(
+    String query,
+    bool matchCase, {
+    bool useRegex = false,
+    bool useWildcards = false,
+    FindFormatFilter formatFilter = FindFormatFilter.none,
+  });
+  Future<int?> replaceAll(
+    String find,
+    String replace,
+    bool matchCase, {
+    bool useRegex = false,
+    bool useWildcards = false,
+  });
+  String? compareDocumentText(String otherText);
+  bool setReadOnlyEnabled(bool enabled);
   bool setTrackChangesEnabled(bool enabled);
   bool acceptAllRevisions();
   bool rejectAllRevisions();
+  bool acceptRevisionAtCaret({String? caretRunId});
+  bool rejectRevisionAtCaret({String? caretRunId});
+  String? adjacentRevisionRunId(String? caretRunId, {required bool forward});
 }
 
 /// Resolve range → pixel rects via caret geometry (never pixel → range).

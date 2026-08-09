@@ -353,6 +353,41 @@ pub fn set_chart_data(
     })
 }
 
+pub fn insert_office_math_display(
+    doc: &mut Document,
+    after_block_id: NodeId,
+    xml: String,
+) -> Result<EditResult, EditError> {
+    if xml.trim().is_empty() {
+        return Err(EditError::InvalidRange);
+    }
+
+    let (si, bi) = doc
+        .find_block_location(after_block_id)
+        .ok_or(EditError::BlockNotFound(after_block_id))?;
+
+    let mut para = tw_model::Paragraph::new();
+    let run_id = para.runs[0].id;
+    para.runs = vec![tw_model::Run {
+        id: run_id,
+        format: tw_model::CharFormat::default(),
+        content: tw_model::RunContent::OfficeMath { xml },
+        revision: None,
+    }];
+    let para_id = para.id;
+
+    doc.sections[si]
+        .blocks
+        .insert(bi + 1, Block::Paragraph(para));
+
+    Ok(EditResult {
+        affected_nodes: vec![para_id, run_id],
+        created_node_id: Some(para_id),
+        seed_run_id: Some(run_id),
+        ..Default::default()
+    })
+}
+
 pub fn set_image_size(
     doc: &mut Document,
     image_id: NodeId,
@@ -1386,24 +1421,35 @@ pub fn delete_block(
         return Err(EditError::InvalidRange);
     }
 
-    let after_id = if bi > 0 {
-        let prev = &doc.sections[si].blocks[bi - 1];
-        match prev {
-            Block::Paragraph(p) => p.id,
-            Block::Table(t) => t.id,
-            Block::ImageBlock(i) => i.id,
-            Block::ShapeBlock(s) => s.id,
-            _ => return Err(EditError::InvalidRange),
+    fn block_id(block: &Block) -> Option<NodeId> {
+        match block {
+            Block::Paragraph(p) => Some(p.id),
+            Block::Table(t) => Some(t.id),
+            Block::ImageBlock(i) => Some(i.id),
+            Block::ShapeBlock(s) => Some(s.id),
+            _ => None,
         }
+    }
+
+    // Prefer undo via InsertBlock(after prev). When deleting the first block,
+    // store the next block id and restore with InsertBlockBefore.
+    let previous_block_id = if bi > 0 {
+        block_id(&doc.sections[si].blocks[bi - 1])
     } else {
-        return Err(EditError::InvalidRange);
+        None
+    };
+    let insert_before_id = if bi == 0 {
+        block_id(&doc.sections[si].blocks[bi + 1])
+    } else {
+        None
     };
 
     let block = doc.sections[si].blocks.remove(bi);
 
     Ok(EditResult {
         affected_nodes: vec![id],
-        previous_block_id: Some(after_id),
+        previous_block_id,
+        insert_before_block_id: insert_before_id,
         deleted_block: Some(block),
         ..Default::default()
     })
@@ -1427,6 +1473,32 @@ pub fn insert_block(
     };
 
     doc.sections[si].blocks.insert(bi + 1, block);
+
+    Ok(EditResult {
+        affected_nodes: vec![new_id],
+        created_node_id: Some(new_id),
+        ..Default::default()
+    })
+}
+
+pub fn insert_block_before(
+    doc: &mut Document,
+    before_block_id: NodeId,
+    block: Block,
+) -> Result<EditResult, EditError> {
+    let (si, bi) = doc
+        .find_block_location(before_block_id)
+        .ok_or(EditError::BlockNotFound(before_block_id))?;
+
+    let new_id = match &block {
+        Block::Paragraph(p) => p.id,
+        Block::Table(t) => t.id,
+        Block::ImageBlock(i) => i.id,
+        Block::ShapeBlock(s) => s.id,
+        _ => return Err(EditError::InvalidRange),
+    };
+
+    doc.sections[si].blocks.insert(bi, block);
 
     Ok(EditResult {
         affected_nodes: vec![new_id],

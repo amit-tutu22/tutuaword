@@ -5,9 +5,26 @@ import 'package:flutter/material.dart';
 import 'package:tutuaword/bridge/document_engine.dart';
 import 'package:tutuaword/bridge/document_properties.dart';
 import 'package:tutuaword/bridge/engine_types.dart';
+import 'package:tutuaword/bridge/find_format_filter.dart';
+import 'package:tutuaword/bridge/find_match.dart';
 
 /// In-memory engine for widget/unit tests (R2.4 — no TextField fallback).
 class MockDocumentEngine implements DocumentEngine {
+  static const _spellWords = {
+    'the', 'a', 'an', 'has', 'document', 'editor', 'works', 'well', 'received', 'invitation',
+    'party', 'misspelling', 'errors', 'quick', 'brown', 'fox', 'with', 'and', 'to', 'in',
+    'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'had', 'do', 'does', 'did',
+    'will', 'would', 'could', 'should', 'may', 'might', 'must', 'shall', 'can', 'need',
+    'this', 'that', 'these', 'those', 'it', 'its', 'they', 'them', 'their', 'we', 'our',
+    'you', 'your', 'he', 'she', 'his', 'her', 'who', 'what', 'when', 'where', 'why', 'how',
+    'all', 'each', 'every', 'both', 'few', 'more', 'most', 'other', 'some', 'such', 'no',
+    'not', 'only', 'same', 'so', 'than', 'too', 'very', 'just', 'also', 'now', 'then',
+    'from', 'for', 'of', 'on', 'at', 'by', 'about', 'into', 'through', 'during', 'before',
+    'after', 'above', 'below', 'between', 'under', 'again', 'further', 'once', 'here',
+    'there', 'any', 'own', 'or', 'if', 'because', 'until', 'while',
+    'word', 'text', 'spell', 'check', 'grammar', 'review', 'track', 'changes',
+  };
+
   MockDocumentEngine({
     this.defaultRunId = '00000000-0000-0000-0000-000000000004',
     this.headerRunId = '00000000-0000-0000-0000-000000000010',
@@ -39,6 +56,10 @@ class MockDocumentEngine implements DocumentEngine {
   String _text;
   String _headerText = '';
   String _footerText = '';
+  int _sectionCount = 1;
+  int _headerEditSection = 0;
+  String _sectionOneHeader = '';
+  bool _sectionOneHeaderLinked = true;
   int? _tableRows;
   int? _tableCols;
   int _tableLeadColspan = 1;
@@ -63,6 +84,10 @@ class MockDocumentEngine implements DocumentEngine {
   double _imageOpacity = 1;
   bool _imageCaptionInserted = false;
   Uint8List? _replacedImageBytes;
+  String? _mockChartId;
+  Map<String, dynamic>? _chartData;
+  String? _mockOfficeMathRunId;
+  final Map<String, String> _officeMathXml = {};
   bool _evenAndOddHeaders = false;
   final Map<String, String> _fieldDisplay = {};
   bool _headerReady = false;
@@ -71,6 +96,7 @@ class MockDocumentEngine implements DocumentEngine {
   bool _readOnly = false;
   final Set<int> _stalePages = {};
   bool _trackChanges = false;
+  final List<_TrackedRevision> _trackedRevisions = [];
   final List<_MockEditSnapshot> _undoStack = [];
   final List<_MockEditSnapshot> _redoStack = [];
   final Map<String, dynamic> _charFormat = {
@@ -126,8 +152,18 @@ class MockDocumentEngine implements DocumentEngine {
   static const _charWidth = 5.72;
 
   String get text => _text;
-  String get headerText => _headerText;
+  String get headerText => resolvedHeaderText(0);
   String get footerText => _footerText;
+  int get sectionCount => _sectionCount;
+
+  String resolvedHeaderText(int sectionIndex) {
+    if (sectionIndex <= 0) return _headerText;
+    if (_sectionOneHeaderLinked) return _headerText;
+    return _sectionOneHeader;
+  }
+
+  int _sectionIndexForPage(int pageIndex) =>
+      pageIndex >= 1 && _sectionCount > 1 ? 1 : 0;
   bool get hasTable => _tableRows != null && _tableCols != null;
   int? get tableRows => _tableRows;
   int? get tableCols => _tableCols;
@@ -155,14 +191,26 @@ class MockDocumentEngine implements DocumentEngine {
 
   String _bufferForRun(String runId) {
     if (_fieldDisplay.containsKey(runId)) return _fieldDisplay[runId]!;
-    if (runId == headerRunId) return _headerText;
+    if (runId == headerRunId) {
+      if (_headerEditSection <= 0) return _headerText;
+      if (_sectionOneHeaderLinked) return _headerText;
+      return _sectionOneHeader;
+    }
     if (runId == footerRunId) return _footerText;
     return _text;
   }
 
   void _setBufferForRun(String runId, String value) {
     if (runId == headerRunId) {
-      _headerText = value;
+      if (_headerEditSection <= 0) {
+        _headerText = value;
+        return;
+      }
+      if (_sectionOneHeaderLinked) {
+        _sectionOneHeaderLinked = false;
+        _sectionOneHeader = _headerText;
+      }
+      _sectionOneHeader = value;
     } else if (runId == footerRunId) {
       _footerText = value;
     } else {
@@ -286,6 +334,11 @@ class MockDocumentEngine implements DocumentEngine {
     _text = '';
     _headerText = '';
     _footerText = '';
+    _sectionCount = 1;
+    _headerEditSection = 0;
+    _sectionOneHeader = '';
+    _sectionOneHeaderLinked = true;
+    _formatSpans.clear();
     _tableRows = null;
     _tableCols = null;
     _tableLeadColspan = 1;
@@ -369,6 +422,11 @@ class MockDocumentEngine implements DocumentEngine {
     _text = String.fromCharCodes(bytes.where((b) => b >= 32 || b == 10));
     _headerText = '';
     _footerText = '';
+    _sectionCount = 1;
+    _headerEditSection = 0;
+    _sectionOneHeader = '';
+    _sectionOneHeaderLinked = true;
+    _formatSpans.clear();
     _tableRows = null;
     _tableCols = null;
     _tableLeadColspan = 1;
@@ -535,6 +593,9 @@ class MockDocumentEngine implements DocumentEngine {
     final buffer = _bufferForRun(runId);
     final off = offset.clamp(0, buffer.length);
     _setBufferForRun(runId, buffer.substring(0, off) + text + buffer.substring(off));
+    if (_trackChanges && text.isNotEmpty) {
+      _trackedRevisions.add(_TrackedRevision(runId: runId, offset: off, text: text));
+    }
     _version++;
   }
 
@@ -756,6 +817,12 @@ class MockDocumentEngine implements DocumentEngine {
 
   @override
   Future<bool> insertSectionBreakAtAsync({String? caretRunId}) async {
+    if (_sectionCount < 2) {
+      _sectionCount = 2;
+      _sectionOneHeader = '';
+      _sectionOneHeaderLinked = true;
+    _formatSpans.clear();
+    }
     _version++;
     return true;
   }
@@ -767,6 +834,7 @@ class MockDocumentEngine implements DocumentEngine {
     int pageIndex = 0,
   }) async {
     if (isHeader) {
+      _headerEditSection = _sectionIndexForPage(pageIndex);
       _headerReady = true;
     } else {
       _footerReady = true;
@@ -792,6 +860,9 @@ class MockDocumentEngine implements DocumentEngine {
 
   bool _headerFooterLinked = true;
 
+  bool _linkedForSection(int sectionIndex) =>
+      sectionIndex <= 0 ? false : _sectionOneHeaderLinked;
+
   @override
   Future<bool> setEvenAndOddHeadersAsync({required bool enabled}) async {
     _evenAndOddHeaders = enabled;
@@ -804,8 +875,11 @@ class MockDocumentEngine implements DocumentEngine {
     String? caretRunId,
     required bool isHeader,
     int pageIndex = 0,
-  }) =>
-      _headerFooterLinked;
+  }) {
+    if (!isHeader) return _headerFooterLinked;
+    final sectionIndex = _sectionIndexForPage(pageIndex);
+    return _linkedForSection(sectionIndex);
+  }
 
   @override
   Future<bool> setHeaderFooterLinkAsync({
@@ -814,7 +888,185 @@ class MockDocumentEngine implements DocumentEngine {
     required bool linked,
     int pageIndex = 0,
   }) async {
-    _headerFooterLinked = linked;
+    if (isHeader) {
+      final sectionIndex = _sectionIndexForPage(pageIndex);
+      if (sectionIndex <= 0) return false;
+      if (linked) {
+        _sectionOneHeaderLinked = true;
+    _formatSpans.clear();
+        _sectionOneHeader = '';
+      } else {
+        _sectionOneHeaderLinked = false;
+        _sectionOneHeader = resolvedHeaderText(sectionIndex);
+      }
+    } else {
+      _headerFooterLinked = linked;
+    }
+    _version++;
+    return true;
+  }
+
+  int _footnoteCount = 0;
+  int _commentCount = 0;
+
+  static String _superscriptNumber(int n) {
+    const supers = ['⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹'];
+    return n.toString().split('').map((d) => supers[int.parse(d)]).join();
+  }
+
+  @override
+  Future<bool> insertFootnoteAsync({
+    required String runId,
+    required int offset,
+  }) async {
+    _pushUndo();
+    _footnoteCount++;
+    _insert(runId, offset, _superscriptNumber(_footnoteCount));
+    _version++;
+    return true;
+  }
+
+  @override
+  Future<bool> insertCommentAsync({
+    required String runId,
+    required int offset,
+    String bodyText = '',
+  }) async {
+    _pushUndo();
+    _commentCount++;
+    _insert(runId, offset, '[C$_commentCount]');
+    _version++;
+    return true;
+  }
+
+  @override
+  Future<bool> insertTableOfContentsAsync({String? caretRunId}) async {
+    _pushUndo();
+    final toc = StringBuffer('\nTable of Contents');
+    for (final heading in _mockOutlineHeadings) {
+      toc.write('\n${heading.text}\t${heading.page}');
+    }
+    if (_mockOutlineHeadings.isEmpty) {
+      toc.write('\nIntroduction\t1');
+      toc.write('\nBackground\t1');
+    }
+    _text = '$_text$toc';
+    _version++;
+    return true;
+  }
+
+  final List<({String text, int page})> _mockOutlineHeadings = [];
+
+  final Map<String, ({String author, String title, String year})> _bibliographySources = {
+    'Smith2020': (author: 'Smith, John', title: 'Example Research', year: '2020'),
+  };
+  final List<String> _citedKeys = [];
+
+  /// Test hook: headings that appear in the next TOC insert.
+  @visibleForTesting
+  void setMockOutlineHeadingsForTest(List<({String text, int page})> headings) {
+    _mockOutlineHeadings
+      ..clear()
+      ..addAll(headings);
+  }
+
+  @override
+  Future<bool> addBibliographySourceAsync({
+    required String key,
+    required String author,
+    required String title,
+    required String year,
+  }) async {
+    _bibliographySources[key] = (author: author, title: title, year: year);
+    _version++;
+    return true;
+  }
+
+  @override
+  Future<bool> insertCitationAsync({
+    required String runId,
+    required int offset,
+    required String sourceKey,
+  }) async {
+    _pushUndo();
+    final source = _bibliographySources[sourceKey];
+    final display = source == null
+        ? '[$sourceKey]'
+        : '(${source.author.split(',').first.trim()}, ${source.year})';
+    _insert(runId, offset, display);
+    if (!_citedKeys.contains(sourceKey)) {
+      _citedKeys.add(sourceKey);
+    }
+    _version++;
+    return true;
+  }
+
+  @override
+  Future<bool> insertBibliographyAsync({String? caretRunId}) async {
+    _pushUndo();
+    final buffer = StringBuffer('\nBibliography');
+    for (final key in _citedKeys) {
+      final source = _bibliographySources[key];
+      if (source != null) {
+        buffer.write('\n${source.author}. ${source.title}. ${source.year}.');
+      }
+    }
+    if (_citedKeys.isEmpty && _bibliographySources.containsKey('Smith2020')) {
+      final source = _bibliographySources['Smith2020']!;
+      buffer.write('\n${source.author}. ${source.title}. ${source.year}.');
+    }
+    _text = '$_text$buffer';
+    _version++;
+    return true;
+  }
+
+  final Map<String, String> _bookmarks = {};
+
+  @override
+  Future<bool> insertBookmarkAsync({
+    required String runId,
+    required int offset,
+    required String name,
+  }) async {
+    _pushUndo();
+    if (_text.isEmpty) {
+      _text = 'Introduction';
+    }
+    final anchor = _text.substring(offset.clamp(0, _text.length)).trim();
+    _bookmarks[name] = anchor.isEmpty ? name : anchor;
+    _version++;
+    return true;
+  }
+
+  @override
+  Future<bool> insertCrossReferenceAsync({
+    required String runId,
+    required int offset,
+    required String bookmarkName,
+  }) async {
+    _pushUndo();
+    final display = _bookmarks[bookmarkName];
+    if (display == null) {
+      return false;
+    }
+    _insert(runId, offset, display);
+    _version++;
+    return true;
+  }
+
+  @override
+  Future<bool> insertIndexAsync({String? caretRunId}) async {
+    _pushUndo();
+    if (_bookmarks.isEmpty) {
+      return false;
+    }
+    final buffer = StringBuffer('\nIndex');
+    final entries = _bookmarks.values.toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    for (final entry in entries) {
+      buffer.write('\n$entry');
+    }
+    _text = '$_text$buffer';
     _version++;
     return true;
   }
@@ -882,6 +1134,31 @@ class MockDocumentEngine implements DocumentEngine {
 
   @override
   String? fetchSectionFormat({String? caretRunId}) => jsonEncode(_sectionFormat);
+
+  @override
+  String? fetchChartDataJson(String shapeId) {
+    if (_mockChartId == null || shapeId != _mockChartId || _chartData == null) {
+      return null;
+    }
+    return jsonEncode(_chartData);
+  }
+
+  @override
+  String? latestChartId() => _mockChartId;
+
+  @override
+  String? fetchOfficeMathXml(String runId) => _officeMathXml[runId];
+
+  @override
+  String? latestOfficeMathRunId() => _mockOfficeMathRunId;
+
+  /// Last OMML applied via equation insert/edit (tests).
+  String? get lastOfficeMathXml =>
+      _mockOfficeMathRunId == null ? null : _officeMathXml[_mockOfficeMathRunId];
+
+  /// Last chart dataset applied via [setChartDataAsync] (tests).
+  Map<String, dynamic>? get lastChartData =>
+      _chartData == null ? null : Map<String, dynamic>.from(_chartData!);
 
   @override
   Future<bool> applySectionFormatJsonAsync({
@@ -1145,7 +1422,87 @@ class MockDocumentEngine implements DocumentEngine {
   Future<bool> insertDiagramAsync({int diagramType = 0}) async => true;
 
   @override
-  Future<bool> insertChartAsync({int chartType = 0}) async => true;
+  Future<bool> insertChartAsync({int chartType = 0}) async {
+    _pushUndo();
+    _mockChartId = '00000000-0000-0000-0000-00000000c001';
+    final kind = switch (chartType) {
+      1 => 'bar',
+      2 => 'line',
+      3 => 'pie',
+      _ => 'column',
+    };
+    _chartData = {
+      'kind': kind,
+      'categories': ['Category 1', 'Category 2', 'Category 3', 'Category 4'],
+      'series': [
+        {
+          'name': 'Series 1',
+          'values': [4.3, 2.5, 3.5, 4.5],
+        },
+        {
+          'name': 'Series 2',
+          'values': [2.4, 4.4, 1.8, 2.8],
+        },
+      ],
+    };
+    _version++;
+    return true;
+  }
+
+  @override
+  Future<bool> setChartDataAsync(String shapeId, Map<String, dynamic> chartData) async {
+    if (_mockChartId == null || shapeId != _mockChartId) return false;
+    _pushUndo();
+    _chartData = Map<String, dynamic>.from(chartData);
+    _version++;
+    return true;
+  }
+
+  @override
+  Future<bool> insertOfficeMathAsync({
+    required String runId,
+    required int offset,
+    required String xml,
+  }) async {
+    _pushUndo();
+    final id = offset == 0 && _bufferForRun(runId).isEmpty
+        ? runId
+        : '00000000-0000-0000-0000-${(_officeMathXml.length + 30).toString().padLeft(12, '0')}';
+    _mockOfficeMathRunId = id;
+    _officeMathXml[id] = xml;
+    _version++;
+    return true;
+  }
+
+  @override
+  Future<bool> insertOfficeMathDisplayAsync({
+    String? caretRunId,
+    required String xml,
+  }) async {
+    _pushUndo();
+    final id = '00000000-0000-0000-0000-${(_officeMathXml.length + 40).toString().padLeft(12, '0')}';
+    _mockOfficeMathRunId = id;
+    _officeMathXml[id] = xml;
+    _version++;
+    return true;
+  }
+
+  @override
+  Future<bool> setOfficeMathAsync(String runId, String xml) async {
+    if (!_officeMathXml.containsKey(runId)) return false;
+    _pushUndo();
+    _officeMathXml[runId] = xml;
+    _mockOfficeMathRunId = runId;
+    _version++;
+    return true;
+  }
+
+  @override
+  Future<bool> deleteBlockAsync(String blockId) async {
+    _pushUndo();
+    _version++;
+    return true;
+  }
 
   @override
   Future<bool> insertImageBytesAsync(Uint8List bytes, String mimeType) async {
@@ -1283,7 +1640,216 @@ class MockDocumentEngine implements DocumentEngine {
   }
 
   @override
-  List<String>? spellCheckMisspellings() => const [];
+  List<String>? spellCheckMisspellings() {
+    final found = <String>[];
+    final seen = <String>{};
+    for (final match in RegExp(r"[A-Za-z']+").allMatches(_text)) {
+      final word = match.group(0)!;
+      final lower = word.toLowerCase();
+      if (!_spellWords.contains(lower) && seen.add(word)) {
+        found.add(word);
+      }
+    }
+    return found;
+  }
+
+  @override
+  List<String>? grammarCheckIssues() {
+    final issues = <String>[];
+    final lower = ' $_text '.toLowerCase();
+    if (lower.contains(' could of ')) {
+      issues.add('Use "could have" instead of "could of"');
+    }
+    if (lower.contains('  ')) {
+      issues.add('Remove extra space');
+    }
+    if (lower.contains(' alot ')) {
+      issues.add('Use "a lot" instead of "alot"');
+    }
+    return issues;
+  }
+
+  final List<_MockFormatSpan> _formatSpans = [];
+
+  void setFormatSpanForTest({
+    required int start,
+    required int end,
+    bool? bold,
+    String? styleName,
+  }) {
+    _formatSpans.add(_MockFormatSpan(start: start, end: end, bold: bold, styleName: styleName));
+  }
+
+  List<FindMatch> _formatOnlyMatches(FindFormatFilter filter) {
+    final matches = <FindMatch>[];
+    for (final span in _formatSpans) {
+      if (_spanMatchesFilter(span, filter)) {
+        matches.add(FindMatch(runId: defaultRunId, start: span.start, end: span.end));
+      }
+    }
+    return matches;
+  }
+
+  bool _spanMatchesFilter(_MockFormatSpan span, FindFormatFilter filter) {
+    if (filter.bold != null && span.bold != filter.bold) return false;
+    if (filter.styleName != null &&
+        filter.styleName!.isNotEmpty &&
+        span.styleName?.toLowerCase() != filter.styleName!.toLowerCase()) {
+      return false;
+    }
+    return true;
+  }
+
+  bool _rangeMatchesFormat(int start, int end, FindFormatFilter filter) {
+    if (!filter.isActive) return true;
+    for (final span in _formatSpans) {
+      if (start >= span.start && end <= span.end && _spanMatchesFilter(span, filter)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  @override
+  List<FindMatch>? findMatches(
+    String query,
+    bool matchCase, {
+    bool useRegex = false,
+    bool useWildcards = false,
+    FindFormatFilter formatFilter = FindFormatFilter.none,
+  }) {
+    if (query.isEmpty && !formatFilter.isActive) return [];
+    if (query.isEmpty && formatFilter.isActive) {
+      return _formatOnlyMatches(formatFilter);
+    }
+    if (useRegex || useWildcards) {
+      final pattern = useWildcards ? _wildcardToRegex(query) : query;
+      RegExp re;
+      try {
+        re = RegExp(pattern, caseSensitive: matchCase);
+      } catch (_) {
+        return null;
+      }
+      final matches = <FindMatch>[];
+      for (final m in re.allMatches(_text)) {
+        if (_rangeMatchesFormat(m.start, m.end, formatFilter)) {
+          matches.add(FindMatch(runId: defaultRunId, start: m.start, end: m.end));
+        }
+      }
+      return matches;
+    }
+    final haystack = matchCase ? _text : _text.toLowerCase();
+    final needle = matchCase ? query : query.toLowerCase();
+    final matches = <FindMatch>[];
+    var from = 0;
+    while (from <= haystack.length - needle.length) {
+      final idx = haystack.indexOf(needle, from);
+      if (idx < 0) break;
+      final end = idx + query.length;
+      if (_rangeMatchesFormat(idx, end, formatFilter)) {
+        matches.add(FindMatch(runId: defaultRunId, start: idx, end: end));
+      }
+      from = idx + 1;
+    }
+    return matches;
+  }
+
+  String _wildcardToRegex(String pattern) {
+    final buffer = StringBuffer('(?:');
+    for (final ch in pattern.split('')) {
+      switch (ch) {
+        case '?':
+          buffer.write('.');
+        case '*':
+          buffer.write('.*?');
+        case r'\':
+        case '.':
+        case '+':
+        case '^':
+        case r'$':
+        case '|':
+        case '(':
+        case ')':
+        case '[':
+        case ']':
+        case '{':
+        case '}':
+          buffer
+            ..write(r'\')
+            ..write(ch);
+        default:
+          buffer.write(ch);
+      }
+    }
+    buffer.write(')');
+    return buffer.toString();
+  }
+
+  @override
+  Future<int?> replaceAll(
+    String find,
+    String replace,
+    bool matchCase, {
+    bool useRegex = false,
+    bool useWildcards = false,
+  }) async {
+    if (find.isEmpty) return null;
+    final matches = findMatches(
+          find,
+          matchCase,
+          useRegex: useRegex,
+          useWildcards: useWildcards,
+        ) ??
+        const [];
+    if (matches.isEmpty) return 0;
+    if (useRegex || useWildcards) {
+      final pattern = useWildcards ? _wildcardToRegex(find) : find;
+      final re = RegExp(pattern, caseSensitive: matchCase);
+      _text = _text.replaceAll(re, replace);
+      return matches.length;
+    }
+    final haystack = matchCase ? _text : _text.toLowerCase();
+    final needle = matchCase ? find : find.toLowerCase();
+    final out = StringBuffer();
+    var from = 0;
+    var replacements = 0;
+    while (from < _text.length) {
+      final idx = haystack.indexOf(needle, from);
+      if (idx < 0) {
+        out.write(_text.substring(from));
+        break;
+      }
+      out.write(_text.substring(from, idx));
+      out.write(replace);
+      replacements++;
+      from = idx + find.length;
+    }
+    _text = out.toString();
+    return replacements;
+  }
+
+  @override
+  String? compareDocumentText(String otherText) {
+    final left = _text.split('\n');
+    final right = otherText.split('\n');
+    var insertions = 0;
+    var deletions = 0;
+    final max = left.length > right.length ? left.length : right.length;
+    for (var i = 0; i < max; i++) {
+      final l = i < left.length ? left[i] : null;
+      final r = i < right.length ? right[i] : null;
+      if (l == r) continue;
+      if (l != null) deletions++;
+      if (r != null) insertions++;
+    }
+    return 'insertions:$insertions deletions:$deletions';
+  }
+
+  @override
+  bool setReadOnlyEnabled(bool enabled) {
+    _readOnly = enabled;
+    return true;
+  }
 
   @override
   bool setTrackChangesEnabled(bool enabled) {
@@ -1292,10 +1858,83 @@ class MockDocumentEngine implements DocumentEngine {
   }
 
   @override
-  bool acceptAllRevisions() => true;
+  bool acceptAllRevisions() {
+    _trackedRevisions.clear();
+    return true;
+  }
 
   @override
-  bool rejectAllRevisions() => true;
+  bool rejectAllRevisions() {
+    for (final rev in _trackedRevisions.reversed) {
+      _deleteRange(rev.runId, rev.offset, rev.offset + rev.text.length);
+    }
+    _trackedRevisions.clear();
+    return true;
+  }
+
+  int? _revisionIndexAt(String? caretRunId, [int? caretOffset]) {
+    if (caretRunId == null) return null;
+    for (var i = 0; i < _trackedRevisions.length; i++) {
+      final rev = _trackedRevisions[i];
+      if (rev.runId != caretRunId) continue;
+      if (caretOffset == null) return i;
+      final end = rev.offset + rev.text.length;
+      if (caretOffset >= rev.offset && caretOffset <= end) return i;
+    }
+    return null;
+  }
+
+  @override
+  bool acceptRevisionAtCaret({String? caretRunId}) {
+    final idx = _revisionIndexAt(caretRunId);
+    if (idx == null) return false;
+    _trackedRevisions.removeAt(idx);
+    return true;
+  }
+
+  @override
+  bool rejectRevisionAtCaret({String? caretRunId}) {
+    final idx = _revisionIndexAt(caretRunId);
+    if (idx == null) return false;
+    final rev = _trackedRevisions.removeAt(idx);
+    final buffer = _bufferForRun(rev.runId);
+    final lo = rev.offset.clamp(0, buffer.length);
+    final hi = (rev.offset + rev.text.length).clamp(0, buffer.length);
+    if (lo < hi) {
+      _setBufferForRun(
+        rev.runId,
+        buffer.substring(0, lo) + buffer.substring(hi),
+      );
+      _version++;
+    }
+    return true;
+  }
+
+  @override
+  String? adjacentRevisionRunId(String? caretRunId, {required bool forward}) {
+    if (caretRunId == null || _trackedRevisions.isEmpty) return null;
+    final ids = _trackedRevisions.map((r) => r.runId).toList();
+    final idx = ids.indexOf(caretRunId);
+    if (idx >= 0) {
+      final next = forward
+          ? (idx + 1) % ids.length
+          : (idx == 0 ? ids.length - 1 : idx - 1);
+      return ids[next];
+    }
+    return forward ? ids.first : ids.last;
+  }
+}
+
+class _TrackedRevision {
+  const _TrackedRevision({
+    required this.runId,
+    required this.offset,
+    required this.text,
+  });
+
+  final String runId;
+  final int offset;
+  final String text;
 }
 
 class _MockEditSnapshot {
@@ -1467,4 +2106,18 @@ class _ResolvedStyle {
 
   final Map<String, dynamic> charFormat;
   final Map<String, dynamic> paraFormat;
+}
+
+class _MockFormatSpan {
+  const _MockFormatSpan({
+    required this.start,
+    required this.end,
+    this.bold,
+    this.styleName,
+  });
+
+  final int start;
+  final int end;
+  final bool? bold;
+  final String? styleName;
 }

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:tutuaword/bridge/engine_types.dart';
@@ -8,6 +9,7 @@ import 'package:tutuaword/editor/document_painter.dart';
 import 'package:tutuaword/editor/display_list.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
 import 'package:tutuaword/editor/image_hit_test.dart';
+import 'package:tutuaword/editor/key_event_text.dart';
 
 class GlyphEditorSurface extends StatefulWidget {
   const GlyphEditorSurface({
@@ -37,6 +39,16 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
   bool _resizingImage = false;
   bool _movingImage = false;
 
+  void _requestEditorFocus() {
+    if (kIsWeb) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) widget.controller.focusGlyphInput();
+      });
+    } else {
+      _focusNode.requestFocus();
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -46,7 +58,7 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         widget.controller.ensureGlyphCaret();
-        _focusNode.requestFocus();
+        _requestEditorFocus();
       });
     }
   }
@@ -99,10 +111,10 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
       return KeyEventResult.handled;
     }
     // On macOS, `event.character` can be null/empty for some whitespace keys
-    // (notably Space). Handle them explicitly so the caret advances.
-    String? char = event.character;
-    if (key == LogicalKeyboardKey.space ||
-        key.keyLabel.toLowerCase() == 'space') {
+    // (notably Space). On web, character is usually null for all keys.
+    String? char = printableCharacterFromKeyEvent(event);
+    if (char == null &&
+        (key == LogicalKeyboardKey.space || key.keyLabel.toLowerCase() == 'space')) {
       char = ' ';
     }
     if (char == '\t') {
@@ -137,13 +149,13 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
       if (handle != null) {
         controller.beginImageResize(handle);
         _resizingImage = true;
-        _focusNode.requestFocus();
+        _requestEditorFocus();
         return;
       }
       if (controller.isPointOnSelectedImage(event.localPosition)) {
         controller.beginImageMove(event.localPosition);
         _movingImage = true;
-        _focusNode.requestFocus();
+        _requestEditorFocus();
         return;
       }
     }
@@ -153,7 +165,7 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
       event.localPosition,
       widget.snapshot,
     )) {
-      _focusNode.requestFocus();
+      _requestEditorFocus();
       return;
     }
 
@@ -162,7 +174,7 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
       event.localPosition,
       widget.snapshot,
     )) {
-      _focusNode.requestFocus();
+      _requestEditorFocus();
       return;
     }
 
@@ -180,7 +192,7 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
         event.localPosition.dy,
       );
     }
-    _focusNode.requestFocus();
+    _requestEditorFocus();
   }
 
   void _onPointerMove(PointerMoveEvent event) {
@@ -259,6 +271,7 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
         SingleActivator(LogicalKeyboardKey.tab): _InsertTabIntent(),
         SingleActivator(LogicalKeyboardKey.tab, shift: true): _OutdentIntent(),
         SingleActivator(LogicalKeyboardKey.keyA, meta: true): _SelectAllIntent(),
+        SingleActivator(LogicalKeyboardKey.keyA, control: true): _SelectAllIntent(),
       },
       child: Actions(
         actions: <Type, Action<Intent>>{
@@ -289,41 +302,67 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
             },
           ),
         },
-        child: Focus(
-          focusNode: _focusNode,
-          onKeyEvent: _handleKey,
-          child: GestureDetector(
-            behavior: HitTestBehavior.translucent,
-            onDoubleTapDown: (details) {
+        child: kIsWeb
+            ? _buildEditorStack(caret: caret, selection: selection)
+            : Focus(
+                focusNode: _focusNode,
+                onKeyEvent: _handleKey,
+                child: _buildEditorStack(caret: caret, selection: selection),
+              ),
+      ),
+    );
+  }
+
+  Widget _buildEditorStack({
+    required CaretGeometry? caret,
+    required List<GlyphSelectionRect> selection,
+  }) {
+    return Stack(
+      children: [
+        GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onDoubleTapDown: (details) {
+            unawaited(() async {
+              final opened = await widget.controller.editChartDataAt(
+                context,
+                widget.pageIndex,
+                details.localPosition,
+                widget.snapshot,
+              );
+              if (opened) {
+                _requestEditorFocus();
+                return;
+              }
               widget.controller.selectGlyphWordAt(
                 widget.pageIndex,
                 details.localPosition.dx,
                 details.localPosition.dy,
               );
-              _focusNode.requestFocus();
+              _requestEditorFocus();
+            }());
+          },
+          child: Listener(
+            behavior: HitTestBehavior.translucent,
+            onPointerDown: _onPointerDown,
+            onPointerMove: _onPointerMove,
+            onPointerUp: _onPointerUp,
+            onPointerCancel: (_) {
+              if (_resizingImage) {
+                widget.controller.cancelImageResize();
+                _resizingImage = false;
+              }
+              if (_movingImage) {
+                widget.controller.cancelImageMove();
+                _movingImage = false;
+              }
+              if (_draggingText) {
+                widget.controller.cancelGlyphDrag();
+              }
+              _pointerDown = null;
+              _selecting = false;
+              _draggingText = false;
             },
-            child: Listener(
-              behavior: HitTestBehavior.translucent,
-              onPointerDown: _onPointerDown,
-              onPointerMove: _onPointerMove,
-              onPointerUp: _onPointerUp,
-              onPointerCancel: (_) {
-                if (_resizingImage) {
-                  widget.controller.cancelImageResize();
-                  _resizingImage = false;
-                }
-                if (_movingImage) {
-                  widget.controller.cancelImageMove();
-                  _movingImage = false;
-                }
-                if (_draggingText) {
-                  widget.controller.cancelGlyphDrag();
-                }
-                _pointerDown = null;
-                _selecting = false;
-                _draggingText = false;
-              },
-              child: Stack(
+            child: Stack(
               children: [
                 CustomPaint(
                   size: Size(widget.controller.pageWidth, widget.controller.pageHeight),
@@ -368,8 +407,7 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
             ),
           ),
         ),
-      ),
-      ),
+      ],
     );
   }
 }
@@ -446,11 +484,39 @@ class _DiagramSelectionPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    // Match image selection chrome so object selection is obvious.
     final border = Paint()
-      ..color = const Color(0xFF64748B)
+      ..color = const Color(0xFF2563EB)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.5;
     canvas.drawRect(bounds, border);
+
+    final handlePaint = Paint()..color = const Color(0xFF2563EB);
+    const handles = <Offset>[
+      Offset(0, 0),
+      Offset(0.5, 0),
+      Offset(1, 0),
+      Offset(0, 0.5),
+      Offset(1, 0.5),
+      Offset(0, 1),
+      Offset(0.5, 1),
+      Offset(1, 1),
+    ];
+    for (final h in handles) {
+      final point = Offset(
+        bounds.left + bounds.width * h.dx,
+        bounds.top + bounds.height * h.dy,
+      );
+      canvas.drawCircle(point, 4, handlePaint);
+      canvas.drawCircle(
+        point,
+        4,
+        Paint()
+          ..color = Colors.white
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1,
+      );
+    }
   }
 
   @override

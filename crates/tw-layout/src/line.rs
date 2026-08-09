@@ -330,9 +330,29 @@ pub fn layout_paragraph(
         current_y += line_height;
     }
 
-    apply_alignment(&mut lines, max_width, para.format.alignment.unwrap_or(Alignment::Left));
+    apply_alignment(
+        &mut lines,
+        max_width,
+        paragraph_alignment(para),
+    );
 
     (lines, current_y - y)
+}
+
+fn paragraph_alignment(para: &Paragraph) -> Alignment {
+    if is_display_math_para(para) {
+        Alignment::Center
+    } else {
+        para.format.alignment.unwrap_or(Alignment::Left)
+    }
+}
+
+fn is_display_math_para(para: &Paragraph) -> bool {
+    para.runs.len() == 1
+        && matches!(
+            &para.runs[0].content,
+            tw_model::RunContent::OfficeMath { xml } if xml.contains("<m:oMathPara")
+        )
 }
 
 fn line_height_for(para: &Paragraph, size: f32) -> f32 {
@@ -617,15 +637,26 @@ fn measure_range(
     // the column origin expressed in the same space.
     let mut width = 0.0;
     for (segment_text, run, _) in run_segments_for_range(para, start_byte, end_byte, field_context) {
-        if segment_text.is_empty() {
+        let is_office_math = matches!(&run.content, tw_model::RunContent::OfficeMath { .. });
+        if segment_text.is_empty() && !is_office_math {
             continue;
         }
         let base_size = run.format.font_size.unwrap_or(12.0);
         let (size_scale, _) = script_scale(&run.format);
-        let size = base_size * size_scale;
+        let mut size = base_size * size_scale;
+        if is_office_math {
+            size *= tw_model::MATH_PREVIEW_SCALE;
+        }
+        if is_office_math && segment_text.is_empty() {
+            width += 18.0;
+            continue;
+        }
         let run_font = font_for(shaper, &run.format, fid);
         let mut shape_format = run.format.clone();
         shape_format.font_size = Some(size);
+        if is_office_math {
+            shape_format.italic = Some(true);
+        }
         for (piece_index, piece) in segment_text.split('\t').enumerate() {
             if piece_index > 0 {
                 width = next_tab_stop(width, tab_origin_offset, tab_interval, tab_stops);
@@ -756,12 +787,16 @@ fn shape_line(
     let mut decorations = Vec::new();
 
     for (segment_text, run, char_offset) in segments {
-        if segment_text.is_empty() {
+        let is_office_math = matches!(&run.content, tw_model::RunContent::OfficeMath { .. });
+        if segment_text.is_empty() && !is_office_math {
             continue;
         }
         let base_size = run.format.font_size.unwrap_or(default_size);
         let (size_scale, baseline_frac) = script_scale(&run.format);
-        let size = base_size * size_scale;
+        let mut size = base_size * size_scale;
+        if is_office_math {
+            size *= tw_model::MATH_PREVIEW_SCALE;
+        }
         let baseline_shift = baseline_frac * base_size;
         let run_font = font_for(shaper, &run.format, fid);
         let (run_ascent, run_descent, run_gap) = shaper.vertical_metrics(run_font, size);
@@ -782,6 +817,10 @@ fn shape_line(
         }
         let seg_start_x = cursor_x;
 
+        if is_office_math && segment_text.is_empty() {
+            cursor_x += 18.0;
+        }
+
         // Tabs jump to the next stop rather than being shaped, which would
         // render them as `.notdef` boxes.
         for (piece_index, piece) in segment_text.split('\t').enumerate() {
@@ -795,6 +834,9 @@ fn shape_line(
             let piece_chars: Vec<char> = piece.chars().collect();
             let mut shape_format = run.format.clone();
             shape_format.font_size = Some(size);
+            if is_office_math {
+                shape_format.italic = Some(true);
+            }
             let shaped = shaper.shape(piece, &shape_format, run_font);
             for g in &shaped.glyphs {
                 let codepoint = piece_chars
@@ -846,6 +888,17 @@ fn shape_line(
         }
 
         let seg_end_x = cursor_x;
+        if is_office_math && seg_end_x > seg_start_x {
+            let pad = 2.0;
+            decorations.push(super::types::TextDecoration {
+                x: seg_start_x - pad,
+                y: baseline_y - line_ascent - pad,
+                width: seg_end_x - seg_start_x + pad * 2.0,
+                height: line_ascent + line_descent + pad * 2.0,
+                color: tw_model::MATH_FRAME_ARGB,
+                kind: super::types::DecorationKind::MathFrame,
+            });
+        }
         if run.format.highlight.is_some() {
             decorations.push(super::types::TextDecoration {
                 x: seg_start_x,

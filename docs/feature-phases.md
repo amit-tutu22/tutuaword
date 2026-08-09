@@ -590,7 +590,14 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 |---------|------|------|
 | `U-F08-S4-linked-inherits-previous` | Unit | Linked section 2 shows section 1 header |
 | `U-F08-S4-unlinked-distinct-header` | Unit | Unlinked section shows its own header |
-| `U-F08-S4-linked-export` | Unit | Linked section omits `w:headerReference` |
+| `U-F08-S4-linked-export` | Unit | `f08_s4_linked_export.rs` |
+| `U-F08-S4-unlinked-export` | Unit | `f08_s4_linked_export.rs` |
+| `U-F08-S4-footer-link` | Unit | `f08_s4_section_hf_links.rs` |
+| `U-F08-S4-sync-session` | Unit | `f08_s4_section_hf_session.rs` |
+| `I-F08-S4-linked-inherits` | Integration | `f08_s4_section_hf_test.dart` |
+| `I-F08-S4-unlink-distinct` | Integration | `f08_s4_section_hf_test.dart` |
+| `I-F08-S4-link-toggle` | Integration | `f08_header_footer_test.dart` |
+| `S-F08-S4-link-churn` | Stress | `stress/f08_s4_section_hf_churn.rs` |
 
 **Exit (S4):** New sections default to link-to-previous; `SetHeaderFooterLink` toggles per variant; layout resolves headers through the link chain; opening a linked band auto-unlinks and copies content; export skips header refs for linked sections.
 
@@ -884,25 +891,63 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Scope:** Equation editor, math symbols, fractions, integrals, matrices, Greek, LaTeX.
 
-### Baseline status: **Missing**.
+### Baseline status: **Partial** (F14.S1 OMML preserve, F14.S2 read-only preview).
 
-### F14.S1 — OMML preserve
+### F14.S1 — OMML preserve ✅
 
-| Test ID | Type | Spec |
-|---------|------|------|
-| `U-F14-S1-omml-passthrough` | Unit | `m:oMath` blocks preserved in package |
+**Deliverables:** Import/export `m:oMath` (inline) and `m:oMathPara` (block) as opaque `RunContent::OfficeMath`; retention counts; math namespace on regenerated `document.xml`.
 
-### F14.S2 — Equation layout (read-only)
+| Test ID | Type | Spec | Status |
+|---------|------|------|--------|
+| `U-F14-S1-omml-passthrough` | Unit | Inline `m:oMath` round-trip + token preserved | ✅ `f14_s1_omml_passthrough.rs` |
+| `U-F14-S1-omath-para-not-dropped` | Unit | Body `m:oMathPara` imported and exported | ✅ `f14_s1_omml_passthrough.rs` |
+| `U-F14-S1-neighbor-edit-keeps-omml` | Unit | Edit adjacent paragraph → OMML survives save | ✅ `f14_s1_omml_passthrough.rs` |
+| `U-F14-S1-same-para-edit-keeps-omml` | Unit | Edit text beside inline math → OMML survives | ✅ `f14_s1_omml_passthrough.rs` |
+| `U-F14-S1-layout-survives-omml` | Unit | Layout engine does not panic on OMML paragraph | ✅ `f14_s1_omml_passthrough.rs` |
 
-**Deliverables:** Layout math runs as scaled glyphs or image fallback.
+**Testing bar (F14.S2+):** Later slices must assert real geometry / mutated engine state / ribbon→canvas — not status strings or caption-only placeholders (see Chart/SmartArt lesson in W4 preserve-first work).
 
-### F14.S3 — Equation editor UI
+### F14.S2 — Equation layout (read-only) ✅
+
+**Deliverables:** Extract `m:t` preview text from OMML; shape as scaled italic glyphs with Word-like math frame rect; display math (`m:oMathPara`) centered.
+
+| Test ID | Type | Spec | Status |
+|---------|------|------|--------|
+| `U-F14-S2-inline-equation-glyphs` | Unit | Inline OMML → glyph codepoints from `m:t`, not `[math]` | ✅ `f14_s2_equation_preview_display_list.rs` |
+| `U-F14-S2-display-equation-glyphs` | Unit | Block `m:oMathPara` → frame rects + glyphs | ✅ `f14_s2_equation_preview_display_list.rs` |
+| `U-F14-S2-mixed-text-equation` | Unit | Text + inline math on same line | ✅ `f14_s2_equation_preview_display_list.rs` |
+| `U-F14-S2-equation-hit-test` | Unit | Preview lines not decorative; multi-run caret map | ✅ `f14_s2_equation_preview_layout.rs` |
+| `U-F14-S2-math-frame-decoration` | Unit | `DecorationKind::MathFrame` on equation segments | ✅ `f14_s2_equation_preview_layout.rs` |
+| `U-F14-S2-import-to-display-list` | Unit | DOCX import → layout → display list has OMML glyphs | ✅ `f14_s2_import_layout_display_list.rs` |
+
+### F14.S3 — Equation editor UI ✅
 
 **Deliverables:** Insert equation dialog; build OMML from palette.
 
-### F14.S4 — LaTeX import (optional)
+| Test ID | Type | Spec | Status |
+|---------|------|------|--------|
+| `U-F14-S3-insert-inline-omml` | Unit | `InsertOfficeMath` stores OMML on run | ✅ `f14_s3_insert_office_math.rs` |
+| `U-F14-S3-insert-display-omml` | Unit | `InsertOfficeMathDisplay` adds centered block | ✅ `f14_s3_insert_office_math.rs` |
+| `U-F14-S3-set-equation-undo` | Unit | `SetOfficeMath` undo restores prior XML | ✅ `f14_s3_insert_office_math.rs` |
+| `U-F14-S3-equation-glyphs` | Unit | Insert → layout → display list has shaped glyphs | ✅ `f14_s3_equation_insert_display_list.rs` |
+| `U-F14-S3-session-round-trip` | Unit | Session insert/fetch/set equation OMML | ✅ `f14_s3_equation_session.rs` |
+| `I-F14-S3-insert-equation` | Integration | Ribbon → dialog → engine stores OMML | ✅ `f14_s3_equation_editor_test.dart` |
+| `I-F14-S3-fraction-omml` | Integration | Fraction palette builds `<m:f>` OMML | ✅ `f14_s3_equation_editor_test.dart` |
+
+### F14.S4 — LaTeX import (optional) ✅
 
 **Deliverables:** LaTeX → OMML subset converter.
+
+| Test ID | Type | Spec | Status |
+|---------|------|------|--------|
+| `U-F14-S4-latex-frac` | Unit | `\frac{a}{b}` → `<m:f>` | ✅ `latex_omml.rs` |
+| `U-F14-S4-latex-superscript` | Unit | `x^2` → `<m:sSup>` | ✅ `latex_omml.rs` |
+| `U-F14-S4-latex-greek` | Unit | `\alpha`, `\beta` → Unicode in OMML | ✅ `latex_omml.rs` |
+| `U-F14-S4-latex-sqrt` | Unit | `\sqrt{x}` → `<m:rad>` | ✅ `latex_omml.rs` |
+| `U-F14-S4-latex-display-list` | Unit | LaTeX → layout → shaped glyphs | ✅ `f14_s4_latex_display_list.rs` |
+| `U-F14-S4-latex-unknown` | Unit | Unknown command returns error | ✅ `latex_omml.rs` |
+| `I-F14-S4-latex-equation-insert` | Integration | Equation dialog LaTeX tab → engine OMML | ✅ `f14_s4_latex_equation_dialog_test.dart` |
+| `I-F14-S4-latex-model` | Integration | `EquationModel.latex` → display OMML | ✅ `f14_s4_latex_import_test.dart` |
 
 ---
 
@@ -910,23 +955,65 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Scope:** Unicode, emoji, currency, mathematical symbols, special characters.
 
-### Baseline status: **Stub** (Symbol button disabled).
+### Baseline status: **Complete** (F15.S1–S3 ✅).
 
-### F15.S1 — Symbol dialog
+### F15.S1 — Symbol dialog ✅
 
 **Deliverables:** Modal grid by category; insert via `InsertText`.
 
-| Test ID | Type | Spec |
-|---------|------|------|
-| `I-F15-S1-insert-copyright` | Integration | Insert © at caret |
+| Test ID | Type | Spec | Status |
+|---------|------|------|--------|
+| `U-F15-S1-catalog-has-copyright` | Unit | Catalog exposes © with stable id | ✅ `f15_s1_symbol_catalog_test.dart` |
+| `U-F15-S1-categories-non-empty` | Unit | All symbol categories populated | ✅ `f15_s1_symbol_catalog_test.dart` |
+| `U-F15-S1-insert-copyright` | Unit | `InsertText` stores © in paragraph | ✅ `f15_s1_insert_symbol.rs` |
+| `U-F15-S1-insert-after-text` | Unit | Symbol appended after existing text | ✅ `f15_s1_insert_symbol.rs` |
+| `U-F15-S1-currency-math-symbols` | Unit | € £ ± × ∞ → survive in one paragraph | ✅ `f15_s1_insert_symbol.rs` |
+| `U-F15-S1-insert-symbol-undo` | Unit | Undo removes inserted ™ | ✅ `f15_s1_insert_symbol.rs` |
+| `I-F15-S1-insert-copyright` | Integration | Ribbon → Symbol dialog → © in engine text | ✅ `f15_s1_symbol_dialog_test.dart` |
+| `I-F15-S1-insert-euro-category` | Integration | Currency subset → € inserted | ✅ `f15_s1_symbol_dialog_test.dart` |
+| `I-F15-S1-dismiss-no-insert` | Integration | Cancel leaves document unchanged | ✅ `f15_s1_symbol_dialog_test.dart` |
+| `S-F15-S1-symbol-churn` | Stress | 500 symbol inserts + coalesced undo clears burst | ✅ `stress/f15_symbol_insert_churn.rs` |
+| `S-F15-S1-symbol-docx-round-trip` | Stress | Full symbol palette export → import | ✅ `stress/f15_symbol_insert_churn.rs` |
 
-### F15.S2 — Emoji and math symbols
+### F15.S2 — Emoji and math symbols ✅
 
-**Deliverables:** Emoji picker; math symbol subset.
+**Deliverables:** Emoji picker; math symbol subset (Greek letters, set theory).
 
-### F15.S3 — Recent symbols
+| Test ID | Type | Spec | Status |
+|---------|------|------|--------|
+| `U-F15-S2-emoji-category-has-grinning` | Unit | Catalog exposes 😀 with stable id | ✅ `f15_s2_emoji_math_catalog_test.dart` |
+| `U-F15-S2-emoji-symbols-non-empty` | Unit | Emoji category populated | ✅ `f15_s2_emoji_math_catalog_test.dart` |
+| `U-F15-S2-math-greek-has-alpha` | Unit | Greek subset exposes α | ✅ `f15_s2_emoji_math_catalog_test.dart` |
+| `U-F15-S2-math-extended-includes-set-theory` | Unit | ∀ ∃ ∈ ∅ in extended math | ✅ `f15_s2_emoji_math_catalog_test.dart` |
+| `U-F15-S2-insert-emoji-grinning` | Unit | `InsertText` stores 😀 in paragraph | ✅ `f15_s2_insert_emoji_math.rs` |
+| `U-F15-S2-insert-emoji-after-text` | Unit | Emoji appended after existing text | ✅ `f15_s2_insert_emoji_math.rs` |
+| `U-F15-S2-insert-greek-set-theory` | Unit | α β γ ∀ ∃ ∈ ∅ survive in one paragraph | ✅ `f15_s2_insert_emoji_math.rs` |
+| `U-F15-S2-insert-emoji-undo` | Unit | Undo removes inserted 🎉 | ✅ `f15_s2_insert_emoji_math.rs` |
+| `I-F15-S2-insert-emoji-from-picker` | Integration | Ribbon → Emoji → 👍 in engine text | ✅ `f15_s2_symbol_dialog_test.dart` |
+| `I-F15-S2-insert-greek-alpha` | Integration | Greek & Advanced → α inserted | ✅ `f15_s2_symbol_dialog_test.dart` |
+| `I-F15-S2-emoji-and-math-direct-api` | Integration | Direct insert 😀α via controller | ✅ `f15_s2_symbol_dialog_test.dart` |
+| `S-F15-S2-emoji-math-churn` | Stress | 500 emoji/math inserts + coalesced undo | ✅ `stress/f15_s2_emoji_math_churn.rs` |
+| `S-F15-S2-emoji-math-docx-round-trip` | Stress | Full emoji + Greek palette export → import | ✅ `stress/f15_s2_emoji_math_churn.rs` |
 
-**Deliverables:** Last-used list in dialog.
+### F15.S3 — Recent symbols ✅
+
+**Deliverables:** Last-used list in dialog; MRU store with session persistence.
+
+| Test ID | Type | Spec | Status |
+|---------|------|------|--------|
+| `U-F15-S3-record-moves-to-front` | Unit | Re-insert bumps symbol to MRU head | ✅ `f15_s3_recent_symbols_test.dart` |
+| `U-F15-S3-record-character-resolves-id` | Unit | Character insert maps to catalog id | ✅ `f15_s3_recent_symbols_test.dart` |
+| `U-F15-S3-cap-trims-oldest` | Unit | List capped at max (12 default) | ✅ `f15_s3_recent_symbols_test.dart` |
+| `U-F15-S3-load-export-round-trip` | Unit | loadIds/exportIds preserve order | ✅ `f15_s3_recent_symbols_test.dart` |
+| `U-F15-S3-reinsert-recent-symbol` | Unit | Same symbol re-inserted at caret | ✅ `f15_s3_insert_recent.rs` |
+| `U-F15-S3-recent-rotation-inserts` | Unit | Recent rotation © € ± α 😀 👍 in paragraph | ✅ `f15_s3_insert_recent.rs` |
+| `U-F15-S3-recent-emoji-reinsert` | Unit | 👍 re-insert from recents pattern | ✅ `f15_s3_insert_recent.rs` |
+| `I-F15-S3-recent-row-after-insert` | Integration | Dialog shows recent row after © insert | ✅ `f15_s3_symbol_dialog_test.dart` |
+| `I-F15-S3-insert-from-recent-row` | Integration | Tap recent € → engine text | ✅ `f15_s3_symbol_dialog_test.dart` |
+| `I-F15-S3-reinsert-bumps-mru` | Integration | Re-insert © moves to MRU front | ✅ `f15_s3_symbol_dialog_test.dart` |
+| `U-F15-S3-session-store-persists-ids` | Unit | recent_symbols.json round-trip | ✅ `f15_s3_recent_symbols_test.dart` |
+| `S-F15-S3-recent-reinsert-churn` | Stress | 600 recent-rotation inserts + undo | ✅ `stress/f15_s3_recent_symbol_churn.rs` |
+| `S-F15-S3-recent-docx-round-trip` | Stress | 3× recent rotation export → import | ✅ `stress/f15_s3_recent_symbol_churn.rs` |
 
 ---
 
@@ -934,30 +1021,81 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Scope:** Footnotes, endnotes, TOC, bibliography, citations, index, cross references.
 
-### Baseline status: **Stub** (References ribbon disabled).
+### Baseline status: **Partial** (F16.S1 Footnotes ✅; F16.S2 TOC ✅; F16.S3 Citations ✅; index/cross-ref stub).
+
+### F16.S1 — Footnotes and endnotes ✅
+
+**Deliverables:** `Footnote` model; layout bottom-of-page band; DOCX parts; References ribbon.
+
+| Test ID | Type | Spec | Status |
+|---------|------|------|--------|
+| `U-F16-S1-insert-footnote-creates-ref-and-body` | Unit | InsertFootnote → ref + footnote body | ✅ `f16_s1_insert_footnote.rs` |
+| `U-F16-S1-insert-footnote-ref-is-superscript` | Unit | Footnote ref run has superscript format | ✅ `f16_s1_insert_footnote.rs` |
+| `U-F16-S1-insert-footnote-after-text` | Unit | Footnote ref appended after text | ✅ `f16_s1_insert_footnote.rs` |
+| `U-F16-S1-multiple-footnotes-renumber` | Unit | Second footnote gets display number 2 | ✅ `f16_s1_insert_footnote.rs` |
+| `U-F16-S1-footnote-ref-layout` | Unit | Superscript ref + separator + body band | ✅ `f16_s1_footnote_ref_layout.rs` |
+| `U-F16-S1-footnote-docx-round-trip` | Unit | Export/import preserves footnotes.xml | ✅ `f16_s1_footnote_roundtrip.rs` |
+| `I-F16-S1-insert-footnote` | Integration | References → Insert Footnote → ¹ in engine | ✅ `f16_s1_insert_footnote_test.dart` |
+| `I-F16-S1-insert-footnote-direct-api` | Integration | Controller.insertFootnote inserts marker | ✅ `f16_s1_insert_footnote_test.dart` |
+| `S-F16-S1-footnote-insert-churn` | Stress | 50 footnote inserts in one paragraph | ✅ `stress/f16_s1_footnote_churn.rs` |
+| `S-F16-S1-footnote-docx-round-trip` | Stress | 10 footnotes export → import | ✅ `stress/f16_s1_footnote_churn.rs` |
 
 **Dependencies:** F06 (heading styles for TOC), F18 (cross-ref targets).
 
-### F16.S1 — Footnotes and endnotes
+### F16.S2 — Table of contents ✅
 
-**Deliverables:** `Footnote` model; layout bottom-of-page band; DOCX parts.
+**Deliverables:** TOC from Heading styles; literal page numbers from layout; References ribbon.
 
-| Test ID | Type | Spec |
-|---------|------|------|
-| `U-F16-S1-footnote-ref-layout` | Unit | Superscript ref + note body |
-| `I-F16-S1-insert-footnote` | Integration | References→Insert Footnote |
+| Test ID | Type | Spec | Status |
+|---------|------|------|--------|
+| `U-F16-S2-insert-toc-from-headings` | Unit | H1/H2 doc → TOC title + indented entries | ✅ `f16_s2_insert_toc.rs` |
+| `U-F16-S2-toc-page-numbers` | Unit | Entries include supplied page numbers | ✅ `f16_s2_insert_toc.rs` |
+| `U-F16-S2-toc-empty-outline-still-has-title` | Unit | No headings → title-only TOC | ✅ `f16_s2_insert_toc.rs` |
+| `U-F16-S2-toc-docx-roundtrip` | Unit | Export/import preserves TOC paragraphs | ✅ `f16_s2_toc_roundtrip.rs` |
+| `U-F16-S2-toc-entry-tab-and-page-layout` | Unit | Right tab stop lands page number | ✅ `f16_s2_toc_entry_layout.rs` |
+| `U-F16-S2-session-toc-page-numbers` | Unit | Session TOC uses layout page numbers | ✅ `f16_s2_toc_session.rs` |
+| `I-F16-S2-insert-toc-from-references-ribbon` | Integration | References → TOC → entries in engine | ✅ `f16_s2_insert_toc_test.dart` |
+| `I-F16-S2-insert-toc-direct-api` | Integration | Controller.insertTableOfContents | ✅ `f16_s2_insert_toc_test.dart` |
+| `S-F16-S2-toc-insert-churn` | Stress | 25 headings × 5 TOC inserts | ✅ `stress/f16_s2_toc_churn.rs` |
+| `S-F16-S2-toc-docx-roundtrip` | Stress | 10 headings TOC export → import ×3 | ✅ `stress/f16_s2_toc_churn.rs` |
 
-### F16.S2 — Table of contents
+**Dependencies:** F06 (heading styles for TOC), F18 (cross-ref targets).
 
-**Deliverables:** TOC field from Heading styles; page numbers.
+### F16.S3 — Citations and bibliography ✅
 
-### F16.S3 — Citations and bibliography
+**Deliverables:** Bibliography source keys; inline `CitationRef`; `word/bibliography.xml`; References ribbon.
 
-**Deliverables:** Citation keys; `bibliography.xml` passthrough minimum.
+| Test ID | Type | Spec | Status |
+|---------|------|------|--------|
+| `U-F16-S3-add-bibliography-source-registers-key` | Unit | AddBibliographySource → catalog entry | ✅ `f16_s3_insert_citation.rs` |
+| `U-F16-S3-insert-citation-creates-ref-run` | Unit | CitationRef with author-year display | ✅ `f16_s3_insert_citation.rs` |
+| `U-F16-S3-insert-citation-requires-source` | Unit | Unknown key rejected | ✅ `f16_s3_insert_citation.rs` |
+| `U-F16-S3-insert-bibliography-from-citations` | Unit | Cited sources → Bibliography section | ✅ `f16_s3_insert_citation.rs` |
+| `U-F16-S3-bibliography-xml-roundtrip` | Unit | Export/import preserves bibliography.xml + cites | ✅ `f16_s3_bibliography_roundtrip.rs` |
+| `U-F16-S3-citation-ref-layout-text` | Unit | Layout renders citation display text | ✅ `f16_s3_citation_ref_layout.rs` |
+| `I-F16-S3-insert-citation-from-references-ribbon` | Integration | References → Citation → (Smith, 2020) | ✅ `f16_s3_insert_citation_test.dart` |
+| `I-F16-S3-insert-bibliography-from-references-ribbon` | Integration | Cite then Bibliography → entries | ✅ `f16_s3_insert_citation_test.dart` |
+| `I-F16-S3-insert-citation-direct-api` | Integration | Controller.insertCitation | ✅ `f16_s3_insert_citation_test.dart` |
+| `S-F16-S3-citation-insert-churn` | Stress | 20 sources × 20 citation inserts | ✅ `stress/f16_s3_citation_churn.rs` |
+| `S-F16-S3-bibliography-docx-roundtrip` | Stress | Bibliography export → import ×3 | ✅ `stress/f16_s3_citation_churn.rs` |
 
-### F16.S4 — Index and cross-references
+### F16.S4 — Index and cross-references ✅
 
-**Deliverables:** REF fields; bookmark targets (ties F19).
+**Deliverables:** REF fields; bookmark targets (ties F19); References ribbon.
+
+| Test ID | Type | Spec | Status |
+|---------|------|------|--------|
+| `U-F16-S4-insert-bookmark-creates-anchor` | Unit | InsertBookmark → Bookmark run with name/id | ✅ `f16_s4_insert_cross_ref.rs` |
+| `U-F16-S4-cross-ref-resolves-bookmark-text` | Unit | Bookmark + text → REF shows anchor text | ✅ `f16_s4_insert_cross_ref.rs` |
+| `U-F16-S4-cross-ref-requires-bookmark` | Unit | Unknown bookmark rejected | ✅ `f16_s4_insert_cross_ref.rs` |
+| `U-F16-S4-insert-index-from-bookmarks` | Unit | Multiple bookmarks → Index section | ✅ `f16_s4_insert_cross_ref.rs` |
+| `U-F16-S4-cross-ref-docx-roundtrip` | Unit | bookmarkStart + REF fldSimple survive export/import | ✅ `f16_s4_cross_ref_roundtrip.rs` |
+| `U-F16-S4-cross-ref-layout-text` | Unit | REF display text in layout | ✅ `f16_s4_cross_ref_layout.rs` |
+| `I-F16-S4-insert-cross-ref-from-references-ribbon` | Integration | Ribbon → bookmark + cross-ref | ✅ `f16_s4_insert_cross_ref_test.dart` |
+| `I-F16-S4-insert-index-from-references-ribbon` | Integration | Ribbon → bookmark + index | ✅ `f16_s4_insert_cross_ref_test.dart` |
+| `I-F16-S4-insert-cross-ref-direct-api` | Integration | Controller.insertCrossReference | ✅ `f16_s4_insert_cross_ref_test.dart` |
+| `S-F16-S4-cross-ref-insert-churn` | Stress | 20 bookmarks × 20 cross-refs | ✅ `stress/f16_s4_cross_ref_churn.rs` |
+| `S-F16-S4-cross-ref-docx-roundtrip` | Stress | Index + REF export → import ×3 | ✅ `stress/f16_s4_cross_ref_churn.rs` |
 
 ---
 
@@ -973,14 +1111,21 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 | Track changes | Partial (accept/reject all) |
 | Comments, grammar, compare | Missing / Stub |
 
-### F17.S1 — Spell check upgrade
+### F17.S1 — Spell check upgrade ✅
 
-**Deliverables:** Hunspell integration; squiggles in display list (optional).
+**Deliverables:** Hunspell-compatible embedded dictionary; `suggest()` API; Review ribbon spell check.
 
-| Test ID | Type | Spec |
-|---------|------|------|
-| `U-F17-S1-hunspell-suggestions` | Unit | Known misspelling flagged |
-| `I-F17-S1-spell-check-menu` | Integration | Review→Spelling lists words |
+| Test ID | Type | Spec | Status |
+|---------|------|------|--------|
+| `U-F17-S1-hunspell-suggestions` | Unit | Known misspelling flagged; `teh` → `the` | ✅ `f17_s1_hunspell_suggestions.rs` |
+| `U-F17-S1-known-good-words-pass` | Unit | Valid prose produces no issues | ✅ `f17_s1_hunspell_suggestions.rs` |
+| `U-F17-S1-suggest-respects-limit` | Unit | Suggestion list capped | ✅ `f17_s1_hunspell_suggestions.rs` |
+| `U-F17-S1-session-spell-check-misspellings` | Unit | Session spell check on typed typos | ✅ `f17_s1_spell_session.rs` |
+| `I-F17-S1-spell-check-menu` | Integration | Review → Spelling lists words | ✅ `f17_s1_spell_check_test.dart` |
+| `I-F17-S1-spell-check-direct-api` | Integration | Controller.spellCheckDocument | ✅ `f17_s1_spell_check_test.dart` |
+| `I-F17-S1-spell-check-clean-document` | Integration | Clean doc → no issues status | ✅ `f17_s1_spell_check_test.dart` |
+| `S-F17-S1-spell-check-churn` | Stress | 50 long typo paragraphs × check | ✅ `stress/f17_s1_spell_churn.rs` |
+| `S-F17-S1-suggest-hot-path` | Stress | 5000 × suggest for `recieved` | ✅ `stress/f17_s1_spell_churn.rs` |
 
 ### F17.S2 — Track changes at caret
 
@@ -988,16 +1133,43 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 | Test ID | Type | Spec |
 |---------|------|------|
-| `U-F17-S2-accept-revision-caret` | Unit | Extends `track_change_resolve.rs` |
+| `U-F17-S2-accept-revision-caret` | Unit | `f17_s2_accept_revision_caret.rs` |
+| `U-F17-S2-revision-session` | Unit | `f17_s2_revision_session.rs` |
 | `I-F17-S2-accept-button` | Integration | Review→Accept |
+| `S-F17-S2-revision-churn` | Stress | `stress/f17_s2_revision_churn.rs` |
+
+**Status:** ✅ Delivered (caret accept/reject, next/previous navigation, FFI/WASM/Flutter wiring).
 
 ### F17.S3 — Comments
 
 **Deliverables:** `CommentThread` model; margin markers; DOCX `comments.xml`.
 
+| Test ID | Type | Spec |
+|---------|------|------|
+| `U-F17-S3-insert-comment` | Unit | `f17_s3_insert_comment.rs` |
+| `U-F17-S3-comment-margin-layout` | Unit | `f17_s3_comment_margin_layout.rs` |
+| `U-F17-S3-comment-docx-roundtrip` | Unit | `f17_s3_comment_roundtrip.rs` |
+| `U-F17-S3-comment-session` | Unit | `f17_s3_comment_session.rs` |
+| `I-F17-S3-insert-comment` | Integration | Review→New Comment |
+| `S-F17-S3-comment-churn` | Stress | `stress/f17_s3_comment_churn.rs` |
+
+**Status:** ✅ Delivered (CommentThread model, margin markers, DOCX round-trip, FFI/WASM/Flutter wiring).
+
 ### F17.S4 — Grammar, compare, restrict
 
 **Deliverables:** Grammar via AI or LanguageTool; compare two docs; restrict editing flag.
+
+| Test ID | Type | Spec |
+|---------|------|------|
+| `U-F17-S4-grammar-rules` | Unit | `f17_s4_grammar_rules.rs` |
+| `U-F17-S4-compare-text` | Unit | `f17_s4_compare_text.rs` |
+| `U-F17-S4-grammar-session` | Unit | `f17_s4_grammar_session.rs` |
+| `U-F17-S4-read-only-session` | Unit | `f17_s4_read_only_session.rs` |
+| `U-F17-S4-read-only-model` | Unit | `f17_s4_read_only_model.rs` |
+| `I-F17-S4-proofing-compare-restrict` | Integration | Review→Spelling & Grammar, Compare, Restrict Editing |
+| `S-F17-S4-grammar-compare-churn` | Stress | `stress/f17_s4_grammar_compare_churn.rs` |
+
+**Status:** ✅ Delivered (rule-based grammar, line diff compare, read-only worker guard, FFI/WASM/Flutter wiring).
 
 ---
 
@@ -1018,22 +1190,47 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 | Test ID | Type | Spec |
 |---------|------|------|
-| `U-F18-S1-find-case-sensitive` | Unit | `FindReplace` match_case |
+| `U-F18-S1-find-case-sensitive` | Unit | `f18_s1_find_case_sensitive.rs` |
+| `U-F18-S1-find-session` | Unit | `f18_s1_find_session.rs` |
 | `I-F18-S1-find-pane` | Integration | Ctrl+F opens pane |
+| `S-F18-S1-find-churn` | Stress | `stress/f18_s1_find_churn.rs` |
+
+**Status:** ✅ Delivered (find matches API, find pane, match highlighting via selection, next/previous, Ctrl+F).
 
 ### F18.S2 — Replace
 
 | Test ID | Type | Spec |
 |---------|------|------|
-| `U-F18-S2-replace-all-count` | Unit | Returns replacement count |
+| `U-F18-S2-replace-all-count` | Unit | `f18_s2_replace_all_count.rs` |
+| `U-F18-S2-replace-session` | Unit | `f18_s2_replace_session.rs` |
+| `I-F18-S2-replace-all` | Integration | `f18_s2_replace_test.dart` |
+| `S-F18-S2-replace-churn` | Stress | `stress/f18_s2_replace_churn.rs` |
+
+**Status:** ✅ Delivered (FindReplace replacement count, Replace All in find pane, FFI/command bridge).
 
 ### F18.S3 — Regex and wildcards
 
-**Deliverables:** Regex mode in find (Rust `regex` crate).
+| Test ID | Type | Spec |
+|---------|------|------|
+| `U-F18-S3-regex-digit-runs` | Unit | `f18_s3_regex_wildcards.rs` |
+| `U-F18-S3-wildcard-patterns` | Unit | `f18_s3_regex_wildcards.rs` |
+| `U-F18-S3-regex-session` | Unit | `f18_s3_regex_session.rs` |
+| `I-F18-S3-regex-pane` | Integration | `f18_s3_regex_test.dart` |
+| `S-F18-S3-regex-churn` | Stress | `stress/f18_s3_regex_churn.rs` |
+
+**Status:** ✅ Delivered (regex/wildcard find and replace, find pane toggles, FFI/command bridge).
 
 ### F18.S4 — Format search
 
-**Deliverables:** Find bold text / specific style.
+| Test ID | Type | Spec |
+|---------|------|------|
+| `U-F18-S4-find-bold-runs` | Unit | `f18_s4_format_search.rs` |
+| `U-F18-S4-find-style-name` | Unit | `f18_s4_format_search.rs` |
+| `U-F18-S4-format-session` | Unit | `f18_s4_format_session.rs` |
+| `I-F18-S4-format-pane` | Integration | `f18_s4_format_search_test.dart` |
+| `S-F18-S4-format-churn` | Stress | `stress/f18_s4_format_churn.rs` |
+
+**Status:** ✅ Delivered (bold/style format filters in find, find pane toggles, FFI/command bridge).
 
 ---
 

@@ -52,6 +52,8 @@ fn sync_session_find_replace_updates_text_and_relayouts() {
         find: "alpha".into(),
         replace: "gamma".into(),
         match_case: true,
+        use_regex: false,
+        use_wildcards: false,
     });
 
     assert_eq!(

@@ -15,8 +15,10 @@ uuid = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 # Portable monotonic clock: `std::time::Instant::now` panics on wasm32-unknown-unknown.
 web-time = "1.1"
+regex = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
 tw-native = { path = "../tw-native" }
 tw-docx = { path = "../tw-docx" }
+tw-spell = { path = "../tw-spell" }

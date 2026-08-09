@@ -10,6 +10,10 @@ Object callMethod(Object target, String method, List<Object?> args) {
   throw UnsupportedError('WASM is only available on web');
 }
 
+Object? callMethodOrNull(Object target, String method, List<Object?> args) {
+  throw UnsupportedError('WASM is only available on web');
+}
+
 Object? getProperty(Object target, String name) {
   throw UnsupportedError('WASM is only available on web');
 }

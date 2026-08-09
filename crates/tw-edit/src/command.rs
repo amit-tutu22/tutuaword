@@ -273,6 +273,69 @@ pub enum Command {
         offset: usize,
         field_type: tw_model::FieldType,
     },
+    /// Insert a footnote reference at the caret — F16.S1.
+    InsertFootnote {
+        run_id: NodeId,
+        offset: usize,
+    },
+    /// Insert a comment anchor at the caret — F17.S3.
+    InsertComment {
+        run_id: NodeId,
+        offset: usize,
+        body_text: String,
+    },
+    /// Materialize a table of contents after a block — F16.S2.
+    InsertTableOfContents {
+        after_block_id: NodeId,
+        /// Page numbers parallel to [`tw_model::document_outline`] at apply time.
+        page_numbers: Vec<u32>,
+    },
+    /// Register a bibliography source by citation key — F16.S3.
+    AddBibliographySource {
+        source: tw_model::BibliographySource,
+    },
+    /// Insert an inline citation reference at the caret — F16.S3.
+    InsertCitation {
+        run_id: NodeId,
+        offset: usize,
+        source_key: String,
+    },
+    /// Materialize a bibliography section after a block — F16.S3.
+    InsertBibliography {
+        after_block_id: NodeId,
+    },
+    /// Insert a bookmark anchor at the caret — F16.S4.
+    InsertBookmark {
+        run_id: NodeId,
+        offset: usize,
+        name: String,
+    },
+    /// Insert a REF field pointing at a bookmark — F16.S4.
+    InsertCrossReference {
+        run_id: NodeId,
+        offset: usize,
+        bookmark_name: String,
+    },
+    /// Materialize an index from bookmark targets — F16.S4.
+    InsertIndex {
+        after_block_id: NodeId,
+    },
+    /// Insert inline OMML at the caret — F14.S3.
+    InsertOfficeMath {
+        run_id: NodeId,
+        offset: usize,
+        xml: String,
+    },
+    /// Insert a display equation block (`m:oMathPara`) after a block — F14.S3.
+    InsertOfficeMathDisplay {
+        after_block_id: NodeId,
+        xml: String,
+    },
+    /// Replace OMML on an existing equation run — F14.S3.
+    SetOfficeMath {
+        run_id: NodeId,
+        xml: String,
+    },
     MergeTableCells {
         table_id: NodeId,
         start_row: u32,
@@ -385,6 +448,10 @@ pub enum Command {
         find: String,
         replace: String,
         match_case: bool,
+        #[serde(default)]
+        use_regex: bool,
+        #[serde(default)]
+        use_wildcards: bool,
     },
     /// Undo helper for [`Command::FindReplace`].
     RestoreFindReplace {
@@ -395,6 +462,11 @@ pub enum Command {
     },
     InsertBlock {
         after_block_id: NodeId,
+        block: tw_model::Block,
+    },
+    /// Insert a block immediately before an existing block (undo of deleting the first block).
+    InsertBlockBefore {
+        before_block_id: NodeId,
         block: tw_model::Block,
     },
     /// Accept the track-change revision on a single run (TC ladder step c).
@@ -614,6 +686,7 @@ impl Command {
             | Command::InsertWordArt { .. }
             | Command::InsertDiagram { .. }
             | Command::InsertChart { .. }
+            | Command::InsertOfficeMathDisplay { .. }
             | Command::InsertPageBreak { .. } => {
                 let new_id = result
                     .created_node_id
@@ -776,6 +849,15 @@ impl Command {
                 Ok(Command::SetChartData {
                     shape_id: *shape_id,
                     chart_data,
+                })
+            }
+            Command::SetOfficeMath { run_id, .. } => {
+                let xml = result.old_office_math_xml.clone().ok_or(EditError::InverseNotSupported {
+                    command: "SetOfficeMath",
+                })?;
+                Ok(Command::SetOfficeMath {
+                    run_id: *run_id,
+                    xml,
                 })
             }
             Command::ReplaceImageBytes { image_id, .. } => {
@@ -1011,23 +1093,30 @@ impl Command {
                 command: "RestoreFindReplace",
             }),
             Command::DeleteBlock { .. } => {
-                let after_id = result
-                    .previous_block_id
-                    .ok_or(EditError::InverseNotSupported {
-                        command: "DeleteBlock",
-                    })?;
                 let block = result
                     .deleted_block
                     .clone()
                     .ok_or(EditError::InverseNotSupported {
                         command: "DeleteBlock",
                     })?;
-                Ok(Command::InsertBlock {
-                    after_block_id: after_id,
-                    block,
-                })
+                if let Some(before_id) = result.insert_before_block_id {
+                    Ok(Command::InsertBlockBefore {
+                        before_block_id: before_id,
+                        block,
+                    })
+                } else {
+                    let after_id = result.previous_block_id.ok_or(
+                        EditError::InverseNotSupported {
+                            command: "DeleteBlock",
+                        },
+                    )?;
+                    Ok(Command::InsertBlock {
+                        after_block_id: after_id,
+                        block,
+                    })
+                }
             }
-            Command::InsertBlock { .. } => {
+            Command::InsertBlock { .. } | Command::InsertBlockBefore { .. } => {
                 let new_id = result
                     .created_node_id
                     .ok_or(EditError::InverseNotSupported {
@@ -1158,6 +1247,36 @@ impl Command {
             Command::InsertField { .. } => Err(EditError::InverseNotSupported {
                 command: "InsertField",
             }),
+            Command::InsertFootnote { .. } => Err(EditError::InverseNotSupported {
+                command: "InsertFootnote",
+            }),
+            Command::InsertComment { .. } => Err(EditError::InverseNotSupported {
+                command: "InsertComment",
+            }),
+            Command::InsertTableOfContents { .. } => Err(EditError::InverseNotSupported {
+                command: "InsertTableOfContents",
+            }),
+            Command::AddBibliographySource { .. } => Err(EditError::InverseNotSupported {
+                command: "AddBibliographySource",
+            }),
+            Command::InsertCitation { .. } => Err(EditError::InverseNotSupported {
+                command: "InsertCitation",
+            }),
+            Command::InsertBibliography { .. } => Err(EditError::InverseNotSupported {
+                command: "InsertBibliography",
+            }),
+            Command::InsertBookmark { .. } => Err(EditError::InverseNotSupported {
+                command: "InsertBookmark",
+            }),
+            Command::InsertCrossReference { .. } => Err(EditError::InverseNotSupported {
+                command: "InsertCrossReference",
+            }),
+            Command::InsertIndex { .. } => Err(EditError::InverseNotSupported {
+                command: "InsertIndex",
+            }),
+            Command::InsertOfficeMath { .. } => Err(EditError::InverseNotSupported {
+                command: "InsertOfficeMath",
+            }),
         }
     }
 }
@@ -1178,6 +1297,8 @@ pub struct EditResult {
     pub old_style_id: Option<Option<StyleId>>,
     pub old_numbering: Option<Option<NumberingRef>>,
     pub previous_block_id: Option<NodeId>,
+    /// When set, undo of DeleteBlock inserts before this id (first-block delete).
+    pub insert_before_block_id: Option<NodeId>,
     pub deleted_block: Option<tw_model::Block>,
     pub deleted_table_row: Option<(NodeId, usize, tw_model::TableRow)>,
     pub deleted_table_column: Option<(NodeId, usize, Vec<tw_model::TableCell>, f32)>,
@@ -1196,6 +1317,8 @@ pub struct EditResult {
     pub old_image_transform: Option<tw_model::ImageTransform>,
     pub old_image_caption_id: Option<Option<NodeId>>,
     pub find_replace_undo: Option<Vec<(NodeId, usize, String, String)>>,
+    /// Number of substitutions performed by the last [`Command::FindReplace`].
+    pub replacement_count: usize,
     /// Character boundary to re-split when undoing/redoing paragraph merges.
     pub split_boundary: Option<(NodeId, usize)>,
     /// Run text + revision snapshots for accept/reject undo.
@@ -1214,6 +1337,7 @@ pub struct EditResult {
     /// Seed run for header/footer editing (F08.S1).
     pub seed_run_id: Option<NodeId>,
     pub old_chart_data: Option<Option<tw_model::ChartData>>,
+    pub old_office_math_xml: Option<String>,
 }
 
 fn default_insert_shape_style() -> tw_model::ShapeStyle {
@@ -1240,6 +1364,8 @@ pub enum EditError {
     ThemeNotFound(String),
     #[error("invalid range")]
     InvalidRange,
+    #[error("invalid regex: {0}")]
+    InvalidRegex(String),
     #[error("invalid image data: {0}")]
     InvalidImageData(String),
     #[error("inverse not supported for command: {command}")]

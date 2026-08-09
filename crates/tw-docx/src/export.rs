@@ -102,6 +102,42 @@ pub fn export_docx(doc: &Document, package: &DocxPackage) -> Result<Vec<u8>, Doc
         ensure_styles_relationship(&mut pkg);
     }
 
+    if !doc.footnotes.is_empty() {
+        let footnotes_xml = serialize_footnotes_xml(
+            doc,
+            &pkg,
+            &mut media,
+            &charts,
+            &diagrams,
+            &mut RevisionIdAllocator::new(),
+        );
+        pkg.parts
+            .insert("word/footnotes.xml".into(), footnotes_xml.into_bytes());
+        pkg.mark_modified("word/footnotes.xml".into());
+        ensure_footnotes_content_type(&mut pkg);
+        ensure_footnotes_relationship(&mut pkg);
+    }
+
+    if !doc.bibliography_sources.is_empty() {
+        let bibliography_xml = crate::bibliography::serialize_bibliography_xml(&doc.bibliography_sources);
+        pkg.parts.insert(
+            crate::bibliography::BIBLIOGRAPHY_PART.into(),
+            bibliography_xml.into_bytes(),
+        );
+        pkg.mark_modified(crate::bibliography::BIBLIOGRAPHY_PART.into());
+        ensure_bibliography_content_type(&mut pkg);
+        ensure_bibliography_relationship(&mut pkg);
+    }
+
+    if !doc.comments.is_empty() {
+        let comments_xml = crate::comments::serialize_comments_xml(&doc.comments);
+        pkg.parts
+            .insert(crate::comments::COMMENTS_PART.into(), comments_xml.into_bytes());
+        pkg.mark_modified(crate::comments::COMMENTS_PART.into());
+        ensure_comments_content_type(&mut pkg);
+        ensure_comments_relationship(&mut pkg);
+    }
+
     media.commit(&mut pkg);
     charts.commit(&mut pkg);
     diagrams.commit(&mut pkg);
@@ -179,6 +215,156 @@ fn ensure_styles_relationship(pkg: &mut DocxPackage) {
     }
 }
 
+fn ensure_footnotes_content_type(pkg: &mut DocxPackage) {
+    let part = "[Content_Types].xml";
+    let bytes = pkg
+        .parts
+        .get(part)
+        .cloned()
+        .unwrap_or_else(|| MINIMAL_CONTENT_TYPES.to_vec());
+    let mut xml = String::from_utf8_lossy(&bytes).into_owned();
+    let override_tag = r#"<Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/>"#;
+    if !xml.contains("/word/footnotes.xml") {
+        if let Some(end) = xml.rfind("</Types>") {
+            xml.insert_str(end, override_tag);
+        } else {
+            xml.push_str(override_tag);
+        }
+        pkg.parts.insert(part.into(), xml.into_bytes());
+        pkg.mark_modified(part.into());
+    }
+}
+
+fn ensure_footnotes_relationship(pkg: &mut DocxPackage) {
+    let part = "word/_rels/document.xml.rels";
+    let bytes = pkg
+        .parts
+        .get(part)
+        .cloned()
+        .unwrap_or_else(|| b"<Relationships/>".to_vec());
+    let mut xml = String::from_utf8_lossy(&bytes).into_owned();
+    if !xml.contains("footnotes.xml") {
+        let rel = r#"<Relationship Id="rIdFootnotes" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes" Target="footnotes.xml"/>"#;
+        if let Some(end) = xml.rfind("</Relationships>") {
+            xml.insert_str(end, rel);
+        } else {
+            xml = format!("<Relationships>{rel}</Relationships>");
+        }
+        pkg.parts.insert(part.into(), xml.into_bytes());
+        pkg.mark_modified(part.into());
+    }
+}
+
+fn ensure_bibliography_content_type(pkg: &mut DocxPackage) {
+    let part = "[Content_Types].xml";
+    let bytes = pkg
+        .parts
+        .get(part)
+        .cloned()
+        .unwrap_or_else(|| MINIMAL_CONTENT_TYPES.to_vec());
+    let mut xml = String::from_utf8_lossy(&bytes).into_owned();
+    let override_tag = r#"<Override PartName="/word/bibliography.xml" ContentType="application/xml"/>"#;
+    if !xml.contains("/word/bibliography.xml") {
+        if let Some(end) = xml.rfind("</Types>") {
+            xml.insert_str(end, override_tag);
+        } else {
+            xml.push_str(override_tag);
+        }
+        pkg.parts.insert(part.into(), xml.into_bytes());
+        pkg.mark_modified(part.into());
+    }
+}
+
+fn ensure_bibliography_relationship(pkg: &mut DocxPackage) {
+    let part = "word/_rels/document.xml.rels";
+    let bytes = pkg
+        .parts
+        .get(part)
+        .cloned()
+        .unwrap_or_else(|| b"<Relationships/>".to_vec());
+    let mut xml = String::from_utf8_lossy(&bytes).into_owned();
+    if !xml.contains("bibliography.xml") {
+        let rel = r#"<Relationship Id="rIdBibliography" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="bibliography.xml"/>"#;
+        if let Some(end) = xml.rfind("</Relationships>") {
+            xml.insert_str(end, rel);
+        } else {
+            xml = format!("<Relationships>{rel}</Relationships>");
+        }
+        pkg.parts.insert(part.into(), xml.into_bytes());
+        pkg.mark_modified(part.into());
+    }
+}
+
+fn ensure_comments_content_type(pkg: &mut DocxPackage) {
+    let part = "[Content_Types].xml";
+    let bytes = pkg
+        .parts
+        .get(part)
+        .cloned()
+        .unwrap_or_else(|| MINIMAL_CONTENT_TYPES.to_vec());
+    let mut xml = String::from_utf8_lossy(&bytes).into_owned();
+    let override_tag = r#"<Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/>"#;
+    if !xml.contains("/word/comments.xml") {
+        if let Some(end) = xml.rfind("</Types>") {
+            xml.insert_str(end, override_tag);
+        } else {
+            xml.push_str(override_tag);
+        }
+        pkg.parts.insert(part.into(), xml.into_bytes());
+        pkg.mark_modified(part.into());
+    }
+}
+
+fn ensure_comments_relationship(pkg: &mut DocxPackage) {
+    let part = "word/_rels/document.xml.rels";
+    let bytes = pkg
+        .parts
+        .get(part)
+        .cloned()
+        .unwrap_or_else(|| b"<Relationships/>".to_vec());
+    let mut xml = String::from_utf8_lossy(&bytes).into_owned();
+    if !xml.contains("comments.xml") {
+        let rel = r#"<Relationship Id="rIdComments" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/>"#;
+        if let Some(end) = xml.rfind("</Relationships>") {
+            xml.insert_str(end, rel);
+        } else {
+            xml = format!("<Relationships>{rel}</Relationships>");
+        }
+        pkg.parts.insert(part.into(), xml.into_bytes());
+        pkg.mark_modified(part.into());
+    }
+}
+
+fn serialize_footnotes_xml(
+    doc: &Document,
+    package: &DocxPackage,
+    media: &mut MediaWriter,
+    charts: &crate::chart::ChartWriter,
+    diagrams: &crate::diagram::DiagramWriter,
+    revision_ids: &mut RevisionIdAllocator,
+) -> String {
+    let mut xml = String::from(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"#,
+    );
+    xml.push_str(
+        r#"<w:footnote w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>"#,
+    );
+    xml.push_str(
+        r#"<w:footnote w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>"#,
+    );
+    for footnote in &doc.footnotes {
+        xml.push_str(&format!(r#"<w:footnote w:id="{}">"#, footnote.id));
+        for block in &footnote.blocks {
+            xml.push_str(&serialize_block(
+                block, doc, package, media, charts, diagrams, revision_ids,
+            ));
+        }
+        xml.push_str("</w:footnote>");
+    }
+    xml.push_str("</w:footnotes>");
+    xml
+}
+
 fn serialize_document_xml(
     doc: &Document,
     source: &DocxPackage,
@@ -214,7 +400,7 @@ fn serialize_document_xml(
 
     format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">
   <w:body>{body}</w:body>
 </w:document>"#
     )
@@ -246,6 +432,19 @@ fn serialize_paragraph(
     package: &DocxPackage,
     revision_ids: &mut RevisionIdAllocator,
 ) -> String {
+    if para.runs.len() == 1 {
+        if let RunContent::OfficeMath { xml } = &para.runs[0].content {
+            if xml.contains("<m:oMathPara") {
+                if let Some(preserved) = package.preserved_paragraphs.get(&para.id) {
+                    if preserved.fingerprint == crate::fingerprint::paragraph_fingerprint(para) {
+                        return preserved.xml.clone();
+                    }
+                }
+                return xml.clone();
+            }
+        }
+    }
+
     if let Some(preserved) = package.preserved_paragraphs.get(&para.id) {
         if preserved.fingerprint == crate::fingerprint::paragraph_fingerprint(para) {
             return preserved.xml.clone();
@@ -461,6 +660,21 @@ fn serialize_run(run: &Run, revision_ids: &mut RevisionIdAllocator) -> String {
     );
 
     let content = match &run.content {
+        RunContent::OfficeMath { xml } => {
+            return match &run.revision {
+                Some(rev) => {
+                    let deleted = matches!(rev.revision_type, tw_model::RevisionType::Delete);
+                    let tag = if deleted { "w:del" } else { "w:ins" };
+                    format!(
+                        r#"<{tag} w:id="{}" w:author="{}" w:date="{}">{xml}</{tag}>"#,
+                        revision_ids.id_for(&rev.id),
+                        escape_xml(&rev.author),
+                        rev.timestamp.to_rfc3339()
+                    )
+                }
+                None => xml.clone(),
+            };
+        }
         RunContent::Text(text) => serialize_text(text, deleted),
         RunContent::Tab => "<w:tab/>".to_string(),
         RunContent::Break(tw_model::BreakType::Page) => r#"<w:br w:type="page"/>"#.to_string(),
@@ -472,10 +686,11 @@ fn serialize_run(run: &Run, revision_ids: &mut RevisionIdAllocator) -> String {
                 .instruction
                 .clone()
                 .unwrap_or_else(|| tw_model::field_instruction(&field.field_type));
+            let display = field.display_text.as_deref().unwrap_or("");
             let inner = format!(
                 "<w:r>{}{}</w:r>",
                 serialize_run_properties(&run.format),
-                serialize_text("", false)
+                serialize_text(display, deleted)
             );
             return format!(
                 r#"<w:fldSimple w:instr="{}">{}</w:fldSimple>"#,
@@ -484,9 +699,36 @@ fn serialize_run(run: &Run, revision_ids: &mut RevisionIdAllocator) -> String {
             );
         }
         RunContent::InlineImage(_) => "<w:t>[image]</w:t>".to_string(),
-        RunContent::FootnoteRef(_) => "<w:footnoteReference/>".to_string(),
-        RunContent::CommentRef(_) => "<w:commentReference/>".to_string(),
-        RunContent::Bookmark(b) => serialize_text(&format!("[{}]", b.name), deleted),
+        RunContent::FootnoteRef(note) => {
+            format!(r#"<w:footnoteReference w:id="{}"/>"#, note.note_id)
+        }
+        RunContent::CitationRef(cite) => {
+            let instr = format!(" CITATION {} \\l 1033 ", cite.source_key);
+            let display = cite
+                .display_text
+                .as_deref()
+                .unwrap_or("(?)");
+            let inner = format!(
+                "<w:r>{}{}</w:r>",
+                serialize_run_properties(&run.format),
+                serialize_text(display, deleted)
+            );
+            return format!(
+                r#"<w:fldSimple w:instr="{}">{}</w:fldSimple>"#,
+                escape_xml(instr.trim()),
+                inner
+            );
+        }
+        RunContent::CommentRef(c) => {
+            format!(r#"<w:commentReference w:id="{}"/>"#, c.comment_id)
+        }
+        RunContent::Bookmark(b) => {
+            let id = b.bookmark_id.unwrap_or(0);
+            return format!(
+                r#"<w:bookmarkStart w:id="{id}" w:name="{}"/>"#,
+                escape_xml(&b.name)
+            );
+        }
         _ => serialize_text(run.content.display_text(), deleted),
     };
 

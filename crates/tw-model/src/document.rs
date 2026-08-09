@@ -1,11 +1,13 @@
 use crate::ids::NodeId;
 use crate::list::NumberingCatalog;
-use crate::nodes::{Block, Paragraph, Run, Section};
+use crate::nodes::{Block, Paragraph, Run, RunContent, Section};
 use crate::properties::DocumentProperties;
 use crate::styles::StyleSheet;
 use crate::table::Table;
 use crate::theme::DocumentTheme;
-use crate::vocabulary::{BlockZone, HeaderFooter, HeaderFooterType, RunLocation};
+use crate::bibliography::BibliographySource;
+use crate::comments::CommentThread;
+use crate::vocabulary::{BlockZone, Footnote, HeaderFooter, HeaderFooterType, RunLocation};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -47,6 +49,15 @@ pub struct Document {
     #[serde(default)]
     pub properties: DocumentProperties,
     pub sections: Vec<Section>,
+    /// Footnote bodies keyed by OOXML `w:id` (F16.S1).
+    #[serde(default)]
+    pub footnotes: Vec<Footnote>,
+    /// Bibliography sources keyed by citation tag (F16.S3).
+    #[serde(default)]
+    pub bibliography_sources: Vec<BibliographySource>,
+    /// Comment threads keyed by OOXML `w:id` (F17.S3).
+    #[serde(default)]
+    pub comments: Vec<CommentThread>,
 }
 
 impl Document {
@@ -57,6 +68,9 @@ impl Document {
             settings: DocumentSettings::default_settings(),
             properties: DocumentProperties::default(),
             sections: vec![Section::new()],
+            footnotes: Vec::new(),
+            bibliography_sources: Vec::new(),
+            comments: Vec::new(),
         }
     }
 
@@ -578,6 +592,125 @@ impl Document {
             }
         }
         None
+    }
+
+    pub fn run_by_id(&self, run_id: NodeId) -> Option<&Run> {
+        self.find_run_location(run_id)
+            .and_then(|loc| self.run_at(loc))
+    }
+
+    pub fn footnote_by_id(&self, id: i32) -> Option<&Footnote> {
+        self.footnotes.iter().find(|note| note.id == id)
+    }
+
+    pub fn footnote_by_id_mut(&mut self, id: i32) -> Option<&mut Footnote> {
+        self.footnotes.iter_mut().find(|note| note.id == id)
+    }
+
+    /// Next available OOXML footnote id (reserved: -1 separator, 0 continuation).
+    pub fn next_footnote_id(&self) -> i32 {
+        let max_body = self.footnotes.iter().map(|f| f.id).max().unwrap_or(0);
+        let max_ref = self
+            .sections
+            .iter()
+            .flat_map(|section| section.blocks.iter())
+            .filter_map(|block| block.paragraph())
+            .flat_map(|para| para.runs.iter())
+            .filter_map(|run| match &run.content {
+                RunContent::FootnoteRef(note) => Some(note.note_id),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0);
+        max_body.max(max_ref).max(0) + 1
+    }
+
+    /// Assigns display numbers 1, 2, 3… in body paragraph order (F16.S1).
+    pub fn renumber_footnotes(&mut self) {
+        let mut number = 1u32;
+        for section in &mut self.sections {
+            Self::renumber_footnotes_in_blocks(&mut section.blocks, &mut number);
+        }
+    }
+
+    fn renumber_footnotes_in_blocks(blocks: &mut [Block], number: &mut u32) {
+        for block in blocks {
+            match block {
+                Block::Paragraph(para) => {
+                    for run in &mut para.runs {
+                        if let RunContent::FootnoteRef(note) = &mut run.content {
+                            note.display_number = Some(*number);
+                            *number += 1;
+                        }
+                    }
+                }
+                Block::Table(table) => {
+                    for row in &mut table.rows {
+                        for cell in &mut row.cells {
+                            Self::renumber_footnotes_in_blocks(&mut cell.blocks, number);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    pub fn comment_thread_by_id(&self, id: i32) -> Option<&CommentThread> {
+        self.comments.iter().find(|thread| thread.comment_id == id)
+    }
+
+    pub fn comment_thread_by_id_mut(&mut self, id: i32) -> Option<&mut CommentThread> {
+        self.comments.iter_mut().find(|thread| thread.comment_id == id)
+    }
+
+    /// Next available OOXML comment id.
+    pub fn next_comment_id(&self) -> i32 {
+        let max_body = self.comments.iter().map(|c| c.comment_id).max().unwrap_or(-1);
+        let max_ref = self
+            .sections
+            .iter()
+            .flat_map(|section| section.blocks.iter())
+            .filter_map(|block| block.paragraph())
+            .flat_map(|para| para.runs.iter())
+            .filter_map(|run| match &run.content {
+                RunContent::CommentRef(c) => Some(c.comment_id),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(-1);
+        max_body.max(max_ref) + 1
+    }
+
+    /// Assigns display numbers 1, 2, 3… in body paragraph order (F17.S3).
+    pub fn renumber_comments(&mut self) {
+        let mut number = 1u32;
+        for section in &mut self.sections {
+            Self::renumber_comments_in_blocks(&mut section.blocks, &mut number);
+        }
+    }
+
+    fn renumber_comments_in_blocks(blocks: &mut [Block], number: &mut u32) {
+        for block in blocks {
+            match block {
+                Block::Paragraph(para) => {
+                    for run in &mut para.runs {
+                        if let RunContent::CommentRef(c) = &mut run.content {
+                            c.display_number = Some(*number);
+                            *number += 1;
+                        }
+                    }
+                }
+                Block::Table(table) => {
+                    for row in &mut table.rows {
+                        for cell in &mut row.cells {
+                            Self::renumber_comments_in_blocks(&mut cell.blocks, number);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 }
 

@@ -1,8 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:tutuaword/editor/document_view.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
 import 'package:tutuaword/editor/editor_menu.dart';
 import 'package:tutuaword/ui/document_properties_dialog.dart';
+import 'package:tutuaword/ui/find_pane.dart';
 import 'package:tutuaword/ui/info_bar.dart';
 import 'package:tutuaword/ui/ribbon.dart';
 import 'package:tutuaword/ui/status_bar.dart';
@@ -70,18 +74,56 @@ class _EditorScreenState extends State<EditorScreen> {
       onShowPasteSpecial: () => _controller.showPasteSpecialDialog(context),
       child: Material(
         color: WordTheme.tabStripSurface,
-        child: Column(
-          children: [
-            WordTitleBar(controller: _controller),
-            WordRibbon(key: _ribbonKey, controller: _controller),
-            InfoBar(controller: _controller),
-            Expanded(
-              child: DocumentView(controller: _controller),
+        child: Shortcuts(
+          shortcuts: const <ShortcutActivator, Intent>{
+            SingleActivator(LogicalKeyboardKey.keyF, meta: true): _OpenFindIntent(),
+            SingleActivator(LogicalKeyboardKey.keyF, control: true): _OpenFindIntent(),
+            SingleActivator(LogicalKeyboardKey.keyA, meta: true): _SelectAllDocumentIntent(),
+            SingleActivator(LogicalKeyboardKey.keyA, control: true): _SelectAllDocumentIntent(),
+          },
+          child: Actions(
+            actions: <Type, Action<Intent>>{
+              _OpenFindIntent: CallbackAction<_OpenFindIntent>(
+                onInvoke: (_) {
+                  _controller.openFindPane();
+                  return null;
+                },
+              ),
+              _SelectAllDocumentIntent: CallbackAction<_SelectAllDocumentIntent>(
+                onInvoke: (_) {
+                  unawaited(_controller.selectAll());
+                  return null;
+                },
+              ),
+            },
+            child: Column(
+              children: [
+                WordTitleBar(
+                  controller: _controller,
+                  onHomePressed: () =>
+                      _ribbonKey.currentState?.selectTab(RibbonTab.home),
+                ),
+                WordRibbon(key: _ribbonKey, controller: _controller),
+                if (_controller.findPaneVisible)
+                  FindPane(controller: _controller),
+                InfoBar(controller: _controller),
+                Expanded(
+                  child: DocumentView(controller: _controller),
+                ),
+                WordStatusBar(controller: _controller),
+              ],
             ),
-            WordStatusBar(controller: _controller),
-          ],
+          ),
         ),
       ),
     );
   }
+}
+
+class _OpenFindIntent extends Intent {
+  const _OpenFindIntent();
+}
+
+class _SelectAllDocumentIntent extends Intent {
+  const _SelectAllDocumentIntent();
 }

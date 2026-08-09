@@ -1,39 +1,56 @@
-use std::collections::HashSet;
+mod suggest;
+mod grammar;
 
+use std::collections::{HashMap, HashSet};
+
+use suggest::rank_suggestions;
 use unicode_segmentation::UnicodeSegmentation;
+
+pub use grammar::{GrammarChecker, GrammarIssue};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpellIssue {
     pub word: String,
     pub start: usize,
     pub end: usize,
+    pub suggestions: Vec<String>,
 }
 
+/// Embedded English spell checker with Hunspell-compatible `check` + `suggest` API.
 pub struct SpellChecker {
     words: HashSet<String>,
+    word_rank: HashMap<String, usize>,
     locale: String,
 }
 
 impl SpellChecker {
     pub fn english() -> Self {
-        let mut words: HashSet<String> = ENGLISH_CORE
-            .split_whitespace()
-            .map(|w| w.to_ascii_lowercase())
-            .collect();
-        words.extend(
-            INDIC_LATIN_TOKENS
-                .split_whitespace()
-                .map(|w| w.to_ascii_lowercase()),
-        );
+        let mut words = HashSet::new();
+        let mut word_rank = HashMap::new();
+        for (rank, token) in ENGLISH_CORE.split_whitespace().enumerate() {
+            let word = token.to_ascii_lowercase();
+            words.insert(word.clone());
+            word_rank.entry(word).or_insert(rank);
+        }
+        for token in INDIC_LATIN_TOKENS.split_whitespace() {
+            let word = token.to_ascii_lowercase();
+            words.insert(word.clone());
+            word_rank.entry(word).or_insert(usize::MAX);
+        }
         Self {
             words,
+            word_rank,
             locale: "en".into(),
         }
     }
 
     pub fn with_extra_words(words: impl IntoIterator<Item = String>) -> Self {
         let mut checker = Self::english();
-        checker.words.extend(words.into_iter().map(|w| w.to_ascii_lowercase()));
+        for word in words {
+            let normalized = word.to_ascii_lowercase();
+            checker.words.insert(normalized.clone());
+            checker.word_rank.entry(normalized).or_insert(usize::MAX);
+        }
         checker
     }
 
@@ -49,6 +66,21 @@ impl SpellChecker {
         self.words.contains(&normalized)
     }
 
+    /// Hunspell-style suggestions for a misspelled token.
+    pub fn suggest(&self, word: &str, limit: usize) -> Vec<String> {
+        let normalized = normalize_word(word);
+        if normalized.is_empty() || self.is_correct(word) {
+            return Vec::new();
+        }
+        rank_suggestions(
+            &normalized,
+            self.words.iter().map(String::as_str),
+            limit,
+            2,
+            |candidate| self.word_rank.get(candidate).copied().unwrap_or(usize::MAX),
+        )
+    }
+
     pub fn check_text(&self, text: &str) -> Vec<SpellIssue> {
         let mut issues = Vec::new();
         let mut offset = 0usize;
@@ -59,6 +91,7 @@ impl SpellChecker {
                     word: word.to_string(),
                     start: offset,
                     end: offset + len,
+                    suggestions: self.suggest(word, 5),
                 });
             }
             offset += len;
@@ -128,5 +161,27 @@ mod tests {
     fn ignores_numbers_and_punctuation_only_tokens() {
         let checker = SpellChecker::english();
         assert!(checker.check_text("2026 — 100%").is_empty());
+    }
+
+    #[test]
+    fn suggest_returns_the_for_teh() {
+        let checker = SpellChecker::english();
+        let suggestions = checker.suggest("teh", 5);
+        assert!(
+            suggestions.first().map(String::as_str) == Some("the"),
+            "expected 'the' first, got {suggestions:?}"
+        );
+    }
+
+    #[test]
+    fn check_text_attaches_suggestions() {
+        let checker = SpellChecker::english();
+        let issues = checker.check_text("Teh");
+        assert_eq!(issues.len(), 1);
+        assert!(
+            issues[0].suggestions.iter().any(|s| s == "the"),
+            "suggestions: {:?}",
+            issues[0].suggestions
+        );
     }
 }

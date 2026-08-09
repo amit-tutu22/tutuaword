@@ -99,6 +99,9 @@ void main() {
       );
       expect(find.byIcon(Icons.link), findsNothing);
 
+      controller.insertSectionBreak();
+      await settleEngineStyle(tester);
+      controller.selectionController.setCaret(engine.defaultRunId, 0, page: 1);
       await controller.openHeaderEdit();
       await settleEngineStyle(tester);
 
@@ -114,7 +117,7 @@ void main() {
       await settleEngineStyle(tester);
 
       expect(controller.headerFooterLinked, isFalse);
-      expect(engine.fetchHeaderFooterLinked(isHeader: true), isFalse);
+      expect(engine.fetchHeaderFooterLinked(isHeader: true, pageIndex: 1), isFalse);
       expect(controller.sessionController.statusText, contains('Unlinked from previous'));
     });
   });

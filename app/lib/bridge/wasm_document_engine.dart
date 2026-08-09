@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:tutuaword/bridge/document_engine.dart';
 import 'package:tutuaword/bridge/document_properties.dart';
 import 'package:tutuaword/bridge/engine_types.dart';
+import 'package:tutuaword/bridge/find_format_filter.dart';
+import 'package:tutuaword/bridge/find_match.dart';
 import 'package:tutuaword/bridge/wasm_engine_web.dart';
 
 /// Adapts [WasmEngine] to [DocumentEngine].
@@ -43,6 +45,18 @@ class WasmDocumentEngine implements DocumentEngine {
   @override
   String? fetchSectionFormat({String? caretRunId}) =>
       _inner.fetchSectionFormat(caretRunId: caretRunId);
+
+  @override
+  String? fetchChartDataJson(String shapeId) => _inner.fetchChartDataJson(shapeId);
+
+  @override
+  String? latestChartId() => _inner.latestChartId();
+
+  @override
+  String? fetchOfficeMathXml(String runId) => _inner.fetchOfficeMathXml(runId);
+
+  @override
+  String? latestOfficeMathRunId() => _inner.latestOfficeMathRunId();
 
   @override
   String? fetchDocumentOutline() => _inner.fetchDocumentOutline();
@@ -260,6 +274,83 @@ class WasmDocumentEngine implements DocumentEngine {
       _inner.insertFieldAsync(runId: runId, offset: offset, fieldType: fieldType);
 
   @override
+  Future<bool> insertFootnoteAsync({
+    required String runId,
+    required int offset,
+  }) =>
+      _inner.insertFootnoteAsync(runId: runId, offset: offset);
+
+  @override
+  Future<bool> insertCommentAsync({
+    required String runId,
+    required int offset,
+    String bodyText = '',
+  }) =>
+      _inner.insertCommentAsync(
+        runId: runId,
+        offset: offset,
+        bodyText: bodyText,
+      );
+
+  @override
+  Future<bool> insertTableOfContentsAsync({String? caretRunId}) =>
+      _inner.insertTableOfContentsAsync(caretRunId: caretRunId);
+
+  @override
+  Future<bool> addBibliographySourceAsync({
+    required String key,
+    required String author,
+    required String title,
+    required String year,
+  }) =>
+      _inner.addBibliographySourceAsync(
+        key: key,
+        author: author,
+        title: title,
+        year: year,
+      );
+
+  @override
+  Future<bool> insertCitationAsync({
+    required String runId,
+    required int offset,
+    required String sourceKey,
+  }) =>
+      _inner.insertCitationAsync(
+        runId: runId,
+        offset: offset,
+        sourceKey: sourceKey,
+      );
+
+  @override
+  Future<bool> insertBibliographyAsync({String? caretRunId}) =>
+      _inner.insertBibliographyAsync(caretRunId: caretRunId);
+
+  @override
+  Future<bool> insertBookmarkAsync({
+    required String runId,
+    required int offset,
+    required String name,
+  }) =>
+      _inner.insertBookmarkAsync(runId: runId, offset: offset, name: name);
+
+  @override
+  Future<bool> insertCrossReferenceAsync({
+    required String runId,
+    required int offset,
+    required String bookmarkName,
+  }) =>
+      _inner.insertCrossReferenceAsync(
+        runId: runId,
+        offset: offset,
+        bookmarkName: bookmarkName,
+      );
+
+  @override
+  Future<bool> insertIndexAsync({String? caretRunId}) =>
+      _inner.insertIndexAsync(caretRunId: caretRunId);
+
+  @override
   bool setCurrentPageIndex(int page) => _inner.setCurrentPageIndex(page);
 
   @override
@@ -400,6 +491,33 @@ class WasmDocumentEngine implements DocumentEngine {
       _inner.insertChartAsync(chartType: chartType);
 
   @override
+  Future<bool> setChartDataAsync(String shapeId, Map<String, dynamic> chartData) =>
+      _inner.setChartDataAsync(shapeId, chartData);
+
+  @override
+  Future<bool> insertOfficeMathAsync({
+    required String runId,
+    required int offset,
+    required String xml,
+  }) =>
+      _inner.insertOfficeMathAsync(runId: runId, offset: offset, xml: xml);
+
+  @override
+  Future<bool> insertOfficeMathDisplayAsync({
+    String? caretRunId,
+    required String xml,
+  }) =>
+      _inner.insertOfficeMathDisplayAsync(caretRunId: caretRunId, xml: xml);
+
+  @override
+  Future<bool> setOfficeMathAsync(String runId, String xml) =>
+      _inner.setOfficeMathAsync(runId, xml);
+
+  @override
+  Future<bool> deleteBlockAsync(String blockId) =>
+      _inner.deleteBlockAsync(blockId);
+
+  @override
   Future<bool> insertImageBytesAsync(Uint8List bytes, String mimeType) =>
       _inner.insertImageBytesAsync(bytes, mimeType);
 
@@ -473,6 +591,48 @@ class WasmDocumentEngine implements DocumentEngine {
   List<String>? spellCheckMisspellings() => _inner.spellCheckMisspellings();
 
   @override
+  List<String>? grammarCheckIssues() => _inner.grammarCheckIssues();
+
+  @override
+  List<FindMatch>? findMatches(
+    String query,
+    bool matchCase, {
+    bool useRegex = false,
+    bool useWildcards = false,
+    FindFormatFilter formatFilter = FindFormatFilter.none,
+  }) =>
+      _inner.findMatches(
+        query,
+        matchCase,
+        useRegex: useRegex,
+        useWildcards: useWildcards,
+        formatFilter: formatFilter,
+      );
+
+  @override
+  Future<int?> replaceAll(
+    String find,
+    String replace,
+    bool matchCase, {
+    bool useRegex = false,
+    bool useWildcards = false,
+  }) =>
+      _inner.replaceAll(
+        find,
+        replace,
+        matchCase,
+        useRegex: useRegex,
+        useWildcards: useWildcards,
+      );
+
+  @override
+  String? compareDocumentText(String otherText) =>
+      _inner.compareDocumentText(otherText);
+
+  @override
+  bool setReadOnlyEnabled(bool enabled) => _inner.setReadOnlyEnabled(enabled);
+
+  @override
   bool setTrackChangesEnabled(bool enabled) =>
       _inner.setTrackChangesEnabled(enabled);
 
@@ -481,4 +641,16 @@ class WasmDocumentEngine implements DocumentEngine {
 
   @override
   bool rejectAllRevisions() => _inner.rejectAllRevisions();
+
+  @override
+  bool acceptRevisionAtCaret({String? caretRunId}) =>
+      _inner.acceptRevisionAtCaret(caretRunId: caretRunId);
+
+  @override
+  bool rejectRevisionAtCaret({String? caretRunId}) =>
+      _inner.rejectRevisionAtCaret(caretRunId: caretRunId);
+
+  @override
+  String? adjacentRevisionRunId(String? caretRunId, {required bool forward}) =>
+      _inner.adjacentRevisionRunId(caretRunId, forward: forward);
 }

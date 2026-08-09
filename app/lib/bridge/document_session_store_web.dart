@@ -8,6 +8,7 @@ class DocumentSessionStore {
   DocumentSessionStore();
 
   static const maxRecentFiles = 10;
+  static const maxRecentSymbols = 12;
   static const defaultAutosaveInterval = Duration(seconds: 60);
 
   static DocumentSessionStore? _defaultInstance;
@@ -18,6 +19,7 @@ class DocumentSessionStore {
 
   AutosaveSnapshot? _autosave;
   List<RecentDocumentEntry> _recentEntries = const [];
+  List<String> _recentSymbolIds = const [];
   Duration _autosaveInterval = defaultAutosaveInterval;
 
   Future<void> writeAutosave({
@@ -54,6 +56,12 @@ class DocumentSessionStore {
     await saveRecentEntries(
       paths.map((path) => RecentDocumentEntry(path: path)).toList(),
     );
+  }
+
+  List<String> loadRecentSymbolIds() => _recentSymbolIds;
+
+  Future<void> saveRecentSymbolIds(List<String> ids) async {
+    _recentSymbolIds = ids.take(maxRecentSymbols).toList();
   }
 
   List<RecentDocumentEntry> bumpRecentEntry(

@@ -144,6 +144,8 @@ pub enum BridgeCommand {
     SaveDocument,
     SaveDocumentAs { format: DetectedFormat },
     SpellCheckDocument,
+    GrammarCheckDocument,
+    SetReadOnly { enabled: bool },
     ToggleTrackChanges { enabled: bool },
     ApplyEdit { command: Command },
     SetCurrentPage { page: u32 },
@@ -189,6 +191,10 @@ pub enum BridgeEvent {
         request_id: u64,
         misspellings: Vec<String>,
     },
+    GrammarCheckResult {
+        request_id: u64,
+        issues: Vec<String>,
+    },
     Error {
         request_id: u64,
         message: String,
@@ -202,6 +208,7 @@ impl BridgeEvent {
             BridgeEvent::DocumentOpened { request_id, .. } => *request_id,
             BridgeEvent::DocumentSaved { request_id, .. } => *request_id,
             BridgeEvent::SpellCheckResult { request_id, .. } => *request_id,
+            BridgeEvent::GrammarCheckResult { request_id, .. } => *request_id,
             BridgeEvent::Error { request_id, .. } => *request_id,
         }
     }
@@ -591,6 +598,26 @@ impl WorkerCore {
                     misspellings: words,
                 });
             }
+            BridgeCommand::GrammarCheckDocument => {
+                let checker = tw_spell::GrammarChecker::english();
+                let text = document_plain_text(&self.session.document);
+                let issues = checker.check_text(&text);
+                let messages: Vec<String> = issues.into_iter().map(|i| i.message).collect();
+                self.events.send(BridgeEvent::GrammarCheckResult {
+                    request_id: req_id,
+                    issues: messages,
+                });
+            }
+            BridgeCommand::SetReadOnly { enabled } => {
+                self.session.document.settings.read_only = enabled;
+                self.rebuild(Relayout::Full)
+                    .expect("full rebuild always produces a layout");
+                self.events.send(BridgeEvent::DisplayListReady {
+                    request_id: req_id,
+                    page: self.current_page,
+                    version: self.version,
+                });
+            }
             BridgeCommand::ToggleTrackChanges { enabled } => {
                 self.session.document.settings.track_changes_enabled = enabled;
             }
@@ -660,6 +687,13 @@ impl WorkerCore {
                 }
             },
             BridgeCommand::ApplyEdit { command } => {
+                if self.session.document.settings.read_only {
+                    self.events.send(BridgeEvent::Error {
+                        request_id: req_id,
+                        message: "document is read-only".into(),
+                    });
+                    return Flow::Continue;
+                }
                 let mut commands = vec![command];
                 let mut request_ids = vec![req_id];
                 while let Some(next) = next_command() {

@@ -151,14 +151,13 @@ impl DisplayListBuilder {
                     }
                 }
                 LayoutBox::Shape(shape) => {
-                    if shape.shape_type == tw_model::ShapeKind::Diagram
-                        || shape.shape_type == tw_model::ShapeKind::Chart
-                    {
-                        shape_selection_batch.shape_ids.push(shape.shape_id.to_string());
-                        shape_selection_batch
-                            .rects
-                            .extend_from_slice(&[shape.x, shape.y, shape.width, shape.height]);
-                    }
+                    // All inserted shapes participate in object selection (F11–F13).
+                    shape_selection_batch
+                        .shape_ids
+                        .push(shape.shape_id.to_string());
+                    shape_selection_batch
+                        .rects
+                        .extend_from_slice(&[shape.x, shape.y, shape.width, shape.height]);
                     if shape.fill.is_none() && shape.stroke.is_none() {
                         match shape.shape_type {
                             tw_model::ShapeKind::Chart if shape.chart_data.is_some() => {
@@ -183,6 +182,15 @@ impl DisplayListBuilder {
                     }
                 }
                 LayoutBox::Table(table) => {
+                    shape_selection_batch
+                        .shape_ids
+                        .push(table.table_id.to_string());
+                    shape_selection_batch.rects.extend_from_slice(&[
+                        table.x,
+                        table.y,
+                        table.width,
+                        table.height,
+                    ]);
                     append_table_layout(table, &mut rect_batch, &mut path_batch, &mut atlas_batch);
                 }
             }

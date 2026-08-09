@@ -1,5 +1,5 @@
 use parking_lot::Mutex;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::ffi::{c_char, CStr};
 use std::slice;
@@ -98,6 +98,7 @@ fn bridge_event_type(event: &BridgeEvent) -> u32 {
         BridgeEvent::DocumentOpened { .. } => TW_EVENT_DOCUMENT_OPENED,
         BridgeEvent::DocumentSaved { .. } => TW_EVENT_DOCUMENT_SAVED,
         BridgeEvent::SpellCheckResult { .. } => TW_EVENT_SPELL_CHECK_RESULT,
+        BridgeEvent::GrammarCheckResult { .. } => TW_EVENT_SPELL_CHECK_RESULT,
         BridgeEvent::Error { .. } => TW_EVENT_ERROR,
     }
 }
@@ -213,6 +214,9 @@ impl AsyncResultStore {
             BridgeEvent::DocumentSaved { data, .. } => AsyncResult::Done(data.clone()),
             BridgeEvent::SpellCheckResult { misspellings, .. } => {
                 AsyncResult::Done(misspellings.join("\n").into_bytes())
+            }
+            BridgeEvent::GrammarCheckResult { issues, .. } => {
+                AsyncResult::Done(issues.join("\n").into_bytes())
             }
             BridgeEvent::Error { .. } => AsyncResult::Failed,
             BridgeEvent::DisplayListReady { .. } => return,
@@ -387,6 +391,22 @@ fn wait_for_spell_check(
     wait_for_request(session, request_id, BLOCKING_WAIT, |event| match event {
         BridgeEvent::SpellCheckResult { misspellings, .. } => {
             transfer_bytes_to_caller(misspellings.join("\n").into_bytes(), out_ptr, out_len);
+            Some(0)
+        }
+        BridgeEvent::Error { .. } => Some(-2),
+        _ => None,
+    })
+}
+
+fn wait_for_grammar_check(
+    session: &Session,
+    request_id: u64,
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    wait_for_request(session, request_id, BLOCKING_WAIT, |event| match event {
+        BridgeEvent::GrammarCheckResult { issues, .. } => {
+            transfer_bytes_to_caller(issues.join("\n").into_bytes(), out_ptr, out_len);
             Some(0)
         }
         BridgeEvent::Error { .. } => Some(-2),
@@ -1162,6 +1182,193 @@ pub extern "C" fn tw_insert_field(
                 offset.max(0) as usize,
                 field_type,
             ) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_insert_footnote(run_id_ptr: *const c_char, offset: i32) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(run_id) = parse_node_id(run_id_ptr) else {
+                return -3;
+            };
+            let Some(request_id) =
+                session.insert_footnote_at(run_id, offset.max(0) as usize)
+            else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_insert_comment(
+    run_id_ptr: *const c_char,
+    offset: i32,
+    body_ptr: *const c_char,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(run_id) = parse_node_id(run_id_ptr) else {
+                return -3;
+            };
+            let body = if body_ptr.is_null() {
+                String::new()
+            } else {
+                unsafe { CStr::from_ptr(body_ptr) }
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            let Some(request_id) = session.insert_comment_at(
+                run_id,
+                offset.max(0) as usize,
+                body,
+            ) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_insert_table_of_contents(caret_run_id_ptr: *const c_char) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let caret_run_id = parse_node_id(caret_run_id_ptr);
+            let Some(request_id) = session.insert_table_of_contents_at(caret_run_id) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_add_bibliography_source(
+    key_ptr: *const c_char,
+    author_ptr: *const c_char,
+    title_ptr: *const c_char,
+    year_ptr: *const c_char,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(key) = parse_cstr(key_ptr) else {
+                return -3;
+            };
+            let author = parse_cstr(author_ptr).unwrap_or_default();
+            let title = parse_cstr(title_ptr).unwrap_or_default();
+            let year = parse_cstr(year_ptr).unwrap_or_default();
+            let Some(request_id) = session.add_bibliography_source(tw_model::BibliographySource::new(
+                key, author, title, year,
+            )) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_insert_citation(
+    run_id_ptr: *const c_char,
+    offset: i32,
+    source_key_ptr: *const c_char,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(run_id) = parse_node_id(run_id_ptr) else {
+                return -3;
+            };
+            let Some(source_key) = parse_cstr(source_key_ptr) else {
+                return -3;
+            };
+            let Some(request_id) = session.insert_citation_at(
+                run_id,
+                offset.max(0) as usize,
+                &source_key,
+            ) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_insert_bibliography(caret_run_id_ptr: *const c_char) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let caret_run_id = parse_node_id(caret_run_id_ptr);
+            let Some(request_id) = session.insert_bibliography_at(caret_run_id) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_insert_bookmark(
+    run_id_ptr: *const c_char,
+    offset: i32,
+    name_ptr: *const c_char,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(run_id) = parse_node_id(run_id_ptr) else {
+                return -3;
+            };
+            let Some(name) = parse_cstr(name_ptr) else {
+                return -3;
+            };
+            let Some(request_id) =
+                session.insert_bookmark_at(run_id, offset.max(0) as usize, &name)
+            else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_insert_cross_reference(
+    run_id_ptr: *const c_char,
+    offset: i32,
+    bookmark_name_ptr: *const c_char,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(run_id) = parse_node_id(run_id_ptr) else {
+                return -3;
+            };
+            let Some(bookmark_name) = parse_cstr(bookmark_name_ptr) else {
+                return -3;
+            };
+            let Some(request_id) = session.insert_cross_reference_at(
+                run_id,
+                offset.max(0) as usize,
+                &bookmark_name,
+            ) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_insert_index(caret_run_id_ptr: *const c_char) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let caret_run_id = parse_node_id(caret_run_id_ptr);
+            let Some(request_id) = session.insert_index_at(caret_run_id) else {
                 return -4;
             };
             finish_edit_enqueue(request_id)
@@ -1973,6 +2180,208 @@ pub extern "C" fn tw_insert_chart(chart_type: i32) -> i32 {
     })
 }
 
+/// Returns JSON [`tw_model::ChartData`] for a chart shape, or -3 if missing / not a chart.
+#[no_mangle]
+pub extern "C" fn tw_get_chart_data_json(
+    shape_id_ptr: *const c_char,
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    guard_ffi(|| {
+        let guard = SESSION.lock();
+        let Some(session) = guard.as_ref() else {
+            return -1;
+        };
+        let Some(shape_id) = parse_node_id(shape_id_ptr) else {
+            return -2;
+        };
+        let Some(json) = session.chart_data_json(shape_id) else {
+            return -3;
+        };
+        transfer_bytes_to_caller(json.into_bytes(), out_ptr, out_len);
+        0
+    })
+}
+
+/// UUID string of the last chart block in document order.
+#[no_mangle]
+pub extern "C" fn tw_latest_chart_id(out_ptr: *mut *const u8, out_len: *mut usize) -> i32 {
+    guard_ffi(|| {
+        let guard = SESSION.lock();
+        let Some(session) = guard.as_ref() else {
+            return -1;
+        };
+        let Some(id) = session.latest_chart_id() else {
+            return -3;
+        };
+        transfer_bytes_to_caller(id.to_string().into_bytes(), out_ptr, out_len);
+        0
+    })
+}
+
+/// Replace chart dataset from JSON [`tw_model::ChartData`].
+#[no_mangle]
+pub extern "C" fn tw_set_chart_data_json(
+    shape_id_ptr: *const c_char,
+    json_ptr: *const u8,
+    json_len: usize,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(shape_id) = parse_node_id(shape_id_ptr) else {
+                return -2;
+            };
+            if json_ptr.is_null() || json_len == 0 {
+                return -3;
+            }
+            let bytes = unsafe { std::slice::from_raw_parts(json_ptr, json_len) };
+            let Ok(chart_data) = serde_json::from_slice::<tw_model::ChartData>(bytes) else {
+                return -3;
+            };
+            let Some(request_id) = session.set_chart_data(shape_id, Some(chart_data)) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+/// Insert inline OMML at the caret — F14.S3.
+#[no_mangle]
+pub extern "C" fn tw_insert_office_math(
+    run_id_ptr: *const c_char,
+    offset: i32,
+    xml_ptr: *const u8,
+    xml_len: usize,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(run_id) = parse_node_id(run_id_ptr) else {
+                return -3;
+            };
+            if xml_ptr.is_null() || xml_len == 0 {
+                return -3;
+            };
+            let xml = String::from_utf8_lossy(unsafe {
+                std::slice::from_raw_parts(xml_ptr, xml_len)
+            })
+            .into_owned();
+            let Some(request_id) =
+                session.insert_office_math_at(run_id, offset.max(0) as usize, xml)
+            else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+/// Insert display equation (`m:oMathPara`) after the caret block — F14.S3.
+#[no_mangle]
+pub extern "C" fn tw_insert_office_math_display(
+    caret_run_id_ptr: *const c_char,
+    xml_ptr: *const u8,
+    xml_len: usize,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let caret_run_id = parse_node_id(caret_run_id_ptr);
+            if xml_ptr.is_null() || xml_len == 0 {
+                return -3;
+            };
+            let xml = String::from_utf8_lossy(unsafe {
+                std::slice::from_raw_parts(xml_ptr, xml_len)
+            })
+            .into_owned();
+            let Some(request_id) = session.insert_office_math_display(caret_run_id, xml) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+/// Replace OMML on an equation run — F14.S3.
+#[no_mangle]
+pub extern "C" fn tw_set_office_math_xml(
+    run_id_ptr: *const c_char,
+    xml_ptr: *const u8,
+    xml_len: usize,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(run_id) = parse_node_id(run_id_ptr) else {
+                return -3;
+            };
+            if xml_ptr.is_null() || xml_len == 0 {
+                return -3;
+            };
+            let xml = String::from_utf8_lossy(unsafe {
+                std::slice::from_raw_parts(xml_ptr, xml_len)
+            })
+            .into_owned();
+            let Some(request_id) = session.set_office_math(run_id, xml) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+/// OMML XML for [run_id], or -3 when missing / not an equation run.
+#[no_mangle]
+pub extern "C" fn tw_get_office_math_xml(
+    run_id_ptr: *const c_char,
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    guard_ffi(|| {
+        let guard = SESSION.lock();
+        let Some(session) = guard.as_ref() else {
+            return -1;
+        };
+        let Some(run_id) = parse_node_id(run_id_ptr) else {
+            return -2;
+        };
+        let Some(xml) = session.office_math_xml(run_id) else {
+            return -3;
+        };
+        transfer_bytes_to_caller(xml.into_bytes(), out_ptr, out_len);
+        0
+    })
+}
+
+/// UUID string of the last equation run in document order.
+#[no_mangle]
+pub extern "C" fn tw_latest_office_math_run_id(out_ptr: *mut *const u8, out_len: *mut usize) -> i32 {
+    guard_ffi(|| {
+        let guard = SESSION.lock();
+        let Some(session) = guard.as_ref() else {
+            return -1;
+        };
+        let Some(id) = session.latest_office_math_run_id() else {
+            return -3;
+        };
+        transfer_bytes_to_caller(id.to_string().into_bytes(), out_ptr, out_len);
+        0
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_delete_block(block_id_ptr: *const c_char) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(block_id) = parse_node_id(block_id_ptr) else {
+                return -3;
+            };
+            let Some(request_id) = session.delete_block(block_id) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
 #[no_mangle]
 pub extern "C" fn tw_insert_image_bytes(
     data: *const u8,
@@ -2308,6 +2717,118 @@ pub extern "C" fn tw_set_track_changes(enabled: i32) -> i32 {
 }
 
 #[no_mangle]
+pub extern "C" fn tw_set_read_only(enabled: i32) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(request_id) = session.set_read_only(enabled != 0) else {
+                return -4;
+            };
+            wait_for_request(session, request_id, BLOCKING_WAIT, |event| match event {
+                BridgeEvent::DisplayListReady { .. } => Some(0),
+                BridgeEvent::Error { .. } => Some(-2),
+                _ => None,
+            })
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_grammar_check_document(
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(request_id) = session.grammar_check() else {
+                return -4;
+            };
+            wait_for_grammar_check(session, request_id, out_ptr, out_len)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_compare_document_text(
+    other_ptr: *const c_char,
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    guard_ffi(|| {
+        let guard = SESSION.lock();
+        let Some(session) = guard.as_ref() else {
+            return -1;
+        };
+        if other_ptr.is_null() || out_ptr.is_null() || out_len.is_null() {
+            return -2;
+        }
+        let other = unsafe { CStr::from_ptr(other_ptr) }.to_string_lossy();
+        let summary = session.compare_with_text(&other);
+        let text = format!(
+            "insertions:{} deletions:{}",
+            summary.insertion_count, summary.deletion_count
+        );
+        transfer_bytes_to_caller(text.into_bytes(), out_ptr, out_len);
+        0
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_find_matches(
+    query_ptr: *const c_char,
+    match_case: i32,
+    use_regex: i32,
+    use_wildcards: i32,
+    format_json_ptr: *const c_char,
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            if query_ptr.is_null() || out_ptr.is_null() || out_len.is_null() {
+                return -2;
+            }
+            let query = unsafe { CStr::from_ptr(query_ptr) }.to_string_lossy();
+            let format = if format_json_ptr.is_null() {
+                None
+            } else {
+                let json = unsafe { CStr::from_ptr(format_json_ptr) }.to_string_lossy();
+                if json.is_empty() {
+                    None
+                } else {
+                    serde_json::from_str::<tw_edit::FindFormatFilter>(&json).ok()
+                }
+            };
+            let matches = session.find_matches(
+                &query,
+                match_case != 0,
+                use_regex != 0,
+                use_wildcards != 0,
+                format.as_ref(),
+            );
+            #[derive(Serialize)]
+            struct MatchOut {
+                start_run_id: String,
+                start: usize,
+                end_run_id: String,
+                end: usize,
+            }
+            let payload: Vec<MatchOut> = matches
+                .iter()
+                .map(|m| MatchOut {
+                    start_run_id: m.start.run_id.to_string(),
+                    start: m.start.char_offset,
+                    end_run_id: m.end.run_id.to_string(),
+                    end: m.end.char_offset,
+                })
+                .collect();
+            let json = serde_json::to_string(&payload).unwrap_or_else(|_| "[]".into());
+            transfer_bytes_to_caller(json.into_bytes(), out_ptr, out_len);
+            0
+        })
+    })
+}
+
+#[no_mangle]
 pub extern "C" fn tw_accept_all_revisions() -> i32 {
     guard_ffi(|| {
         with_session(|session| {
@@ -2330,6 +2851,56 @@ pub extern "C" fn tw_reject_all_revisions() -> i32 {
                 -2
             }
         })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_accept_revision_at(caret_run_id_ptr: *const c_char) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let caret_run_id = parse_node_id(caret_run_id_ptr);
+            let Some(request_id) = session.accept_revision_at(caret_run_id) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_reject_revision_at(caret_run_id_ptr: *const c_char) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let caret_run_id = parse_node_id(caret_run_id_ptr);
+            let Some(request_id) = session.reject_revision_at(caret_run_id) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+/// UUID string of the next/previous revision run relative to the caret.
+#[no_mangle]
+pub extern "C" fn tw_adjacent_revision_run(
+    caret_run_id_ptr: *const c_char,
+    forward: i32,
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    guard_ffi(|| {
+        let guard = SESSION.lock();
+        let Some(session) = guard.as_ref() else {
+            return -1;
+        };
+        let Some(caret) = parse_node_id(caret_run_id_ptr) else {
+            return -3;
+        };
+        let Some(id) = session.adjacent_revision_run(Some(caret), forward != 0) else {
+            return -3;
+        };
+        transfer_bytes_to_caller(id.to_string().into_bytes(), out_ptr, out_len);
+        0
     })
 }
 

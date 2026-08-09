@@ -2,9 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
 import 'package:tutuaword/ui/ribbon_widgets.dart';
 
-/// Accept/reject currently apply to all revisions in the document (TC ladder c).
-const kTrackChangeAcceptTooltip = 'Accept all track-change revisions in the document';
-const kTrackChangeRejectTooltip = 'Reject all track-change revisions in the document';
+const kTrackChangeAcceptTooltip = 'Accept the track-change revision at the caret';
+const kTrackChangeRejectTooltip = 'Reject the track-change revision at the caret';
+const kTrackChangeNextTooltip = 'Go to the next tracked change';
+const kTrackChangePreviousTooltip = 'Go to the previous tracked change';
 
 class ReviewTab extends StatelessWidget {
   const ReviewTab({super.key, required this.controller});
@@ -20,9 +21,10 @@ class ReviewTab extends StatelessWidget {
             child: Row(
               children: [
                 RibbonLargeButton(
+                  key: const Key('spell_check'),
                   icon: Icons.spellcheck,
                   label: 'Spelling &\nGrammar',
-                  onPressed: () => controller.spellCheckDocument(),
+                  onPressed: () => controller.proofDocument(),
                 ),
                 RibbonLargeButton(icon: Icons.translate, label: 'Translate', onPressed: null),
                 RibbonLargeButton(icon: Icons.book_outlined, label: 'Thesaurus', onPressed: null),
@@ -35,7 +37,12 @@ class ReviewTab extends StatelessWidget {
           ),
           RibbonGroup(
             label: 'Comments',
-            child: RibbonLargeButton(icon: Icons.comment_outlined, label: 'New\nComment', onPressed: null),
+            child: RibbonLargeButton(
+              key: const Key('insert_comment'),
+              icon: Icons.comment_outlined,
+              label: 'New\nComment',
+              onPressed: () => controller.insertComment(context),
+            ),
           ),
           RibbonGroup(
             label: 'Tracking',
@@ -48,16 +55,32 @@ class ReviewTab extends StatelessWidget {
                   onPressed: controller.toggleTrackChanges,
                 ),
                 RibbonIconButton(
+                  key: const Key('accept_revision'),
                   icon: Icons.check,
                   label: 'Accept',
                   tooltip: kTrackChangeAcceptTooltip,
-                  onPressed: controller.acceptAllRevisions,
+                  onPressed: controller.acceptRevisionAtCaret,
                 ),
                 RibbonIconButton(
+                  key: const Key('reject_revision'),
                   icon: Icons.close,
                   label: 'Reject',
                   tooltip: kTrackChangeRejectTooltip,
-                  onPressed: controller.rejectAllRevisions,
+                  onPressed: controller.rejectRevisionAtCaret,
+                ),
+                RibbonIconButton(
+                  key: const Key('next_revision'),
+                  icon: Icons.arrow_downward,
+                  label: 'Next\nChange',
+                  tooltip: kTrackChangeNextTooltip,
+                  onPressed: controller.gotoNextRevision,
+                ),
+                RibbonIconButton(
+                  key: const Key('previous_revision'),
+                  icon: Icons.arrow_upward,
+                  label: 'Previous\nChange',
+                  tooltip: kTrackChangePreviousTooltip,
+                  onPressed: controller.gotoPreviousRevision,
                 ),
               ],
             ),
@@ -76,8 +99,18 @@ class ReviewTab extends StatelessWidget {
             showDivider: false,
             child: Row(
               children: [
-                RibbonIconButton(icon: Icons.compare, label: 'Compare', onPressed: null),
-                RibbonIconButton(icon: Icons.lock_outline, label: 'Restrict\nEditing', onPressed: null),
+                RibbonIconButton(
+                  key: const Key('compare_documents'),
+                  icon: Icons.compare,
+                  label: 'Compare',
+                  onPressed: () => controller.compareWithText(controller.documentText),
+                ),
+                RibbonIconButton(
+                  key: const Key('restrict_editing'),
+                  icon: Icons.lock_outline,
+                  label: 'Restrict\nEditing',
+                  onPressed: controller.toggleRestrictEditing,
+                ),
               ],
             ),
           ),

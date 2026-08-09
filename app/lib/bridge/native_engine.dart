@@ -11,6 +11,8 @@ import 'package:path/path.dart' as p;
 import 'package:tutuaword/bridge/command_codec.dart';
 import 'package:tutuaword/bridge/document_properties.dart';
 import 'package:tutuaword/bridge/engine_types.dart';
+import 'package:tutuaword/bridge/find_format_filter.dart';
+import 'package:tutuaword/bridge/find_match.dart';
 import 'package:tutuaword/bridge/native_event_router.dart';
 
 typedef TwEventCallbackNative = Void Function(Uint32, Uint64, Pointer<Uint8>, IntPtr);
@@ -169,6 +171,26 @@ typedef TwHeaderFooterSeedRunDart = int Function(
 typedef TwInsertFieldNative = Int32 Function(
     Pointer<Utf8>, Int32, Pointer<Utf8>);
 typedef TwInsertFieldDart = int Function(Pointer<Utf8>, int, Pointer<Utf8>);
+typedef TwInsertFootnoteNative = Int32 Function(Pointer<Utf8>, Int32);
+typedef TwInsertFootnoteDart = int Function(Pointer<Utf8>, int);
+typedef TwInsertCommentNative = Int32 Function(Pointer<Utf8>, Int32, Pointer<Utf8>);
+typedef TwInsertCommentDart = int Function(Pointer<Utf8>, int, Pointer<Utf8>);
+typedef TwInsertTableOfContentsNative = Int32 Function(Pointer<Utf8>);
+typedef TwInsertTableOfContentsDart = int Function(Pointer<Utf8>);
+typedef TwAddBibliographySourceNative = Int32 Function(
+  Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
+typedef TwAddBibliographySourceDart = int Function(
+  Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
+typedef TwInsertCitationNative = Int32 Function(Pointer<Utf8>, Int32, Pointer<Utf8>);
+typedef TwInsertCitationDart = int Function(Pointer<Utf8>, int, Pointer<Utf8>);
+typedef TwInsertBibliographyNative = Int32 Function(Pointer<Utf8>);
+typedef TwInsertBibliographyDart = int Function(Pointer<Utf8>);
+typedef TwInsertBookmarkNative = Int32 Function(Pointer<Utf8>, Int32, Pointer<Utf8>);
+typedef TwInsertBookmarkDart = int Function(Pointer<Utf8>, int, Pointer<Utf8>);
+typedef TwInsertCrossReferenceNative = Int32 Function(Pointer<Utf8>, Int32, Pointer<Utf8>);
+typedef TwInsertCrossReferenceDart = int Function(Pointer<Utf8>, int, Pointer<Utf8>);
+typedef TwInsertIndexNative = Int32 Function(Pointer<Utf8>);
+typedef TwInsertIndexDart = int Function(Pointer<Utf8>);
 
 typedef TwGetTextRangeNative = Int32 Function(
   Pointer<Utf8>,
@@ -282,6 +304,86 @@ typedef TwInsertDiagramNative = Int32 Function(Int32);
 typedef TwInsertDiagramDart = int Function(int);
 typedef TwInsertChartNative = Int32 Function(Int32);
 typedef TwInsertChartDart = int Function(int);
+typedef TwGetChartDataJsonNative = Int32 Function(
+  Pointer<Utf8>,
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwGetChartDataJsonDart = int Function(
+  Pointer<Utf8>,
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwLatestChartIdNative = Int32 Function(
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwLatestChartIdDart = int Function(
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwSetChartDataJsonNative = Int32 Function(
+  Pointer<Utf8>,
+  Pointer<Uint8>,
+  IntPtr,
+);
+typedef TwSetChartDataJsonDart = int Function(
+  Pointer<Utf8>,
+  Pointer<Uint8>,
+  int,
+);
+typedef TwInsertOfficeMathNative = Int32 Function(
+  Pointer<Utf8>,
+  Int32,
+  Pointer<Uint8>,
+  IntPtr,
+);
+typedef TwInsertOfficeMathDart = int Function(
+  Pointer<Utf8>,
+  int,
+  Pointer<Uint8>,
+  int,
+);
+typedef TwInsertOfficeMathDisplayNative = Int32 Function(
+  Pointer<Utf8>,
+  Pointer<Uint8>,
+  IntPtr,
+);
+typedef TwInsertOfficeMathDisplayDart = int Function(
+  Pointer<Utf8>,
+  Pointer<Uint8>,
+  int,
+);
+typedef TwSetOfficeMathXmlNative = Int32 Function(
+  Pointer<Utf8>,
+  Pointer<Uint8>,
+  IntPtr,
+);
+typedef TwSetOfficeMathXmlDart = int Function(
+  Pointer<Utf8>,
+  Pointer<Uint8>,
+  int,
+);
+typedef TwGetOfficeMathXmlNative = Int32 Function(
+  Pointer<Utf8>,
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwGetOfficeMathXmlDart = int Function(
+  Pointer<Utf8>,
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwLatestOfficeMathRunIdNative = Int32 Function(
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwLatestOfficeMathRunIdDart = int Function(
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwDeleteBlockNative = Int32 Function(Pointer<Utf8>);
+typedef TwDeleteBlockDart = int Function(Pointer<Utf8>);
 typedef TwInsertImageBytesNative = Int32 Function(
     Pointer<Uint8>, IntPtr, Pointer<Utf8>);
 typedef TwInsertImageBytesDart = int Function(
@@ -335,13 +437,67 @@ typedef TwSpellCheckDocumentDart = int Function(
   Pointer<Pointer<Uint8>>,
   Pointer<IntPtr>,
 );
+typedef TwGrammarCheckDocumentNative = Int32 Function(
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwGrammarCheckDocumentDart = int Function(
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwCompareDocumentTextNative = Int32 Function(
+  Pointer<Utf8>,
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwCompareDocumentTextDart = int Function(
+  Pointer<Utf8>,
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwFindMatchesNative = Int32 Function(
+  Pointer<Utf8>,
+  Int32,
+  Int32,
+  Int32,
+  Pointer<Utf8>,
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwFindMatchesDart = int Function(
+  Pointer<Utf8>,
+  int,
+  int,
+  int,
+  Pointer<Utf8>,
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
 
 typedef TwSetTrackChangesNative = Int32 Function(Int32);
 typedef TwSetTrackChangesDart = int Function(int);
+typedef TwSetReadOnlyNative = Int32 Function(Int32);
+typedef TwSetReadOnlyDart = int Function(int);
 typedef TwAcceptAllRevisionsNative = Int32 Function();
 typedef TwAcceptAllRevisionsDart = int Function();
 typedef TwRejectAllRevisionsNative = Int32 Function();
 typedef TwRejectAllRevisionsDart = int Function();
+typedef TwAcceptRevisionAtNative = Int32 Function(Pointer<Utf8>);
+typedef TwAcceptRevisionAtDart = int Function(Pointer<Utf8>);
+typedef TwRejectRevisionAtNative = Int32 Function(Pointer<Utf8>);
+typedef TwRejectRevisionAtDart = int Function(Pointer<Utf8>);
+typedef TwAdjacentRevisionRunNative = Int32 Function(
+  Pointer<Utf8>,
+  Int32,
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwAdjacentRevisionRunDart = int Function(
+  Pointer<Utf8>,
+  int,
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
 
 typedef TwHitTestNative = Int32 Function(Uint32, Float, Float, Pointer<Utf8>, IntPtr, Pointer<Uint32>);
 typedef TwHitTestDart = int Function(int, double, double, Pointer<Utf8>, int, Pointer<Uint32>);
@@ -437,6 +593,15 @@ class NativeEngine {
   late final TwSetHeaderFooterLinkDart setHeaderFooterLink;
   late final TwHeaderFooterSeedRunDart headerFooterSeedRun;
   late final TwInsertFieldDart insertField;
+  late final TwInsertFootnoteDart insertFootnote;
+  late final TwInsertCommentDart insertComment;
+  late final TwInsertTableOfContentsDart insertTableOfContents;
+  late final TwAddBibliographySourceDart addBibliographySource;
+  late final TwInsertCitationDart insertCitation;
+  late final TwInsertBibliographyDart insertBibliography;
+  late final TwInsertBookmarkDart insertBookmark;
+  late final TwInsertCrossReferenceDart insertCrossReference;
+  late final TwInsertIndexDart insertIndex;
   late final TwApplyBulletListDart applyBulletList;
   late final TwApplyNumberedListDart applyNumberedList;
   late final TwAdjustListLevelDart adjustListLevel;
@@ -460,6 +625,15 @@ class NativeEngine {
   late final TwInsertWordArtDart insertWordArt;
   late final TwInsertDiagramDart insertDiagram;
   late final TwInsertChartDart insertChart;
+  late final TwGetChartDataJsonDart getChartDataJson;
+  late final TwLatestChartIdDart latestChartIdNative;
+  late final TwSetChartDataJsonDart setChartDataJson;
+  late final TwInsertOfficeMathDart insertOfficeMath;
+  late final TwInsertOfficeMathDisplayDart insertOfficeMathDisplay;
+  late final TwSetOfficeMathXmlDart setOfficeMathXml;
+  late final TwGetOfficeMathXmlDart getOfficeMathXml;
+  late final TwLatestOfficeMathRunIdDart latestOfficeMathRunIdNative;
+  late final TwDeleteBlockDart deleteBlock;
   late final TwInsertImageBytesDart insertImageBytes;
   late final TwSetImageSizeDart setImageSize;
   late final TwSetImageWrapDart setImageWrap;
@@ -473,9 +647,16 @@ class NativeEngine {
   late final TwRedoDart redo;
   late final TwSaveDocumentAsDart saveDocumentAs;
   late final TwSpellCheckDocumentDart spellCheckDocument;
+  late final TwGrammarCheckDocumentDart grammarCheckDocument;
+  late final TwCompareDocumentTextDart compareDocumentTextNative;
+  late final TwFindMatchesDart findMatchesNative;
+  late final TwSetReadOnlyDart setReadOnlyNative;
   late final TwSetTrackChangesDart setTrackChanges;
   late final TwAcceptAllRevisionsDart acceptAllRevisionsNative;
   late final TwRejectAllRevisionsDart rejectAllRevisionsNative;
+  late final TwAcceptRevisionAtDart acceptRevisionAtNative;
+  late final TwRejectRevisionAtDart rejectRevisionAtNative;
+  late final TwAdjacentRevisionRunDart adjacentRevisionRunNative;
   late final TwHitTestDart hitTest;
   late final TwDocumentTailHitDart documentTailHit;
   late final TwLastRequestIdDart lastRequestIdNative;
@@ -591,6 +772,27 @@ class NativeEngine {
           TwHeaderFooterSeedRunDart>('tw_header_footer_seed_run');
       engine.insertField =
           lib.lookupFunction<TwInsertFieldNative, TwInsertFieldDart>('tw_insert_field');
+      engine.insertFootnote = lib.lookupFunction<TwInsertFootnoteNative, TwInsertFootnoteDart>(
+          'tw_insert_footnote');
+      engine.insertComment = lib.lookupFunction<TwInsertCommentNative, TwInsertCommentDart>(
+          'tw_insert_comment');
+      engine.insertTableOfContents = lib
+          .lookupFunction<TwInsertTableOfContentsNative, TwInsertTableOfContentsDart>(
+              'tw_insert_table_of_contents');
+      engine.addBibliographySource = lib.lookupFunction<TwAddBibliographySourceNative,
+          TwAddBibliographySourceDart>('tw_add_bibliography_source');
+      engine.insertCitation = lib.lookupFunction<TwInsertCitationNative, TwInsertCitationDart>(
+          'tw_insert_citation');
+      engine.insertBibliography = lib
+          .lookupFunction<TwInsertBibliographyNative, TwInsertBibliographyDart>(
+              'tw_insert_bibliography');
+      engine.insertBookmark = lib.lookupFunction<TwInsertBookmarkNative, TwInsertBookmarkDart>(
+          'tw_insert_bookmark');
+      engine.insertCrossReference = lib
+          .lookupFunction<TwInsertCrossReferenceNative, TwInsertCrossReferenceDart>(
+              'tw_insert_cross_reference');
+      engine.insertIndex =
+          lib.lookupFunction<TwInsertIndexNative, TwInsertIndexDart>('tw_insert_index');
       engine.applyBulletList = lib.lookupFunction<TwApplyBulletListNative, TwApplyBulletListDart>(
           'tw_apply_bullet_list');
       engine.applyNumberedList = lib.lookupFunction<TwApplyNumberedListNative, TwApplyNumberedListDart>(
@@ -641,6 +843,26 @@ class NativeEngine {
           lib.lookupFunction<TwInsertDiagramNative, TwInsertDiagramDart>('tw_insert_diagram');
       engine.insertChart =
           lib.lookupFunction<TwInsertChartNative, TwInsertChartDart>('tw_insert_chart');
+      engine.getChartDataJson = lib.lookupFunction<TwGetChartDataJsonNative,
+          TwGetChartDataJsonDart>('tw_get_chart_data_json');
+      engine.latestChartIdNative = lib.lookupFunction<TwLatestChartIdNative,
+          TwLatestChartIdDart>('tw_latest_chart_id');
+      engine.setChartDataJson = lib.lookupFunction<TwSetChartDataJsonNative,
+          TwSetChartDataJsonDart>('tw_set_chart_data_json');
+      engine.insertOfficeMath = lib.lookupFunction<TwInsertOfficeMathNative,
+          TwInsertOfficeMathDart>('tw_insert_office_math');
+      engine.insertOfficeMathDisplay = lib.lookupFunction<
+          TwInsertOfficeMathDisplayNative,
+          TwInsertOfficeMathDisplayDart>('tw_insert_office_math_display');
+      engine.setOfficeMathXml = lib.lookupFunction<TwSetOfficeMathXmlNative,
+          TwSetOfficeMathXmlDart>('tw_set_office_math_xml');
+      engine.getOfficeMathXml = lib.lookupFunction<TwGetOfficeMathXmlNative,
+          TwGetOfficeMathXmlDart>('tw_get_office_math_xml');
+      engine.latestOfficeMathRunIdNative = lib.lookupFunction<
+          TwLatestOfficeMathRunIdNative,
+          TwLatestOfficeMathRunIdDart>('tw_latest_office_math_run_id');
+      engine.deleteBlock =
+          lib.lookupFunction<TwDeleteBlockNative, TwDeleteBlockDart>('tw_delete_block');
       engine.insertImageBytes = lib.lookupFunction<TwInsertImageBytesNative,
           TwInsertImageBytesDart>('tw_insert_image_bytes');
       engine.setImageSize = lib.lookupFunction<TwSetImageSizeNative, TwSetImageSizeDart>(
@@ -665,12 +887,26 @@ class NativeEngine {
           'tw_save_document_as');
       engine.spellCheckDocument = lib.lookupFunction<TwSpellCheckDocumentNative,
           TwSpellCheckDocumentDart>('tw_spell_check_document');
+      engine.grammarCheckDocument = lib.lookupFunction<TwGrammarCheckDocumentNative,
+          TwGrammarCheckDocumentDart>('tw_grammar_check_document');
+      engine.compareDocumentTextNative = lib.lookupFunction<TwCompareDocumentTextNative,
+          TwCompareDocumentTextDart>('tw_compare_document_text');
+      engine.findMatchesNative = lib.lookupFunction<TwFindMatchesNative, TwFindMatchesDart>(
+          'tw_find_matches');
       engine.setTrackChanges =
           lib.lookupFunction<TwSetTrackChangesNative, TwSetTrackChangesDart>('tw_set_track_changes');
+      engine.setReadOnlyNative =
+          lib.lookupFunction<TwSetReadOnlyNative, TwSetReadOnlyDart>('tw_set_read_only');
       engine.acceptAllRevisionsNative = lib.lookupFunction<TwAcceptAllRevisionsNative,
           TwAcceptAllRevisionsDart>('tw_accept_all_revisions');
       engine.rejectAllRevisionsNative = lib.lookupFunction<TwRejectAllRevisionsNative,
           TwRejectAllRevisionsDart>('tw_reject_all_revisions');
+      engine.acceptRevisionAtNative = lib.lookupFunction<TwAcceptRevisionAtNative,
+          TwAcceptRevisionAtDart>('tw_accept_revision_at');
+      engine.rejectRevisionAtNative = lib.lookupFunction<TwRejectRevisionAtNative,
+          TwRejectRevisionAtDart>('tw_reject_revision_at');
+      engine.adjacentRevisionRunNative = lib.lookupFunction<TwAdjacentRevisionRunNative,
+          TwAdjacentRevisionRunDart>('tw_adjacent_revision_run');
       engine.hitTest = lib.lookupFunction<TwHitTestNative, TwHitTestDart>('tw_hit_test');
       engine.documentTailHit =
           lib.lookupFunction<TwDocumentTailHitNative, TwDocumentTailHitDart>('tw_document_tail_hit');
@@ -1119,6 +1355,84 @@ extension NativeEngineOps on NativeEngine {
       return json;
     } finally {
       if (caretRunId != null) calloc.free(caretPtr);
+      calloc.free(outPtr);
+      calloc.free(outLen);
+    }
+  }
+
+  String? fetchChartDataJson(String shapeId) {
+    final shapePtr = shapeId.toNativeUtf8();
+    final outPtr = calloc<Pointer<Uint8>>();
+    final outLen = calloc<IntPtr>();
+    try {
+      final result = getChartDataJson(shapePtr, outPtr, outLen);
+      if (result != 0) return null;
+      final len = outLen.value;
+      final ptr = outPtr.value;
+      if (ptr == nullptr || len == 0) return null;
+      final json = ptr.cast<Utf8>().toDartString(length: len);
+      freeBuffer(ptr, len);
+      return json;
+    } finally {
+      calloc.free(shapePtr);
+      calloc.free(outPtr);
+      calloc.free(outLen);
+    }
+  }
+
+  String? latestChartId() {
+    final outPtr = calloc<Pointer<Uint8>>();
+    final outLen = calloc<IntPtr>();
+    try {
+      final result = latestChartIdNative(outPtr, outLen);
+      if (result != 0) return null;
+      final len = outLen.value;
+      final ptr = outPtr.value;
+      if (ptr == nullptr || len == 0) return null;
+      final id = ptr.cast<Utf8>().toDartString(length: len);
+      freeBuffer(ptr, len);
+      return id;
+    } finally {
+      calloc.free(outPtr);
+      calloc.free(outLen);
+    }
+  }
+
+  @override
+  String? fetchOfficeMathXml(String runId) {
+    final runPtr = runId.toNativeUtf8();
+    final outPtr = calloc<Pointer<Uint8>>();
+    final outLen = calloc<IntPtr>();
+    try {
+      final result = getOfficeMathXml(runPtr, outPtr, outLen);
+      if (result != 0) return null;
+      final len = outLen.value;
+      final ptr = outPtr.value;
+      if (ptr == nullptr || len == 0) return null;
+      final xml = ptr.cast<Utf8>().toDartString(length: len);
+      freeBuffer(ptr, len);
+      return xml;
+    } finally {
+      calloc.free(runPtr);
+      calloc.free(outPtr);
+      calloc.free(outLen);
+    }
+  }
+
+  @override
+  String? latestOfficeMathRunId() {
+    final outPtr = calloc<Pointer<Uint8>>();
+    final outLen = calloc<IntPtr>();
+    try {
+      final result = latestOfficeMathRunIdNative(outPtr, outLen);
+      if (result != 0) return null;
+      final len = outLen.value;
+      final ptr = outPtr.value;
+      if (ptr == nullptr || len == 0) return null;
+      final id = ptr.cast<Utf8>().toDartString(length: len);
+      freeBuffer(ptr, len);
+      return id;
+    } finally {
       calloc.free(outPtr);
       calloc.free(outLen);
     }
@@ -1599,6 +1913,127 @@ extension NativeEngineOps on NativeEngine {
     }
   }
 
+  Future<bool> insertFootnoteAsync({
+    required String runId,
+    required int offset,
+  }) async {
+    final runPtr = runId.toNativeUtf8();
+    try {
+      return enqueueEdit(() => insertFootnote(runPtr, offset));
+    } finally {
+      calloc.free(runPtr);
+    }
+  }
+
+  Future<bool> insertCommentAsync({
+    required String runId,
+    required int offset,
+    String bodyText = '',
+  }) async {
+    final runPtr = runId.toNativeUtf8();
+    final bodyPtr = bodyText.toNativeUtf8();
+    try {
+      return enqueueEdit(() => insertComment(runPtr, offset, bodyPtr));
+    } finally {
+      calloc.free(runPtr);
+      calloc.free(bodyPtr);
+    }
+  }
+
+  Future<bool> insertTableOfContentsAsync({String? caretRunId}) async {
+    final caretPtr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return enqueueEdit(() => insertTableOfContents(caretPtr));
+    } finally {
+      if (caretRunId != null) calloc.free(caretPtr);
+    }
+  }
+
+  Future<bool> addBibliographySourceAsync({
+    required String key,
+    required String author,
+    required String title,
+    required String year,
+  }) async {
+    final keyPtr = key.toNativeUtf8();
+    final authorPtr = author.toNativeUtf8();
+    final titlePtr = title.toNativeUtf8();
+    final yearPtr = year.toNativeUtf8();
+    try {
+      return enqueueEdit(
+        () => addBibliographySource(keyPtr, authorPtr, titlePtr, yearPtr),
+      );
+    } finally {
+      calloc.free(keyPtr);
+      calloc.free(authorPtr);
+      calloc.free(titlePtr);
+      calloc.free(yearPtr);
+    }
+  }
+
+  Future<bool> insertCitationAsync({
+    required String runId,
+    required int offset,
+    required String sourceKey,
+  }) async {
+    final runPtr = runId.toNativeUtf8();
+    final keyPtr = sourceKey.toNativeUtf8();
+    try {
+      return enqueueEdit(() => insertCitation(runPtr, offset, keyPtr));
+    } finally {
+      calloc.free(runPtr);
+      calloc.free(keyPtr);
+    }
+  }
+
+  Future<bool> insertBibliographyAsync({String? caretRunId}) async {
+    final caretPtr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return enqueueEdit(() => insertBibliography(caretPtr));
+    } finally {
+      if (caretRunId != null) calloc.free(caretPtr);
+    }
+  }
+
+  Future<bool> insertBookmarkAsync({
+    required String runId,
+    required int offset,
+    required String name,
+  }) async {
+    final runPtr = runId.toNativeUtf8();
+    final namePtr = name.toNativeUtf8();
+    try {
+      return enqueueEdit(() => insertBookmark(runPtr, offset, namePtr));
+    } finally {
+      calloc.free(runPtr);
+      calloc.free(namePtr);
+    }
+  }
+
+  Future<bool> insertCrossReferenceAsync({
+    required String runId,
+    required int offset,
+    required String bookmarkName,
+  }) async {
+    final runPtr = runId.toNativeUtf8();
+    final namePtr = bookmarkName.toNativeUtf8();
+    try {
+      return enqueueEdit(() => insertCrossReference(runPtr, offset, namePtr));
+    } finally {
+      calloc.free(runPtr);
+      calloc.free(namePtr);
+    }
+  }
+
+  Future<bool> insertIndexAsync({String? caretRunId}) async {
+    final caretPtr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return enqueueEdit(() => insertIndex(caretPtr));
+    } finally {
+      if (caretRunId != null) calloc.free(caretPtr);
+    }
+  }
+
   Future<bool> applySectionFormatJsonAsync({
     required String formatJson,
     String? caretRunId,
@@ -1826,6 +2261,85 @@ extension NativeEngineOps on NativeEngine {
 
   Future<bool> insertChartAsync({int chartType = 0}) =>
       enqueueEdit(() => insertChart(chartType));
+
+  Future<bool> setChartDataAsync(String shapeId, Map<String, dynamic> chartData) async {
+    final shapePtr = shapeId.toNativeUtf8();
+    final jsonBytes = Uint8List.fromList(utf8.encode(jsonEncode(chartData)));
+    final jsonPtr = calloc<Uint8>(jsonBytes.length);
+    try {
+      jsonPtr.asTypedList(jsonBytes.length).setAll(0, jsonBytes);
+      return enqueueEdit(
+        () => setChartDataJson(shapePtr, jsonPtr, jsonBytes.length),
+      );
+    } finally {
+      calloc.free(shapePtr);
+      calloc.free(jsonPtr);
+    }
+  }
+
+  @override
+  Future<bool> insertOfficeMathAsync({
+    required String runId,
+    required int offset,
+    required String xml,
+  }) async {
+    final runPtr = runId.toNativeUtf8();
+    final xmlBytes = Uint8List.fromList(utf8.encode(xml));
+    final xmlPtr = calloc<Uint8>(xmlBytes.length);
+    try {
+      xmlPtr.asTypedList(xmlBytes.length).setAll(0, xmlBytes);
+      return enqueueEdit(
+        () => insertOfficeMath(runPtr, offset, xmlPtr, xmlBytes.length),
+      );
+    } finally {
+      calloc.free(runPtr);
+      calloc.free(xmlPtr);
+    }
+  }
+
+  @override
+  Future<bool> insertOfficeMathDisplayAsync({
+    String? caretRunId,
+    required String xml,
+  }) async {
+    final caretPtr = (caretRunId ?? '').toNativeUtf8();
+    final xmlBytes = Uint8List.fromList(utf8.encode(xml));
+    final xmlPtr = calloc<Uint8>(xmlBytes.length);
+    try {
+      xmlPtr.asTypedList(xmlBytes.length).setAll(0, xmlBytes);
+      return enqueueEdit(
+        () => insertOfficeMathDisplay(caretPtr, xmlPtr, xmlBytes.length),
+      );
+    } finally {
+      calloc.free(caretPtr);
+      calloc.free(xmlPtr);
+    }
+  }
+
+  @override
+  Future<bool> setOfficeMathAsync(String runId, String xml) async {
+    final runPtr = runId.toNativeUtf8();
+    final xmlBytes = Uint8List.fromList(utf8.encode(xml));
+    final xmlPtr = calloc<Uint8>(xmlBytes.length);
+    try {
+      xmlPtr.asTypedList(xmlBytes.length).setAll(0, xmlBytes);
+      return enqueueEdit(
+        () => setOfficeMathXml(runPtr, xmlPtr, xmlBytes.length),
+      );
+    } finally {
+      calloc.free(runPtr);
+      calloc.free(xmlPtr);
+    }
+  }
+
+  Future<bool> deleteBlockAsync(String blockId) async {
+    final ptr = blockId.toNativeUtf8();
+    try {
+      return enqueueEdit(() => deleteBlock(ptr));
+    } finally {
+      calloc.free(ptr);
+    }
+  }
 
   Future<bool> insertImageBytesAsync(Uint8List bytes, String mimeType) async {
     final dataPtr = calloc<Uint8>(bytes.length);
@@ -2088,11 +2602,174 @@ extension NativeEngineOps on NativeEngine {
     }
   }
 
+  List<String>? grammarCheckIssues() {
+    final outPtr = calloc<Pointer<Uint8>>();
+    final outLen = calloc<IntPtr>();
+    try {
+      final result = grammarCheckDocument(outPtr, outLen);
+      if (result != 0) return null;
+      final len = outLen.value;
+      final ptr = outPtr.value;
+      if (ptr == nullptr || len == 0) return [];
+      final text = ptr.cast<Utf8>().toDartString(length: len);
+      freeBuffer(ptr, len);
+      if (text.isEmpty) return [];
+      return text.split('\n');
+    } finally {
+      calloc.free(outPtr);
+      calloc.free(outLen);
+    }
+  }
+
+  List<FindMatch>? findMatches(
+    String query,
+    bool matchCase, {
+    bool useRegex = false,
+    bool useWildcards = false,
+    FindFormatFilter formatFilter = FindFormatFilter.none,
+  }) {
+    final queryPtr = query.toNativeUtf8();
+    final formatPtr = formatFilter.isActive ? formatFilter.encode().toNativeUtf8() : nullptr;
+    final outPtr = calloc<Pointer<Uint8>>();
+    final outLen = calloc<IntPtr>();
+    try {
+      final result = findMatchesNative(
+        queryPtr,
+        matchCase ? 1 : 0,
+        useRegex ? 1 : 0,
+        useWildcards ? 1 : 0,
+        formatPtr,
+        outPtr,
+        outLen,
+      );
+      if (result != 0) return null;
+      final len = outLen.value;
+      final ptr = outPtr.value;
+      if (ptr == nullptr || len == 0) return [];
+      final text = ptr.cast<Utf8>().toDartString(length: len);
+      freeBuffer(ptr, len);
+      final decoded = jsonDecode(text);
+      if (decoded is! List) return [];
+      return decoded
+          .whereType<Map>()
+          .map((entry) => FindMatch.fromJson(Map<String, dynamic>.from(entry)))
+          .toList();
+    } finally {
+      calloc.free(queryPtr);
+      if (formatPtr != nullptr) calloc.free(formatPtr);
+      calloc.free(outPtr);
+      calloc.free(outLen);
+    }
+  }
+
+  Future<int?> replaceAll(
+    String find,
+    String replace,
+    bool matchCase, {
+    bool useRegex = false,
+    bool useWildcards = false,
+  }) async {
+    if (find.isEmpty) return null;
+    final count = findMatches(
+          find,
+          matchCase,
+          useRegex: useRegex,
+          useWildcards: useWildcards,
+        )?.length ??
+        0;
+    if (count == 0) return 0;
+    const marginLeft = 72.0;
+    const marginTop = 72.0;
+    final start = hitTestPage(0, marginLeft, marginTop + 11);
+    final tail = fetchDocumentTailHit(0);
+    if (start == null || tail == null) return null;
+    final ok = await enqueueEdit(() => dispatchCommand(CommandCodec.findReplace(
+          startRunId: start.runId,
+          startOffset: start.charOffset,
+          endRunId: tail.runId,
+          endOffset: tail.charOffset,
+          find: find,
+          replace: replace,
+          matchCase: matchCase,
+          useRegex: useRegex,
+          useWildcards: useWildcards,
+        )));
+    return ok ? count : null;
+  }
+
+  String? compareDocumentText(String otherText) {
+    final otherPtr = otherText.toNativeUtf8();
+    final outPtr = calloc<Pointer<Uint8>>();
+    final outLen = calloc<IntPtr>();
+    try {
+      final result = compareDocumentTextNative(otherPtr, outPtr, outLen);
+      if (result != 0) return null;
+      final len = outLen.value;
+      final ptr = outPtr.value;
+      if (ptr == nullptr || len == 0) return '';
+      final text = ptr.cast<Utf8>().toDartString(length: len);
+      freeBuffer(ptr, len);
+      return text;
+    } finally {
+      calloc.free(otherPtr);
+      calloc.free(outPtr);
+      calloc.free(outLen);
+    }
+  }
+
   bool setTrackChangesEnabled(bool enabled) => setTrackChanges(enabled ? 1 : 0) == 0;
+
+  bool setReadOnlyEnabled(bool enabled) => setReadOnlyNative(enabled ? 1 : 0) == 0;
 
   bool acceptAllRevisions() => acceptAllRevisionsNative() == 0;
 
   bool rejectAllRevisions() => rejectAllRevisionsNative() == 0;
+
+  bool acceptRevisionAtCaret({String? caretRunId}) {
+    if (caretRunId == null) return false;
+    final ptr = caretRunId.toNativeUtf8();
+    try {
+      return acceptRevisionAtNative(ptr) == 0;
+    } finally {
+      calloc.free(ptr);
+    }
+  }
+
+  bool rejectRevisionAtCaret({String? caretRunId}) {
+    if (caretRunId == null) return false;
+    final ptr = caretRunId.toNativeUtf8();
+    try {
+      return rejectRevisionAtNative(ptr) == 0;
+    } finally {
+      calloc.free(ptr);
+    }
+  }
+
+  String? adjacentRevisionRunId(String? caretRunId, {required bool forward}) {
+    if (caretRunId == null) return null;
+    final caretPtr = caretRunId.toNativeUtf8();
+    final outPtr = calloc<Pointer<Uint8>>();
+    final outLen = calloc<IntPtr>();
+    try {
+      final result = adjacentRevisionRunNative(
+        caretPtr,
+        forward ? 1 : 0,
+        outPtr,
+        outLen,
+      );
+      if (result != 0) return null;
+      final len = outLen.value;
+      final ptr = outPtr.value;
+      if (ptr == nullptr || len == 0) return null;
+      final id = ptr.cast<Utf8>().toDartString(length: len);
+      freeBuffer(ptr, len);
+      return id;
+    } finally {
+      calloc.free(caretPtr);
+      calloc.free(outPtr);
+      calloc.free(outLen);
+    }
+  }
 
   HitTestResult? hitTestPage(int page, double x, double y) {
     final runIdBuf = calloc<Uint8>(64);
