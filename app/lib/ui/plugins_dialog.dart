@@ -65,7 +65,10 @@ class _PluginsDialogState extends State<PluginsDialog> {
                     key: const Key('plugins_install_sample'),
                     onPressed: () {
                       widget.registry.installSampleEditPlugin(grantEdit: true);
-                      _refresh('Installed Sample Edit Plugin (edit granted)');
+                      _refresh(
+                        'Installed Sample Edit Plugin '
+                        '(granted: document.read, document.edit)',
+                      );
                     },
                     child: const Text('Install sample'),
                   ),
@@ -73,7 +76,10 @@ class _PluginsDialogState extends State<PluginsDialog> {
                     key: const Key('plugins_install_sample_readonly'),
                     onPressed: () {
                       widget.registry.installSampleEditPlugin(grantEdit: false);
-                      _refresh('Installed sample without document.edit');
+                      _refresh(
+                        'Installed sample read-only '
+                        '(document.edit not granted — Run will be denied)',
+                      );
                     },
                     child: const Text('Install read-only'),
                   ),
@@ -89,8 +95,10 @@ class _PluginsDialogState extends State<PluginsDialog> {
                     contentPadding: EdgeInsets.zero,
                     title: Text(p.name),
                     subtitle: Text(
-                      '${p.id} · ${p.enabled ? "enabled" : "disabled"}',
+                      '${p.id} · ${p.enabled ? "enabled" : "disabled"}\n'
+                      'Granted: ${p.grantedLabel}',
                     ),
+                    isThreeLine: true,
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [

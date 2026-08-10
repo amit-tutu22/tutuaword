@@ -56,6 +56,11 @@ class FormattingController extends ChangeNotifier {
   double _borderWidth = 0;
   String _styleInspectorSummary = '';
 
+  bool _formatPainterArmed = false;
+  Map<String, dynamic>? _formatPainterChar;
+  Map<String, dynamic>? _formatPainterPara;
+  String? _formatPainterSourceKey;
+
   bool get bold => _bold;
   bool get italic => _italic;
   bool get underline => _underline;
@@ -87,6 +92,7 @@ class FormattingController extends ChangeNotifier {
   Color? get paraShading => _paraShading;
   double get borderWidth => _borderWidth;
   String get styleInspectorSummary => _styleInspectorSummary;
+  bool get formatPainterArmed => _formatPainterArmed;
 
   void syncFromCaret() {
     final engine = _host.engine;
@@ -581,5 +587,104 @@ class FormattingController extends ChangeNotifier {
   void setActiveParagraphStyle(String style) {
     _activeParagraphStyle = style;
     notifyListeners();
+  }
+
+  /// Home → Format Painter: pick up format, or cancel when already armed.
+  void toggleFormatPainter() {
+    if (_formatPainterArmed) {
+      cancelFormatPainter();
+      return;
+    }
+    pickupFormatPainter();
+  }
+
+  /// Copy character + paragraph format from the caret / selection.
+  bool pickupFormatPainter() {
+    final engine = _host.engine;
+    if (engine == null) return false;
+    final runId = _selection.hasGlyphSelection
+        ? _selection.selection?.focus.runId
+        : _selection.caretRunId;
+    final resolvedRun = runId ?? _selection.defaultRunId();
+    if (resolvedRun == null) return false;
+    final json = engine.fetchCaretFormat(resolvedRun);
+    if (json == null || json.isEmpty) return false;
+    final map = jsonDecode(json) as Map<String, dynamic>;
+    final charFmt = map['char_format'];
+    final paraFmt = map['para_format'];
+    _formatPainterChar = charFmt is Map
+        ? Map<String, dynamic>.from(charFmt)
+        : <String, dynamic>{};
+    _formatPainterPara = paraFmt is Map
+        ? _paraFormatPainterPatch(Map<String, dynamic>.from(paraFmt))
+        : null;
+    _formatPainterSourceKey = _selectionFingerprint();
+    _formatPainterArmed = true;
+    notifyListeners();
+    return true;
+  }
+
+  void cancelFormatPainter() {
+    if (!_formatPainterArmed &&
+        _formatPainterChar == null &&
+        _formatPainterPara == null) {
+      return;
+    }
+    _formatPainterArmed = false;
+    _formatPainterChar = null;
+    _formatPainterPara = null;
+    _formatPainterSourceKey = null;
+    notifyListeners();
+  }
+
+  /// Apply painted format when the selection moves away from the source.
+  Future<bool> applyFormatPainterIfArmed() async {
+    if (!_formatPainterArmed || _formatPainterChar == null) return false;
+    if (_selectionFingerprint() == _formatPainterSourceKey) return false;
+    if (!_selection.hasGlyphSelection) return false;
+    return applyFormatPainter();
+  }
+
+  /// Apply the stored Format Painter payload to the current selection / caret.
+  Future<bool> applyFormatPainter() async {
+    if (_formatPainterChar == null || _host.engine == null) return false;
+    await _applyCharFormatJson(jsonEncode(_formatPainterChar));
+    final para = _formatPainterPara;
+    if (para != null && para.isNotEmpty) {
+      await _applyParaFormatJson(jsonEncode(para));
+    }
+    cancelFormatPainter();
+    return true;
+  }
+
+  String _selectionFingerprint() {
+    if (_selection.hasGlyphSelection && _selection.selection != null) {
+      final (start, end) = _selection.selection!.normalized();
+      return '${start.runId}:${start.offset}->${end.runId}:${end.offset}';
+    }
+    return 'caret:${_selection.caretRunId}:${_selection.caretOffset}';
+  }
+
+  Map<String, dynamic> _paraFormatPainterPatch(Map<String, dynamic> para) {
+    const keys = {
+      'alignment',
+      'indent_left',
+      'indent_right',
+      'indent_first_line',
+      'space_before',
+      'space_after',
+      'line_spacing',
+      'shading',
+      'borders',
+      'keep_together',
+      'keep_with_next',
+      'widow_orphan_control',
+      'tab_stops',
+    };
+    final out = <String, dynamic>{};
+    for (final key in keys) {
+      if (para.containsKey(key)) out[key] = para[key];
+    }
+    return out;
   }
 }

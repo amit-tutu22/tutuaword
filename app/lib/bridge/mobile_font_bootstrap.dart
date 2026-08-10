@@ -36,8 +36,9 @@ class MobileFontBootstrap {
     await Future<void>.delayed(Duration.zero);
     final engine = NativeEngine.load();
     if (engine == null) {
+      // Leave isReady false so warmDocumentEngine can fail loudly instead of
+      // mounting a disconnected editor/ribbon.
       debugPrint('MobileFontBootstrap: native engine not available');
-      isReady = true;
       return;
     }
     debugPrint('MobileFontBootstrap: engine loaded');

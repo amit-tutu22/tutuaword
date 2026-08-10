@@ -515,7 +515,7 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 | Section break (next page) | Done (F07.S2) |
 | Margins, size, orientation | Done (F07.S1) |
 | Columns | Done (F07.S3) |
-| Watermark, line numbers | Done (F07.S4) |
+| Watermark, line numbers, page borders | Done (F07.S4) |
 
 ### F07.S1 — Margins, size, orientation UI (complete)
 
@@ -546,9 +546,9 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 | `U-F07-S3-three-columns-narrower-width` | Unit | Line width fits column — `f07_s3_columns.rs` |
 | `I-F07-S3-columns` | Integration | Layout tab applies Two columns — `f07_s3_columns_test.dart` |
 
-### F07.S4 — Watermark, page color, line numbers (complete)
+### F07.S4 — Watermark, page color, line numbers, page borders (complete)
 
-**Deliverables:** Background watermark rect; line number gutter.
+**Deliverables:** Background watermark rect; line number gutter; page box borders.
 
 **Out of scope:** Full Word art watermark behind text (use F11/F10).
 

@@ -51,6 +51,34 @@ void main() {
       expect(controller.sessionController.statusText, contains('Page color cleared'));
     });
 
+    testWidgets('I-F07-S4-page-borders applies and clears', (tester) async {
+      final controller = createTestEditorController();
+      addTearDown(controller.dispose);
+
+      expect(controller.hasPageBorders, isFalse);
+
+      await pumpRibbonTab(tester, DesignTab(controller: controller));
+      await tester.tap(find.byKey(const Key('design_page_borders')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('page_borders_dialog')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('page_borders_enabled')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('page_borders_ok')));
+      await settleEngineStyle(tester);
+
+      expect(controller.hasPageBorders, isTrue);
+      expect(controller.sessionController.statusText, contains('Page borders applied'));
+
+      await tester.tap(find.byKey(const Key('design_page_borders')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('page_borders_none')));
+      await settleEngineStyle(tester);
+
+      expect(controller.hasPageBorders, isFalse);
+      expect(controller.sessionController.statusText, contains('Page borders removed'));
+    });
+
     testWidgets('I-F07-S4-line-numbers toggles on and off', (tester) async {
       final controller = createTestEditorController();
       addTearDown(controller.dispose);

@@ -43,14 +43,39 @@ class ReviewTab extends StatelessWidget {
                       : 'Read selection aloud',
                   onPressed: () => controller.toggleReadAloud(),
                 ),
-                RibbonLargeButton(icon: Icons.translate, label: 'Translate', onPressed: null),
-                RibbonLargeButton(icon: Icons.book_outlined, label: 'Thesaurus', onPressed: null),
+                Builder(
+                  builder: (context) => RibbonLargeButton(
+                    key: const Key('review_translate'),
+                    icon: Icons.translate,
+                    label: 'Translate',
+                    tooltip: 'Translate selection with AI',
+                    onPressed: () => controller.translateSelection(context),
+                  ),
+                ),
+                Builder(
+                  builder: (context) => RibbonLargeButton(
+                    key: const Key('review_thesaurus'),
+                    icon: Icons.book_outlined,
+                    label: 'Thesaurus',
+                    tooltip: 'Find synonyms for the selected word',
+                    onPressed: () => controller.openThesaurus(context),
+                  ),
+                ),
               ],
             ),
           ),
           RibbonGroup(
             label: 'Language',
-            child: RibbonLargeButton(icon: Icons.language, label: 'Language', onPressed: null),
+            child: Builder(
+              builder: (context) => RibbonLargeButton(
+                key: const Key('review_language'),
+                icon: Icons.language,
+                label: 'Language',
+                tooltip:
+                    'Proofing language: ${controller.proofingLanguage.label}',
+                onPressed: () => controller.chooseProofingLanguage(context),
+              ),
+            ),
           ),
           RibbonGroup(
             label: 'Comments',

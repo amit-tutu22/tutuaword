@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tutuaword/bridge/plugin_registry.dart';
+import 'package:tutuaword/ui/ribbon_tabs/home_tab.dart';
 import 'package:tutuaword/ui/ribbon_tabs/review_tab.dart';
 
 import 'editor_test_helpers.dart';
@@ -14,6 +15,7 @@ void main() {
       registry.installSampleEditPlugin(grantEdit: false);
       final result = registry.invoke('com.tutuaword.sample.edit');
       expect(result, contains('capability denied'));
+      expect(result, contains('Install sample'));
       expect(registry.lastError, contains('document.edit'));
     });
 
@@ -32,6 +34,25 @@ void main() {
       expect(registry.invoke('com.tutuaword.sample.edit'), contains('disabled'));
       expect(registry.enable('com.tutuaword.sample.edit'), isTrue);
       expect(registry.invoke('com.tutuaword.sample.edit'), 'Hello from plugin');
+    });
+
+    testWidgets('I-F26-S3-add-ins-from-home', (tester) async {
+      final controller = createTestEditorController();
+      addTearDown(controller.dispose);
+
+      await pumpWideRibbon(
+        tester,
+        SizedBox(height: 140, child: HomeTab(controller: controller)),
+      );
+      await tester.scrollUntilVisible(
+        find.byKey(const Key('home_add_ins')),
+        120,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.tap(find.byKey(const Key('home_add_ins')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('plugins_dialog')), findsOneWidget);
     });
 
     testWidgets('I-F26-S3-plugins-dialog-from-review', (tester) async {

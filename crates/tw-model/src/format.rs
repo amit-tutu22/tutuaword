@@ -349,6 +349,9 @@ pub struct SectionFormat {
     /// When true, the first page of this section uses the First header/footer variant (`w:titlePg`).
     #[serde(default)]
     pub different_first_page: bool,
+    /// Page border (box) drawn inside the page edge (F07 page borders).
+    #[serde(default)]
+    pub page_borders: Option<BorderSet>,
 }
 
 impl Default for SectionFormat {
@@ -369,6 +372,7 @@ impl Default for SectionFormat {
             watermark: None,
             line_numbers: LineNumberSettings::default(),
             different_first_page: false,
+            page_borders: None,
         }
     }
 }
@@ -430,6 +434,21 @@ impl SectionFormat {
         self.watermark = patch.watermark.clone();
         self.line_numbers = patch.line_numbers;
         self.different_first_page = patch.different_first_page;
+        self.page_borders = patch.page_borders.clone();
+    }
+
+    /// Inset from the page edge used when painting [Self::page_borders].
+    pub const PAGE_BORDER_INSET: f32 = 24.0;
+
+    /// Build a uniform box border on all four sides.
+    pub fn box_page_borders(width: f32, color: Color) -> BorderSet {
+        let spec = BorderSpec { width, color };
+        BorderSet {
+            top: Some(spec),
+            left: Some(spec),
+            bottom: Some(spec),
+            right: Some(spec),
+        }
     }
 
     /// X coordinate for line-number labels in the left gutter.
@@ -552,6 +571,16 @@ impl BorderSet {
             || self.left.is_some()
             || self.bottom.is_some()
             || self.right.is_some()
+    }
+
+    /// Uniform box with the same [BorderSpec] on every side.
+    pub fn box_all(spec: BorderSpec) -> Self {
+        Self {
+            top: Some(spec),
+            left: Some(spec),
+            bottom: Some(spec),
+            right: Some(spec),
+        }
     }
 }
 

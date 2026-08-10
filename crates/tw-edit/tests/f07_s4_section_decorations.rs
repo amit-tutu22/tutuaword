@@ -16,6 +16,7 @@ fn decoration_patch() -> SectionFormat {
         enabled: true,
         start: 1,
     };
+    patch.page_borders = Some(SectionFormat::box_page_borders(1.5, Color::BLACK));
     patch
 }
 
@@ -43,6 +44,7 @@ fn u_f07_s4_set_page_color_and_watermark() {
             start: 1,
         }
     );
+    assert!(format.page_borders.as_ref().is_some_and(|b| b.any()));
 }
 
 #[test]

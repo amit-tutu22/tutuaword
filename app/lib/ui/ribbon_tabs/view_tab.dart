@@ -40,20 +40,27 @@ class ViewTab extends StatelessWidget {
                 label: 'Show',
                 child: Row(
                   children: [
-                    Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        _RibbonCheckbox(
-                          label: 'Ruler',
-                          value: controller.showRuler,
-                          onChanged: (_) => controller.toggleRuler(),
-                        ),
-                        _RibbonCheckbox(
-                          label: 'Navigation\nPane',
-                          value: controller.showNavigationPane,
-                          onChanged: (_) => controller.toggleNavigationPane(),
-                        ),
-                      ],
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _RibbonCheckbox(
+                            key: const Key('view_show_ruler'),
+                            label: 'Ruler',
+                            value: controller.showRuler,
+                            onChanged: (_) => controller.toggleRuler(),
+                          ),
+                          const SizedBox(height: 4),
+                          _RibbonCheckbox(
+                            key: const Key('view_show_navigation_pane'),
+                            label: 'Navigation Pane',
+                            value: controller.showNavigationPane,
+                            onChanged: (_) => controller.toggleNavigationPane(),
+                          ),
+                        ],
+                      ),
                     ),
                     RibbonLargeButton(
                       icon: Icons.format_list_bulleted,
@@ -103,6 +110,7 @@ class ViewTab extends StatelessWidget {
 
 class _RibbonCheckbox extends StatelessWidget {
   const _RibbonCheckbox({
+    super.key,
     required this.label,
     required this.value,
     required this.onChanged,
@@ -114,24 +122,35 @@ class _RibbonCheckbox extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+    return InkWell(
       onTap: () => onChanged(!value),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SizedBox(
-            width: 14,
-            height: 14,
-            child: Checkbox(
-              value: value,
-              onChanged: (v) => onChanged(v ?? false),
-              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              visualDensity: VisualDensity.compact,
+      borderRadius: BorderRadius.circular(3),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 1),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 18,
+              height: 18,
+              child: Transform.scale(
+                scale: 0.78,
+                child: Checkbox(
+                  value: value,
+                  onChanged: (v) => onChanged(v ?? false),
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  visualDensity: VisualDensity.compact,
+                  splashRadius: 0,
+                ),
+              ),
             ),
-          ),
-          const SizedBox(width: 4),
-          Text(label, style: WordTheme.ribbonLabel.copyWith(fontSize: 10)),
-        ],
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: WordTheme.ribbonLabel.copyWith(fontSize: 11, height: 1.1),
+            ),
+          ],
+        ),
       ),
     );
   }

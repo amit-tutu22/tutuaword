@@ -15,7 +15,10 @@ import 'package:tutuaword/bridge/engine_loader.dart';
 import 'package:tutuaword/bridge/engine_types.dart';
 import 'package:tutuaword/bridge/document_print.dart';
 import 'package:tutuaword/bridge/document_print_platform.dart';
+import 'package:tutuaword/bridge/document_share.dart';
+import 'package:tutuaword/bridge/document_share_platform.dart';
 import 'package:tutuaword/bridge/document_session_store.dart';
+import 'package:tutuaword/bridge/share_temp.dart';
 import 'package:tutuaword/bridge/mock_native_engine.dart';
 import 'package:tutuaword/bridge/print_layout_settings.dart';
 import 'package:tutuaword/bridge/outline_entry.dart';
@@ -31,15 +34,19 @@ import 'package:tutuaword/editor/document_edit_zone.dart';
 import 'package:tutuaword/editor/chart_data.dart';
 import 'package:tutuaword/editor/equation_omml.dart';
 import 'package:tutuaword/editor/display_list.dart';
+import 'package:tutuaword/editor/formatting_marks.dart';
 import 'package:tutuaword/editor/recent_symbols.dart';
 import 'package:tutuaword/editor/image_hit_test.dart';
 import 'package:tutuaword/editor/shape_hit_test.dart';
 import 'package:tutuaword/editor/text_to_speech.dart';
 import 'package:tutuaword/editor/text_to_speech_platform.dart';
 import 'package:tutuaword/ui/chart_data_dialog.dart';
+import 'package:tutuaword/ui/cover_page_dialog.dart';
 import 'package:tutuaword/ui/equation_dialog.dart';
 import 'package:tutuaword/editor/document_templates.dart';
+import 'package:tutuaword/editor/document_view_layout.dart';
 import 'package:tutuaword/ui/goto_dialog.dart';
+import 'package:tutuaword/ui/zoom_dialog.dart';
 import 'package:tutuaword/bridge/mail_merge_csv.dart';
 import 'package:tutuaword/bridge/ai_client.dart';
 import 'package:tutuaword/bridge/plugin_registry.dart';
@@ -51,15 +58,19 @@ import 'package:tutuaword/ui/ai_generate_dialog.dart';
 import 'package:tutuaword/ui/ai_rewrite_dialog.dart';
 import 'package:tutuaword/ui/ai_settings_dialog.dart';
 import 'package:tutuaword/ui/ai_smart_edit_dialog.dart';
+import 'package:tutuaword/ui/ai_translate_dialog.dart';
 import 'package:tutuaword/ui/ai_visual_dialog.dart';
 import 'package:tutuaword/ui/form_field_dialog.dart';
 import 'package:tutuaword/ui/hyperlink_dialog.dart';
+import 'package:tutuaword/ui/language_dialog.dart';
 import 'package:tutuaword/ui/mail_merge_dialogs.dart';
 import 'package:tutuaword/ui/plugins_dialog.dart';
 import 'package:tutuaword/ui/new_from_template_dialog.dart';
 import 'package:tutuaword/ui/save_as_template_dialog.dart';
 import 'package:tutuaword/bridge/digital_signature.dart';
 import 'package:tutuaword/bridge/document_inspect_finding.dart';
+import 'package:tutuaword/bridge/proofing_language.dart';
+import 'package:tutuaword/bridge/thesaurus.dart';
 import 'package:tutuaword/ui/digital_signature_dialog.dart';
 import 'package:tutuaword/ui/document_inspector_dialog.dart';
 import 'package:tutuaword/ui/print_settings_dialog.dart';
@@ -67,16 +78,24 @@ import 'package:tutuaword/ui/protect_password_dialog.dart';
 import 'package:tutuaword/ui/symbol_dialog.dart';
 import 'package:tutuaword/ui/paragraph_borders_dialog.dart';
 import 'package:tutuaword/ui/paragraph_spacing_dialog.dart';
+import 'package:tutuaword/ui/page_borders_dialog.dart';
 import 'package:tutuaword/ui/page_setup.dart';
 import 'package:tutuaword/ui/table_design_dialog.dart';
 import 'package:tutuaword/ui/paste_special_dialog.dart';
 import 'package:tutuaword/ui/tab_stops_dialog.dart';
+import 'package:tutuaword/ui/thesaurus_dialog.dart';
 
 export 'package:tutuaword/bridge/engine_types.dart'
     show CaretGeometry, GlyphSelectionRect;
 export 'package:tutuaword/editor/controllers/formatting_controller.dart'
     show LineSpacingMode;
 export 'package:tutuaword/editor/doc_range.dart';
+
+/// Writes bytes to a temporary path for the OS share sheet.
+typedef ShareTempWriter = Future<String?> Function({
+  required String fileName,
+  required Uint8List bytes,
+});
 
 /// Clipboard payload read from the system pasteboard.
 class EditorClipboardPayload {
@@ -100,6 +119,8 @@ class EditorController extends ChangeNotifier {
     RecentSymbolsStore? recentSymbols,
     TextToSpeechEngine? textToSpeech,
     DocumentPrintHost? printHost,
+    DocumentShareHost? shareHost,
+    ShareTempWriter? shareTempWriter,
     PasswordPromptCallback? passwordPrompt,
     bool enableAutosave = true,
     Duration? autosaveInterval,
@@ -108,11 +129,16 @@ class EditorController extends ChangeNotifier {
         _sessionStore = sessionStore,
         _tts = textToSpeech ?? createPlatformTextToSpeech(),
         _printHost = printHost ?? createPlatformPrintHost(),
+        _shareHost = shareHost ?? createPlatformShareHost(),
+        _shareTempWriter = shareTempWriter ?? writeShareTempFile,
         _host = EngineHost(engine: engine ?? (useMockWhenEngineMissing ? MockDocumentEngine() : loadDocumentEngine())) {
     _view = ViewController();
     _selection = SelectionController(
       host: _host,
-      onSelectionChanged: () => _formatting.syncFromCaret(),
+      onSelectionChanged: () {
+        _formatting.syncFromCaret();
+        unawaited(_onSelectionChangedFormatPainter());
+      },
     );
     _formatting = FormattingController(host: _host, selection: _selection);
     _find = FindController(
@@ -162,12 +188,19 @@ class EditorController extends ChangeNotifier {
     RecentSymbolsStore? recentSymbols,
     TextToSpeechEngine? textToSpeech,
     DocumentPrintHost? printHost,
+    DocumentShareHost? shareHost,
+    ShareTempWriter? shareTempWriter,
   }) {
     return EditorController(
       engine: engine ?? MockDocumentEngine(),
       recentSymbols: recentSymbols ?? RecentSymbolsStore(),
       textToSpeech: textToSpeech ?? RecordingTextToSpeech(),
       printHost: printHost ?? RecordingPrintHost(),
+      shareHost: shareHost ?? RecordingShareHost(),
+      // Avoid real filesystem IO under Flutter's fake-async widget tests.
+      shareTempWriter: shareTempWriter ??
+          ({required fileName, required bytes}) async =>
+              '/tmp/tutuaword_share_test/$fileName',
       enableAutosave: false,
     );
   }
@@ -177,6 +210,8 @@ class EditorController extends ChangeNotifier {
   final DocumentSessionStore? _sessionStore;
   final TextToSpeechEngine _tts;
   final DocumentPrintHost _printHost;
+  final DocumentShareHost _shareHost;
+  final ShareTempWriter _shareTempWriter;
   late final ViewController _view;
   late final SelectionController _selection;
   late final FormattingController _formatting;
@@ -187,6 +222,7 @@ class EditorController extends ChangeNotifier {
   int _mailMergeRowIndex = 0;
   final PluginRegistry _pluginRegistry = PluginRegistry();
   final AiClient _aiClient = AiClient.productionDesktop();
+  String _proofingLanguageId = kDefaultProofingLanguageId;
   DocumentEditZone _editZone = DocumentEditZone.body;
   String? _selectedImageId;
   int? _selectedImagePage;
@@ -249,6 +285,12 @@ class EditorController extends ChangeNotifier {
       PageSetupPresets.columnCountLabel(_currentSectionFormat());
   Color? get pageColor => PageSetupPresets.pageColor(_currentSectionFormat());
   String? get watermarkText => PageSetupPresets.watermarkText(_currentSectionFormat());
+  bool get hasPageBorders =>
+      PageSetupPresets.hasPageBorders(_currentSectionFormat());
+  double? get pageBorderWidth =>
+      PageSetupPresets.pageBorderWidth(_currentSectionFormat());
+  Color? get pageBorderColor =>
+      PageSetupPresets.pageBorderColor(_currentSectionFormat());
   bool get lineNumbersEnabled =>
       PageSetupPresets.lineNumbersEnabled(_currentSectionFormat());
   bool get differentFirstPage =>
@@ -327,8 +369,14 @@ class EditorController extends ChangeNotifier {
   // ── View ──────────────────────────────────────────────────────────────────
   int get currentPage => _view.currentPage;
   bool get printPreview => _view.printPreview;
+  DocumentViewLayout get viewLayout => _view.layout;
+  bool get isReadMode => _view.isReadMode;
+  bool get isWebLayout => _view.isWebLayout;
+  bool get splitView => _view.splitView;
+  int get pageColumns => _view.pageColumns;
   double get zoom => _view.zoom;
   bool get showRuler => _view.showRuler;
+  bool get showFormattingMarks => _view.showFormattingMarks;
   bool get showNavigationPane => _view.showNavigationPane;
   bool get showStyleInspector => _view.showStyleInspector;
   bool get showAccessibilityChecker => _view.showAccessibilityChecker;
@@ -382,12 +430,111 @@ class EditorController extends ChangeNotifier {
   void togglePrintPreview() {
     _view.togglePrintPreview();
     _session.setStatusText(_view.printPreview ? 'Print preview' : 'Print layout');
+    notifyListeners();
+  }
+
+  void setPrintLayout() {
+    _view.setPrintLayout();
+    _session.setStatusText('Print layout');
+    notifyListeners();
+  }
+
+  void setReadMode() {
+    _view.setReadMode();
+    _session.setStatusText('Read mode');
+    notifyListeners();
+  }
+
+  void setWebLayout() {
+    _view.setWebLayout();
+    _session.setStatusText('Web layout');
+    notifyListeners();
+  }
+
+  void setPrintPreviewMode() {
+    _view.setPrintPreviewMode();
+    _session.setStatusText('Print preview');
+    notifyListeners();
   }
 
   void setZoom(double value) => _view.setZoom(value);
   void zoomIn() => _view.zoomIn();
   void zoomOut() => _view.zoomOut();
+
+  Future<void> openZoomDialog(BuildContext context) async {
+    final next = await ZoomDialog.show(context, currentZoom: zoom);
+    if (next == null) return;
+    setZoom(next);
+    _session.setStatusText('Zoom ${(next * 100).round()}%');
+    notifyListeners();
+  }
+
+  void zoomToOnePage() {
+    _view.zoomToOnePage(pageWidth: pageWidth, pageHeight: pageHeight);
+    _session.setStatusText('One page · ${(zoom * 100).round()}%');
+    notifyListeners();
+  }
+
+  void zoomToMultiplePages() {
+    _view.zoomToMultiplePages(pageWidth: pageWidth, pageHeight: pageHeight);
+    _session.setStatusText('Multiple pages · ${(zoom * 100).round()}%');
+    notifyListeners();
+  }
+
+  void reportViewportSize(Size size) {
+    _view.reportViewport(width: size.width, height: size.height);
+  }
+
+  void toggleSplitView() {
+    _view.toggleSplitView();
+    _session.setStatusText(_view.splitView ? 'Split view' : 'Split view closed');
+    notifyListeners();
+  }
+
+  void arrangeAllViews() {
+    _view.setSplitView(true);
+    _session.setStatusText('Arranged views');
+    notifyListeners();
+  }
+
+  void markNewWindowOpened() {
+    _session.setStatusText('New window');
+    notifyListeners();
+  }
+
+  void markNewWindowClosed() {
+    _session.setStatusText('Window closed');
+    notifyListeners();
+  }
+
   void toggleRuler() => _view.toggleRuler();
+
+  void toggleFormattingMarks() {
+    _view.toggleFormattingMarks();
+    _session.setStatusText(
+      _view.showFormattingMarks
+          ? 'Formatting marks shown'
+          : 'Formatting marks hidden',
+    );
+    notifyListeners();
+  }
+
+  /// Non-printing mark positions for [pageIndex] (spaces, tabs, ¶).
+  List<FormattingMark> formattingMarksForPage(int pageIndex) {
+    if (!_view.showFormattingMarks || _host.engine == null) {
+      return const [];
+    }
+    final runId = _selection.defaultRunId();
+    if (runId == null) return const [];
+    final text = documentText;
+    if (text.isEmpty) return const [];
+    return collectFormattingMarks(
+      engine: _host.engine!,
+      pageIndex: pageIndex,
+      runId: runId,
+      text: text,
+    );
+  }
   void toggleNavigationPane() => _view.toggleNavigationPane();
   void showNavigationOutline() {
     _view.showNavigationOutline();
@@ -513,7 +660,11 @@ class EditorController extends ChangeNotifier {
   }
 
   bool isPageEditable(int pageIndex) {
-    if (_session.documentReadOnly || _view.printPreview) return false;
+    if (_session.documentReadOnly ||
+        _view.printPreview ||
+        _view.isReadMode) {
+      return false;
+    }
     return _host.isConnected;
   }
 
@@ -906,6 +1057,30 @@ class EditorController extends ChangeNotifier {
   double get spaceBefore => _formatting.spaceBefore;
   double get spaceAfter => _formatting.spaceAfter;
   List<Map<String, dynamic>> get tabStops => _formatting.tabStops;
+
+  bool get formatPainterArmed => _formatting.formatPainterArmed;
+
+  void toggleFormatPainter() {
+    if (_formatting.formatPainterArmed) {
+      _formatting.cancelFormatPainter();
+      _session.setStatusText('Format Painter cancelled');
+    } else {
+      final ok = _formatting.pickupFormatPainter();
+      _session.setStatusText(
+        ok
+            ? 'Format Painter: select text to paint'
+            : 'Format Painter: place the caret in formatted text',
+      );
+    }
+    notifyListeners();
+  }
+
+  Future<void> _onSelectionChangedFormatPainter() async {
+    final applied = await _formatting.applyFormatPainterIfArmed();
+    if (!applied) return;
+    _session.setStatusText('Format painted');
+    notifyListeners();
+  }
 
   void toggleBold() => _formatting.toggleBold();
   void toggleItalic() => _formatting.toggleItalic();
@@ -1568,6 +1743,72 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
     return result;
   }
+
+  /// Share the document via the OS share sheet (Mail, Messages, WhatsApp, etc.).
+  ///
+  /// Prefers a temporary `.docx` attachment when the engine can serialize one;
+  /// otherwise shares plain text. Does not use cloud share links.
+  Future<DocumentShareResult> shareWithApps() async {
+    final title = documentTitle.trim().isEmpty ? 'Document' : documentTitle.trim();
+    final text = documentText;
+    String? filePath;
+    String? mimeType;
+
+    try {
+      final docx = _host.engine?.saveDocumentAsBytes('docx');
+      if (docx != null && docx.isNotEmpty) {
+        filePath = await _shareTempWriter(
+          fileName: '$title.docx',
+          bytes: docx,
+        );
+        if (filePath != null) {
+          mimeType =
+              'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+        }
+      } else if (text.trim().isNotEmpty) {
+        filePath = await _shareTempWriter(
+          fileName: '$title.txt',
+          bytes: Uint8List.fromList(utf8.encode(text)),
+        );
+        if (filePath != null) {
+          mimeType = 'text/plain';
+        }
+      }
+    } catch (_) {
+      // Fall through to text-only share.
+    }
+
+    if ((filePath == null || filePath.isEmpty) && text.trim().isEmpty) {
+      _session.setStatusText('Nothing to share');
+      notifyListeners();
+      return const DocumentShareResult(
+        outcome: DocumentShareOutcome.failed,
+        message: 'Nothing to share',
+      );
+    }
+
+    final result = await _shareHost.share(
+      text: text,
+      subject: title,
+      filePath: filePath,
+      mimeType: mimeType,
+    );
+    switch (result.outcome) {
+      case DocumentShareOutcome.presented:
+        _session.setStatusText(result.message ?? 'Share sheet opened');
+      case DocumentShareOutcome.cancelled:
+        _session.setStatusText('Share cancelled');
+      case DocumentShareOutcome.unsupported:
+        _session.setStatusText(
+          result.message ?? 'Share not supported on this device',
+        );
+      case DocumentShareOutcome.failed:
+        _session.setStatusText(result.message ?? 'Share failed');
+    }
+    notifyListeners();
+    return result;
+  }
+
   Future<void> undo() => _session.undo();
   Future<void> redo() => _session.redo();
   Future<void> setAutosaveInterval(Duration d) => _session.setAutosaveInterval(d);
@@ -2177,6 +2418,39 @@ class EditorController extends ChangeNotifier {
         color == null ? 'Page color cleared' : 'Page color applied',
       );
 
+  void applyPageBorders({required double width, required Color color}) =>
+      _applySectionFormat(
+        PageSetupPresets.withPageBorders(
+          _currentSectionFormat(),
+          width: width,
+          color: color,
+        ),
+        'Page borders applied',
+      );
+
+  void clearPageBorders() => _applySectionFormat(
+        PageSetupPresets.withoutPageBorders(_currentSectionFormat()),
+        'Page borders removed',
+      );
+
+  /// Design/Layout → Page Borders dialog.
+  Future<void> editPageBorders(BuildContext context) async {
+    final values = await PageBordersDialog.show(
+      context,
+      initial: PageBordersValues(
+        enabled: hasPageBorders,
+        width: pageBorderWidth ?? 1.0,
+        color: pageBorderColor ?? Colors.black,
+      ),
+    );
+    if (values == null) return;
+    if (values.clear || !values.enabled) {
+      clearPageBorders();
+    } else {
+      applyPageBorders(width: values.width, color: values.color);
+    }
+  }
+
   void applyWatermark(String text) => _applySectionFormat(
         PageSetupPresets.withWatermark(_currentSectionFormat(), text),
         'Watermark applied',
@@ -2254,6 +2528,76 @@ class EditorController extends ChangeNotifier {
         () => _host.engine!.insertPageBreakAtAsync(caretRunId: _selection.defaultRunId()),
         'Page break inserted',
       );
+
+  /// Insert → Cover Page: title block at the document start, then a page break.
+  Future<void> insertCoverPage(BuildContext context) async {
+    if (!_host.isConnected || _host.engine == null) return;
+    final values = await CoverPageDialog.show(
+      context,
+      initialTitle:
+          documentTitle == 'Document1' ? 'Document Title' : documentTitle,
+    );
+    if (values == null) return;
+    await insertCoverPageContent(
+      title: values.title,
+      subtitle: values.subtitle,
+      author: values.author,
+    );
+  }
+
+  /// Inserts cover text at offset 0, styles the title, then adds a page break.
+  Future<void> insertCoverPageContent({
+    required String title,
+    String subtitle = '',
+    String author = '',
+  }) async {
+    if (!_host.isConnected || _host.engine == null) return;
+    final runId = _selection.defaultRunId() ??
+        (_host.engine is MockDocumentEngine
+            ? (_host.engine as MockDocumentEngine).defaultRunId
+            : null);
+    if (runId == null) {
+      _session.setStatusText('Cover page failed: no caret run');
+      notifyListeners();
+      return;
+    }
+
+    final lines = <String>[title.trim()];
+    if (subtitle.trim().isNotEmpty) lines.add(subtitle.trim());
+    if (author.trim().isNotEmpty) lines.add(author.trim());
+    final body = '${lines.join('\n')}\n';
+
+    _selection.setCaret(runId, 0, page: 0);
+    final ok = await applyAiTextSuggestion(
+      runId: runId,
+      start: 0,
+      end: 0,
+      text: body,
+    );
+    if (!ok) {
+      _session.setStatusText('Cover page insert failed');
+      notifyListeners();
+      return;
+    }
+
+    _selection.setCaret(runId, 0, page: 0);
+    await _session.applyEngineStyle(
+      () => _host.engine!.applyParagraphStyleAsync(
+        styleName: 'Heading 1',
+        caretRunId: runId,
+      ),
+      'Cover title styled',
+    );
+    _formatting.setActiveParagraphStyle('Heading 1');
+
+    _selection.setCaret(runId, body.length, page: 0);
+    await _session.applyEngineStyle(
+      () => _host.engine!.insertPageBreakAtAsync(caretRunId: runId),
+      'Cover page inserted',
+      full: true,
+    );
+    notifyListeners();
+  }
 
   void insertSectionBreak() => _session.applyEngineStyle(
         () => _host.engine!.insertSectionBreakAtAsync(caretRunId: _selection.defaultRunId()),
@@ -2775,6 +3119,178 @@ class EditorController extends ChangeNotifier {
           ? 'New ${generated.kind.label.toLowerCase()}: ${generated.topic}'
           : 'Generate apply failed',
     );
+    notifyListeners();
+  }
+
+  String get proofingLanguageId => _proofingLanguageId;
+
+  ProofingLanguage get proofingLanguage =>
+      proofingLanguageById(_proofingLanguageId);
+
+  void setProofingLanguage(String languageId) {
+    _proofingLanguageId = proofingLanguageById(languageId).id;
+    _session.setStatusText('Proofing language: ${proofingLanguage.label}');
+    notifyListeners();
+  }
+
+  /// Review → Language: choose proofing / default translate language.
+  Future<void> chooseProofingLanguage(BuildContext context) async {
+    final selected = await LanguageDialog.show(
+      context,
+      currentLanguageId: _proofingLanguageId,
+    );
+    if (selected == null) return;
+    setProofingLanguage(selected);
+  }
+
+  /// Review → Translate: AI-translate the selection into a chosen language.
+  Future<void> translateSelection(BuildContext context) async {
+    if (!_host.isConnected || _host.engine == null) return;
+    if (!_selection.hasGlyphSelection) {
+      _session.setStatusText('Select text to translate');
+      notifyListeners();
+      return;
+    }
+    final original = selectedText;
+    if (original.isEmpty) {
+      _session.setStatusText('Select text to translate');
+      notifyListeners();
+      return;
+    }
+    final range = _selection.selection;
+    if (range == null) return;
+    final (start, end) = range.normalized();
+    if (start.runId != end.runId) {
+      _session.setStatusText('Translate supports a single-run selection');
+      notifyListeners();
+      return;
+    }
+
+    if (!context.mounted) return;
+    final targetId = await AiTranslateDialog.pickLanguage(
+      context,
+      initialLanguageId: _proofingLanguageId == 'en-US' ? 'es' : _proofingLanguageId,
+    );
+    if (targetId == null) {
+      _session.setStatusText('Translate cancelled');
+      notifyListeners();
+      return;
+    }
+    final target = proofingLanguageById(targetId);
+
+    _session.setStatusText('Translating…');
+    notifyListeners();
+    late final String suggestion;
+    try {
+      suggestion = await _aiClient.translate(
+        AiDocumentContext(
+          selectionText: original,
+          pageCount: 1,
+          totalTokenEstimate: original.length,
+        ),
+        target.translateName,
+      );
+    } catch (e) {
+      _session.setStatusText('Translate failed: $e');
+      notifyListeners();
+      return;
+    }
+
+    if (!context.mounted) return;
+    final accepted = await AiTranslateDialog.showResult(
+      context,
+      original: original,
+      suggestion: suggestion,
+      targetLanguageId: target.id,
+    );
+    if (accepted == null) {
+      _session.setStatusText('Translate discarded');
+      notifyListeners();
+      return;
+    }
+
+    final lo = start.offset < end.offset ? start.offset : end.offset;
+    final hi = start.offset < end.offset ? end.offset : start.offset;
+    final ok = await applyAiTextSuggestion(
+      runId: start.runId,
+      start: lo,
+      end: hi,
+      text: accepted,
+    );
+    _session.setStatusText(ok ? 'Translation applied' : 'Translate apply failed');
+    notifyListeners();
+  }
+
+  /// Review → Thesaurus: suggest synonyms and optionally replace the word.
+  Future<void> openThesaurus(BuildContext context) async {
+    if (!_host.isConnected || _host.engine == null) return;
+    if (!_selection.hasGlyphSelection) {
+      _session.setStatusText('Select a word for thesaurus');
+      notifyListeners();
+      return;
+    }
+    final original = selectedText;
+    final lemma = thesaurusLemma(original);
+    if (lemma.isEmpty) {
+      _session.setStatusText('Select a word for thesaurus');
+      notifyListeners();
+      return;
+    }
+    final range = _selection.selection;
+    if (range == null) return;
+    final (start, end) = range.normalized();
+    if (start.runId != end.runId) {
+      _session.setStatusText('Thesaurus supports a single-run selection');
+      notifyListeners();
+      return;
+    }
+
+    final synonyms = <String>{...lookupThesaurus(lemma)};
+    try {
+      final aiRaw = await _aiClient.suggestSynonyms(
+        AiDocumentContext(
+          selectionText: lemma,
+          pageCount: 1,
+          totalTokenEstimate: lemma.length,
+        ),
+      );
+      synonyms.addAll(parseThesaurusAiResponse(aiRaw, exclude: lemma));
+    } catch (_) {
+      // Offline / unconfigured AI — local dictionary is enough.
+    }
+
+    if (!context.mounted) return;
+    final chosen = await ThesaurusDialog.show(
+      context,
+      word: lemma,
+      synonyms: synonyms.toList(growable: false),
+    );
+    if (chosen == null) {
+      _session.setStatusText(
+        synonyms.isEmpty ? 'No thesaurus matches' : 'Thesaurus cancelled',
+      );
+      notifyListeners();
+      return;
+    }
+
+    // Preserve simple capitalization of the original selection.
+    var replacement = chosen;
+    final trimmed = original.trim();
+    if (trimmed.isNotEmpty &&
+        trimmed[0].toUpperCase() == trimmed[0] &&
+        trimmed.toLowerCase() != trimmed) {
+      replacement = chosen[0].toUpperCase() + chosen.substring(1);
+    }
+
+    final lo = start.offset < end.offset ? start.offset : end.offset;
+    final hi = start.offset < end.offset ? end.offset : start.offset;
+    final ok = await applyAiTextSuggestion(
+      runId: start.runId,
+      start: lo,
+      end: hi,
+      text: replacement,
+    );
+    _session.setStatusText(ok ? 'Replaced with “$replacement”' : 'Replace failed');
     notifyListeners();
   }
 

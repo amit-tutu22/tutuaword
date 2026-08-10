@@ -66,7 +66,10 @@ class _AiChatDialogState extends State<AiChatDialog> {
       await _session.ask(widget.client, q);
       _input.clear();
     } catch (e) {
-      _error = e.toString();
+      final raw = e.toString();
+      _error = raw.startsWith('Bad state: ')
+          ? raw.substring('Bad state: '.length)
+          : raw;
     }
     if (mounted) {
       setState(() => _busy = false);

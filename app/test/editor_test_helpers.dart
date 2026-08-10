@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tutuaword/bridge/document_print.dart';
+import 'package:tutuaword/bridge/document_share.dart';
 import 'package:tutuaword/bridge/document_session_store.dart';
 import 'package:tutuaword/bridge/mock_native_engine.dart';
 import 'package:tutuaword/editor/document_view.dart';
@@ -19,6 +20,7 @@ EditorController createTestEditorController({
   DocumentSessionStore? sessionStore,
   TextToSpeechEngine? textToSpeech,
   DocumentPrintHost? printHost,
+  DocumentShareHost? shareHost,
 }) {
   if (sessionStore != null) {
     return EditorController(
@@ -27,6 +29,9 @@ EditorController createTestEditorController({
       sessionStore: sessionStore,
       textToSpeech: textToSpeech ?? RecordingTextToSpeech(),
       printHost: printHost ?? RecordingPrintHost(),
+      shareHost: shareHost ?? RecordingShareHost(),
+      shareTempWriter: ({required fileName, required bytes}) async =>
+          '/tmp/tutuaword_share_test/$fileName',
       enableAutosave: false,
     );
   }
@@ -35,6 +40,7 @@ EditorController createTestEditorController({
     recentSymbols: recentSymbols,
     textToSpeech: textToSpeech,
     printHost: printHost,
+    shareHost: shareHost,
   );
 }
 

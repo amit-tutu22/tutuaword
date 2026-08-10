@@ -292,10 +292,16 @@ class LayoutTab extends StatelessWidget {
                       !controller.lineNumbersEnabled,
                     ),
                   ),
-                  RibbonLargeButton(
-                    icon: Icons.border_style,
-                    label: 'Page\nBorders',
-                    onPressed: null,
+                  Builder(
+                    builder: (context) => RibbonLargeButton(
+                      key: const Key('layout_page_borders'),
+                      icon: Icons.border_style,
+                      label: 'Page\nBorders',
+                      tooltip: controller.hasPageBorders
+                          ? 'Page borders on'
+                          : 'Page borders',
+                      onPressed: () => controller.editPageBorders(context),
+                    ),
                   ),
                 ],
               ),

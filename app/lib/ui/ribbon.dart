@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
 import 'package:tutuaword/ui/ribbon_focusable.dart';
@@ -63,6 +65,7 @@ class WordRibbonState extends State<WordRibbon> {
           _TabStrip(
             activeTab: _activeTab,
             onTabSelected: (tab) => setState(() => _activeTab = tab),
+            onShare: () => unawaited(widget.controller.shareWithApps()),
           ),
           Container(
             height: WordTheme.ribbonHeight,
@@ -94,10 +97,12 @@ class _TabStrip extends StatelessWidget {
   const _TabStrip({
     required this.activeTab,
     required this.onTabSelected,
+    required this.onShare,
   });
 
   final RibbonTab activeTab;
   final ValueChanged<RibbonTab> onTabSelected;
+  final VoidCallback onShare;
 
   @override
   Widget build(BuildContext context) {
@@ -122,7 +127,10 @@ class _TabStrip extends StatelessWidget {
               ),
             ),
           ),
-          _ShareButton(onPressed: null, tooltip: kComingSoonTooltip),
+          _ShareButton(
+            onPressed: onShare,
+            tooltip: 'Share with another app',
+          ),
           const SizedBox(width: 12),
         ],
       ),
@@ -188,6 +196,7 @@ class _ShareButton extends StatelessWidget {
     return wrapRibbonTooltip(
       tip,
       RibbonFocusable(
+        key: const Key('ribbon_share'),
         enabled: enabled,
         onActivate: onPressed,
         builder: (context, {required hovered, required focused}) {

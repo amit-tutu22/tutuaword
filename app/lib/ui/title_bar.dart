@@ -87,9 +87,10 @@ class WordTitleBar extends StatelessWidget {
                   ),
                   const Spacer(),
                   _QuickAccessIcon(
+                    key: const Key('title_bar_search'),
                     icon: Icons.search,
-                    tooltip: 'Search',
-                    onPressed: null,
+                    tooltip: 'Find',
+                    onPressed: controller.openFindPane,
                   ),
                   const SizedBox(width: 12),
                 ],
@@ -104,6 +105,7 @@ class WordTitleBar extends StatelessWidget {
 
 class _QuickAccessIcon extends StatefulWidget {
   const _QuickAccessIcon({
+    super.key,
     required this.icon,
     required this.tooltip,
     this.onPressed,

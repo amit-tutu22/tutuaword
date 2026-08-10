@@ -55,6 +55,12 @@ class PluginManifestInfo {
 
   bool hasCapability(PluginCapability cap) => granted.contains(cap);
 
+  /// Short grant summary for UI (e.g. `document.read, document.edit`).
+  String get grantedLabel {
+    if (granted.isEmpty) return 'no capabilities granted';
+    return granted.map((c) => c.wire).join(', ');
+  }
+
   Map<String, dynamic> toJson() => {
         'id': id,
         'name': name,
@@ -196,7 +202,8 @@ class PluginRegistry {
     }
     if (!p.hasCapability(PluginCapability.documentEdit)) {
       lastError = 'capability denied: document.edit';
-      return 'ERR: capability denied: document.edit';
+      return 'ERR: capability denied: document.edit '
+          '(reinstall with “Install sample” to grant edit)';
     }
     lastError = null;
     return 'Hello from plugin$documentText';

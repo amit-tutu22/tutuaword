@@ -3,6 +3,8 @@
 /// Product capability methods never take a provider ID. Routing internals may
 /// use provider ids for tests and settings status only.
 
+import 'ai_http.dart';
+
 enum AiRoutingMode {
   automatic,
   alwaysLocal,
@@ -108,7 +110,7 @@ class AiClient {
     this.defaultLocal = AiProviderIds.llamaCpp,
   }) : httpPost = httpPost;
 
-  /// Injectable HTTP (tests use [MockAiHttpClient]; production wires a real client later).
+  /// Injectable HTTP (tests use [MockAiHttpClient]; production uses [defaultAiHttpPost]).
   AiHttpPost? httpPost;
   String openaiApiKey;
   String geminiApiKey;
@@ -204,10 +206,18 @@ class AiClient {
   }
 
   String _resolveLocal() =>
-      _tryLocal() ?? (throw StateError('no local provider available'));
+      _tryLocal() ??
+      (throw StateError(
+        'No local AI provider available. Set a llama.cpp / Ollama endpoint '
+        'in Review → AI Settings.',
+      ));
 
   String _resolveCloud() =>
-      _tryCloud() ?? (throw StateError('no cloud provider available'));
+      _tryCloud() ??
+      (throw StateError(
+        'No cloud AI provider available. Add an OpenAI or Gemini API key in '
+        'Review → AI Settings (or set OPENAI_API_KEY / GEMINI_API_KEY).',
+      ));
 
   bool _isAvailable(String id) {
     return listProviders().any((p) => p.id == id && p.available);
@@ -224,6 +234,15 @@ class AiClient {
 
   Future<String> translate(AiDocumentContext ctx, String lang) =>
       _complete(AiTask.translate, ctx, extra: ' Target language: $lang.');
+
+  /// Ask the model for synonym suggestions (Review → Thesaurus).
+  Future<String> suggestSynonyms(AiDocumentContext ctx) => _complete(
+        AiTask.rewrite,
+        ctx,
+        extra:
+            ' List up to 8 English synonyms for the word only, comma-separated. '
+            'No explanations.',
+      );
 
   /// Document chat completion (F28.S3); [ctx.selectionText] holds the RAG prompt.
   Future<String> chatComplete(AiDocumentContext ctx) =>
@@ -344,10 +363,12 @@ class AiClient {
     String? llamaEndpoint,
   }) {
     return AiClient(
-      httpPost: httpPost,
-      openaiApiKey: openaiApiKey ?? '',
-      geminiApiKey: geminiApiKey ?? '',
-      llamaEndpoint: llamaEndpoint ?? 'http://127.0.0.1:11434',
+      httpPost: httpPost ?? defaultAiHttpPost,
+      openaiApiKey: openaiApiKey ?? aiEnv('OPENAI_API_KEY') ?? '',
+      geminiApiKey: geminiApiKey ?? aiEnv('GEMINI_API_KEY') ?? '',
+      llamaEndpoint: llamaEndpoint ??
+          aiEnv('LLAMA_ENDPOINT') ??
+          'http://127.0.0.1:11434',
     );
   }
 }

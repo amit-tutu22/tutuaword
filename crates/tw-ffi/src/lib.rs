@@ -1328,7 +1328,7 @@ pub extern "C" fn tw_apply_mail_merge_row(values_json_ptr: *const c_char) -> i32
             let Some(json) = parse_cstr(values_json_ptr) else {
                 return -3;
             };
-            let Ok(map) = serde_json::from_str::<std::collections::BTreeMap<String, String>>(json)
+            let Ok(map) = serde_json::from_str::<std::collections::BTreeMap<String, String>>(&json)
             else {
                 return -3;
             };

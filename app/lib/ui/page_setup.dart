@@ -236,4 +236,55 @@ class PageSetupPresets {
 
   static bool differentFirstPage(Map<String, dynamic> format) =>
       format['different_first_page'] as bool? ?? false;
+
+  /// Uniform page box border (all four sides).
+  static Map<String, dynamic> withPageBorders(
+    Map<String, dynamic> current, {
+    required double width,
+    required Color color,
+  }) {
+    final spec = {
+      'width': width,
+      'color': colorJson(color),
+    };
+    return mergeSectionFormat(current, {
+      'page_borders': {
+        'top': spec,
+        'left': spec,
+        'bottom': spec,
+        'right': spec,
+      },
+    });
+  }
+
+  static Map<String, dynamic> withoutPageBorders(Map<String, dynamic> current) {
+    final next = Map<String, dynamic>.from(current);
+    next.remove('page_borders');
+    return next;
+  }
+
+  static bool hasPageBorders(Map<String, dynamic> format) {
+    final borders = format['page_borders'];
+    if (borders is! Map) return false;
+    return borders['top'] != null ||
+        borders['left'] != null ||
+        borders['bottom'] != null ||
+        borders['right'] != null;
+  }
+
+  static double? pageBorderWidth(Map<String, dynamic> format) {
+    final borders = format['page_borders'];
+    if (borders is! Map) return null;
+    final top = borders['top'];
+    if (top is Map) return (top['width'] as num?)?.toDouble();
+    return null;
+  }
+
+  static Color? pageBorderColor(Map<String, dynamic> format) {
+    final borders = format['page_borders'];
+    if (borders is! Map) return null;
+    final top = borders['top'];
+    if (top is Map) return colorFromJson(top['color']);
+    return null;
+  }
 }

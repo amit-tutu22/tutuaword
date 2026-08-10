@@ -74,10 +74,16 @@ class DesignTab extends StatelessWidget {
                         controller.applyPageColor(selection.color),
                     onClear: () => controller.applyPageColor(null),
                   ),
-                  RibbonLargeButton(
-                    icon: Icons.border_style,
-                    label: 'Page\nBorders',
-                    onPressed: null,
+                  Builder(
+                    builder: (context) => RibbonLargeButton(
+                      key: const Key('design_page_borders'),
+                      icon: Icons.border_style,
+                      label: 'Page\nBorders',
+                      tooltip: controller.hasPageBorders
+                          ? 'Page borders on'
+                          : 'Page borders',
+                      onPressed: () => controller.editPageBorders(context),
+                    ),
                   ),
                 ],
               ),

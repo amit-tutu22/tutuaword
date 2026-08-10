@@ -52,8 +52,13 @@ class InsertTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return RibbonTabScroller(
-      children: [
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) {
+        final hasImage = controller.hasSelectedImage;
+        const selectPictureTip = 'Select a picture in the document first';
+        return RibbonTabScroller(
+          children: [
           RibbonGroup(
             label: 'Pages',
             child: Row(
@@ -63,7 +68,15 @@ class InsertTab extends StatelessWidget {
                   label: 'Page\nBreak',
                   onPressed: controller.insertPageBreak,
                 ),
-                RibbonLargeButton(icon: Icons.view_agenda_outlined, label: 'Cover\nPage', onPressed: null),
+                Builder(
+                  builder: (context) => RibbonLargeButton(
+                    key: const Key('insert_cover_page'),
+                    icon: Icons.view_agenda_outlined,
+                    label: 'Cover\nPage',
+                    tooltip: 'Insert a title cover page',
+                    onPressed: () => controller.insertCoverPage(context),
+                  ),
+                ),
               ],
             ),
           ),
@@ -94,7 +107,8 @@ class InsertTab extends StatelessWidget {
                   key: const Key('change_picture'),
                   icon: Icons.swap_horiz,
                   label: 'Change\nPicture',
-                  onPressed: controller.hasSelectedImage
+                  tooltip: hasImage ? 'Replace the selected picture' : selectPictureTip,
+                  onPressed: hasImage
                       ? () => controller.replaceSelectedImage()
                       : null,
                 ),
@@ -102,7 +116,8 @@ class InsertTab extends StatelessWidget {
                   key: const Key('rotate_picture'),
                   icon: Icons.rotate_right,
                   label: 'Rotate',
-                  onPressed: controller.hasSelectedImage
+                  tooltip: hasImage ? 'Rotate the selected picture 90°' : selectPictureTip,
+                  onPressed: hasImage
                       ? () => controller.rotateSelectedImage()
                       : null,
                 ),
@@ -110,7 +125,8 @@ class InsertTab extends StatelessWidget {
                   key: const Key('insert_caption'),
                   icon: Icons.notes,
                   label: 'Caption',
-                  onPressed: controller.hasSelectedImage
+                  tooltip: hasImage ? 'Insert a caption under the picture' : selectPictureTip,
+                  onPressed: hasImage
                       ? () => controller.insertSelectedImageCaption()
                       : null,
                 ),
@@ -118,7 +134,8 @@ class InsertTab extends StatelessWidget {
                   key: const Key('compress_picture'),
                   icon: Icons.compress,
                   label: 'Compress',
-                  onPressed: controller.hasSelectedImage
+                  tooltip: hasImage ? 'Compress the selected picture' : selectPictureTip,
+                  onPressed: hasImage
                       ? () => controller.compressSelectedImage()
                       : null,
                 ),
@@ -193,7 +210,6 @@ class InsertTab extends StatelessWidget {
                     onDropdown: () => _insertShape(context),
                   ),
                 ),
-                RibbonLargeButton(icon: Icons.smart_display_outlined, label: 'Online\nVideo', onPressed: null),
               ],
             ),
           ),
@@ -302,7 +318,9 @@ class InsertTab extends StatelessWidget {
               ],
             ),
           ),
-      ],
+          ],
+        );
+      },
     );
   }
 }

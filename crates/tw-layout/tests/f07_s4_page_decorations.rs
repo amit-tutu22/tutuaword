@@ -140,3 +140,64 @@ fn u_f07_s4_line_numbers_disabled_no_gutter() {
         0
     );
 }
+
+/// U-F07-S4-page-borders-box
+#[test]
+fn u_f07_s4_page_borders_box() {
+    let mut format = SectionFormat::default();
+    format.page_borders = Some(SectionFormat::box_page_borders(
+        2.0,
+        Color {
+            r: 0,
+            g: 0,
+            b: 255,
+            a: 255,
+        },
+    ));
+
+    let layout = layout(format.clone(), "Bordered page");
+    let page = &layout.pages[0];
+    let inset = SectionFormat::PAGE_BORDER_INSET;
+    let blue = Color {
+        r: 0,
+        g: 0,
+        b: 255,
+        a: 255,
+    }
+    .to_argb();
+
+    let top = page.boxes.iter().any(|b| match b {
+        LayoutBox::Rect {
+            x,
+            y,
+            width,
+            height,
+            color,
+        } => {
+            (*x - inset).abs() < 0.5
+                && (*y - inset).abs() < 0.5
+                && *height >= 1.5
+                && *width > 100.0
+                && *color == blue
+        }
+        _ => false,
+    });
+    let left = page.boxes.iter().any(|b| match b {
+        LayoutBox::Rect {
+            x,
+            y,
+            width,
+            height,
+            color,
+        } => {
+            (*x - inset).abs() < 0.5
+                && (*y - inset).abs() < 0.5
+                && *width >= 1.5
+                && *height > 100.0
+                && *color == blue
+        }
+        _ => false,
+    });
+    assert!(top, "expected top page-border rect");
+    assert!(left, "expected left page-border rect");
+}

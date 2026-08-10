@@ -8,6 +8,7 @@ import 'package:tutuaword/bridge/engine_types.dart';
 import 'package:tutuaword/editor/document_painter.dart';
 import 'package:tutuaword/editor/display_list.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
+import 'package:tutuaword/editor/formatting_marks.dart';
 import 'package:tutuaword/editor/image_hit_test.dart';
 import 'package:tutuaword/editor/key_event_text.dart';
 
@@ -372,6 +373,17 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
                     images: widget.images,
                   ),
                 ),
+                if (widget.controller.showFormattingMarks)
+                  CustomPaint(
+                    size: Size(
+                      widget.controller.pageWidth,
+                      widget.controller.pageHeight,
+                    ),
+                    painter: FormattingMarksPainter(
+                      marks: widget.controller
+                          .formattingMarksForPage(widget.pageIndex),
+                    ),
+                  ),
                 if (widget.controller.selectedDiagramPage == widget.pageIndex &&
                     widget.controller.selectedDiagramRect != null)
                   CustomPaint(

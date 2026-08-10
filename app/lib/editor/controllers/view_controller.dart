@@ -1,14 +1,21 @@
 import 'package:flutter/foundation.dart';
+import 'package:tutuaword/editor/document_view_layout.dart';
 
-/// Zoom, page navigation, ruler, navigation pane, print preview.
+/// Zoom, page navigation, ruler, navigation pane, print preview, view layout.
 class ViewController extends ChangeNotifier {
   double _zoom = 1.0;
   int _currentPage = 0;
   bool _printPreview = false;
+  DocumentViewLayout _layout = DocumentViewLayout.printLayout;
+  int _pageColumns = 1;
+  bool _splitView = false;
+  double _viewportWidth = 900;
+  double _viewportHeight = 700;
   bool _showRuler = false;
   bool _showNavigationPane = false;
   bool _showStyleInspector = false;
   bool _showAccessibilityChecker = false;
+  bool _showFormattingMarks = false;
   bool _preferOutlineTab = false;
   String _statusSuffix = '';
   int? _scrollRequestPage;
@@ -16,10 +23,19 @@ class ViewController extends ChangeNotifier {
   double get zoom => _zoom;
   int get currentPage => _currentPage;
   bool get printPreview => _printPreview;
+  DocumentViewLayout get layout => _layout;
+  bool get isReadMode => _layout == DocumentViewLayout.readMode;
+  bool get isWebLayout => _layout == DocumentViewLayout.webLayout;
+  bool get isPrintLayout => _layout == DocumentViewLayout.printLayout;
+  int get pageColumns => _pageColumns;
+  bool get splitView => _splitView;
+  double get viewportWidth => _viewportWidth;
+  double get viewportHeight => _viewportHeight;
   bool get showRuler => _showRuler;
   bool get showNavigationPane => _showNavigationPane;
   bool get showStyleInspector => _showStyleInspector;
   bool get showAccessibilityChecker => _showAccessibilityChecker;
+  bool get showFormattingMarks => _showFormattingMarks;
   String get statusSuffix => _statusSuffix;
   int? get scrollRequestPage => _scrollRequestPage;
 
@@ -39,9 +55,46 @@ class ViewController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void togglePrintPreview() {
-    _printPreview = !_printPreview;
+  void reportViewport({required double width, required double height}) {
+    if (width <= 0 || height <= 0) return;
+    if ((width - _viewportWidth).abs() < 0.5 &&
+        (height - _viewportHeight).abs() < 0.5) {
+      return;
+    }
+    _viewportWidth = width;
+    _viewportHeight = height;
+  }
+
+  void setPrintLayout() {
+    _layout = DocumentViewLayout.printLayout;
+    _printPreview = false;
     notifyListeners();
+  }
+
+  void setReadMode() {
+    _layout = DocumentViewLayout.readMode;
+    _printPreview = false;
+    notifyListeners();
+  }
+
+  void setWebLayout() {
+    _layout = DocumentViewLayout.webLayout;
+    _printPreview = false;
+    notifyListeners();
+  }
+
+  void setPrintPreviewMode() {
+    _layout = DocumentViewLayout.printLayout;
+    _printPreview = true;
+    notifyListeners();
+  }
+
+  void togglePrintPreview() {
+    if (_printPreview) {
+      setPrintLayout();
+    } else {
+      setPrintPreviewMode();
+    }
   }
 
   void setZoom(double value) {
@@ -52,8 +105,55 @@ class ViewController extends ChangeNotifier {
   void zoomIn() => setZoom(_zoom + 0.1);
   void zoomOut() => setZoom(_zoom - 0.1);
 
+  void setPageColumns(int columns) {
+    _pageColumns = columns.clamp(1, 3);
+    notifyListeners();
+  }
+
+  /// Fit a single page in the current viewport.
+  void zoomToOnePage({required double pageWidth, required double pageHeight}) {
+    _pageColumns = 1;
+    final pad = 48.0;
+    final byWidth = (_viewportWidth - pad) / pageWidth;
+    final byHeight = (_viewportHeight - pad) / pageHeight;
+    setZoom(byWidth < byHeight ? byWidth : byHeight);
+  }
+
+  /// Fit two pages side-by-side in the current viewport.
+  void zoomToMultiplePages({required double pageWidth, required double pageHeight}) {
+    _pageColumns = 2;
+    final pad = 64.0;
+    final gap = 24.0;
+    final byWidth = (_viewportWidth - pad) / (pageWidth * 2 + gap);
+    final byHeight = (_viewportHeight - pad) / pageHeight;
+    setZoom(byWidth < byHeight ? byWidth : byHeight);
+  }
+
+  void toggleSplitView() {
+    _splitView = !_splitView;
+    notifyListeners();
+  }
+
+  void setSplitView(bool value) {
+    if (_splitView == value) return;
+    _splitView = value;
+    notifyListeners();
+  }
+
   void toggleRuler() {
     _showRuler = !_showRuler;
+    notifyListeners();
+  }
+
+  /// Home → Show/Hide ¶ (non-printing characters).
+  void toggleFormattingMarks() {
+    _showFormattingMarks = !_showFormattingMarks;
+    notifyListeners();
+  }
+
+  void setShowFormattingMarks(bool value) {
+    if (_showFormattingMarks == value) return;
+    _showFormattingMarks = value;
     notifyListeners();
   }
 
@@ -105,6 +205,9 @@ class ViewController extends ChangeNotifier {
   void reset() {
     _currentPage = 0;
     _printPreview = false;
+    _layout = DocumentViewLayout.printLayout;
+    _pageColumns = 1;
+    _splitView = false;
     notifyListeners();
   }
 }

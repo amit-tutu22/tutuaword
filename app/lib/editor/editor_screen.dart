@@ -113,6 +113,10 @@ class _EditorScreenState extends State<EditorScreen> {
             SingleActivator(LogicalKeyboardKey.keyA, control: true): _SelectAllDocumentIntent(),
             SingleActivator(LogicalKeyboardKey.keyP, meta: true): _PrintDocumentIntent(),
             SingleActivator(LogicalKeyboardKey.keyP, control: true): _PrintDocumentIntent(),
+            SingleActivator(LogicalKeyboardKey.digit8, control: true, shift: true):
+                _ToggleFormattingMarksIntent(),
+            SingleActivator(LogicalKeyboardKey.digit8, meta: true, shift: true):
+                _ToggleFormattingMarksIntent(),
           },
           child: Actions(
             actions: <Type, Action<Intent>>{
@@ -137,6 +141,13 @@ class _EditorScreenState extends State<EditorScreen> {
               _PrintDocumentIntent: CallbackAction<_PrintDocumentIntent>(
                 onInvoke: (_) {
                   unawaited(_controller.printDocument(context: context));
+                  return null;
+                },
+              ),
+              _ToggleFormattingMarksIntent:
+                  CallbackAction<_ToggleFormattingMarksIntent>(
+                onInvoke: (_) {
+                  _controller.toggleFormattingMarks();
                   return null;
                 },
               ),
@@ -179,4 +190,8 @@ class _SelectAllDocumentIntent extends Intent {
 
 class _PrintDocumentIntent extends Intent {
   const _PrintDocumentIntent();
+}
+
+class _ToggleFormattingMarksIntent extends Intent {
+  const _ToggleFormattingMarksIntent();
 }

@@ -73,10 +73,17 @@ class _RibbonFocusableState extends State<RibbonFocusable> {
           },
         ),
       },
-      child: widget.builder(
-        context,
-        hovered: _hovered,
-        focused: _focused,
+      // Pointer taps must invoke onActivate too — FocusableActionDetector only
+      // wires ActivateIntent for keyboard (Space/Enter). Without this, macOS /
+      // desktop mouse clicks on the ribbon appear dead.
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.enabled ? widget.onActivate : null,
+        child: widget.builder(
+          context,
+          hovered: _hovered,
+          focused: _focused,
+        ),
       ),
     );
   }

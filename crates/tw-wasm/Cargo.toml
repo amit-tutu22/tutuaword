@@ -17,6 +17,7 @@ tw-core = { path = "../tw-core" }
 tw-edit = { path = "../tw-edit" }
 tw-layout = { path = "../tw-layout" }
 tw-model = { path = "../tw-model" }
+tw-pdf = { path = "../tw-pdf" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }

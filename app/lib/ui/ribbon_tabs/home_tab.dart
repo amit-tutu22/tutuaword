@@ -57,10 +57,14 @@ class HomeTab extends StatelessWidget {
                       onPressed: controller.copySelection,
                       iconSize: 14,
                     ),
-                    RibbonIconButton(
+                    RibbonToggleButton(
+                      key: const Key('format_painter'),
                       icon: Icons.format_paint,
-                      tooltip: 'Format Painter',
-                      onPressed: null,
+                      tooltip: controller.formatPainterArmed
+                          ? 'Format Painter (armed — select text to paint, or click to cancel)'
+                          : 'Format Painter',
+                      selected: controller.formatPainterArmed,
+                      onPressed: controller.toggleFormatPainter,
                       iconSize: 14,
                     ),
                   ],
@@ -228,7 +232,15 @@ class HomeTab extends StatelessWidget {
                       onPressed: controller.increaseIndent,
                     ),
                     RibbonIconButton(icon: Icons.sort, onPressed: null),
-                    RibbonIconButton(icon: Icons.visibility, onPressed: null),
+                    RibbonToggleButton(
+                      key: const Key('show_formatting_marks'),
+                      icon: Icons.visibility,
+                      tooltip: controller.showFormattingMarks
+                          ? 'Hide formatting marks (¶)'
+                          : 'Show formatting marks (¶)',
+                      selected: controller.showFormattingMarks,
+                      onPressed: controller.toggleFormattingMarks,
+                    ),
                   ],
                 ),
                 const SizedBox(height: 2),
@@ -310,10 +322,14 @@ class HomeTab extends StatelessWidget {
           RibbonGroup(
             label: 'Add-ins',
             showDivider: false,
-            child: RibbonTextButton(
-              label: 'Add-ins',
-              icon: Icons.extension_outlined,
-              onPressed: null,
+            child: Builder(
+              builder: (context) => RibbonTextButton(
+                key: const Key('home_add_ins'),
+                label: 'Add-ins',
+                icon: Icons.extension_outlined,
+                tooltip: 'Manage plugins and add-ins',
+                onPressed: () => controller.managePlugins(context),
+              ),
             ),
           ),
           ],

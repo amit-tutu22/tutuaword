@@ -279,7 +279,7 @@ void main() {
       final tooltip = find.byTooltip(kComingSoonTooltip);
       expect(tooltip, findsWidgets);
 
-      // Theme gallery cards are wired; Page Borders remains a stub.
+      // Theme gallery cards and Page Borders are wired.
       await tester.longPress(find.text('Page\nBorders'));
       await tester.pumpAndSettle();
       expect(find.text(kComingSoonTooltip), findsOneWidget);

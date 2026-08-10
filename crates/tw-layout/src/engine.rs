@@ -1838,8 +1838,69 @@ fn prepend_page_decorations(
         }
     }
 
+    if let Some(borders) = &format.page_borders {
+        if borders.any() {
+            push_page_border_rects(&mut back_layers, format, borders);
+        }
+    }
+
     for layer in back_layers.into_iter().rev() {
         page_boxes.insert(0, layer);
+    }
+}
+
+fn push_page_border_rects(
+    layers: &mut Vec<LayoutBox>,
+    format: &SectionFormat,
+    borders: &tw_model::BorderSet,
+) {
+    let inset = SectionFormat::PAGE_BORDER_INSET;
+    let x0 = inset;
+    let y0 = inset;
+    let x1 = (format.page_width - inset).max(x0);
+    let y1 = (format.page_height - inset).max(y0);
+    let span_w = (x1 - x0).max(0.0);
+    let span_h = (y1 - y0).max(0.0);
+
+    if let Some(top) = borders.top {
+        let w = top.width.max(0.5);
+        layers.push(LayoutBox::Rect {
+            x: x0,
+            y: y0,
+            width: span_w,
+            height: w,
+            color: top.color.to_argb(),
+        });
+    }
+    if let Some(bottom) = borders.bottom {
+        let w = bottom.width.max(0.5);
+        layers.push(LayoutBox::Rect {
+            x: x0,
+            y: y1 - w,
+            width: span_w,
+            height: w,
+            color: bottom.color.to_argb(),
+        });
+    }
+    if let Some(left) = borders.left {
+        let w = left.width.max(0.5);
+        layers.push(LayoutBox::Rect {
+            x: x0,
+            y: y0,
+            width: w,
+            height: span_h,
+            color: left.color.to_argb(),
+        });
+    }
+    if let Some(right) = borders.right {
+        let w = right.width.max(0.5);
+        layers.push(LayoutBox::Rect {
+            x: x1 - w,
+            y: y0,
+            width: w,
+            height: span_h,
+            color: right.color.to_argb(),
+        });
     }
 }
 

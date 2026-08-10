@@ -1,3 +1,4 @@
+import ApplicationServices
 import Cocoa
 import FlutterMacOS
 import PDFKit
@@ -234,21 +235,15 @@ class MacosPrintPlugin: NSObject, FlutterPlugin {
     printInfo.isHorizontallyCentered = true
     printInfo.isVerticallyCentered = true
 
-    // F25.S4 — platform duplex attribute when the OS print path supports it.
+    // F25.S4 — duplex via Core Printing (NSPrintInfo has no duplex property on macOS).
     if let duplex = attributes["duplex"] as? String {
-      switch duplex {
-      case "longEdge":
-        printInfo.duplex = .longEdge
-      case "shortEdge":
-        printInfo.duplex = .shortEdge
-      default:
-        printInfo.duplex = .none
-      }
+      applyDuplex(printInfo, duplex: duplex)
     }
 
+    // PDFPrintScalingMode cases: .pageScaleNone / .pageScaleToFit / .pageScaleDownToFit.
     guard let operation = document.printOperation(
       for: printInfo,
-      scalingMode: .pageSize,
+      scalingMode: .pageScaleToFit,
       autoRotate: true
     ) else {
       result("unsupported")
@@ -262,6 +257,23 @@ class MacosPrintPlugin: NSObject, FlutterPlugin {
     DispatchQueue.main.async {
       let accepted = operation.run()
       result(accepted ? "presented" : "cancelled")
+    }
+  }
+
+  /// Map Flutter duplex names onto PMDuplexMode and sync back into NSPrintInfo.
+  private func applyDuplex(_ printInfo: NSPrintInfo, duplex: String) {
+    let mode: PMDuplexMode
+    switch duplex {
+    case "longEdge":
+      mode = PMDuplexMode(kPMDuplexNoTumble)
+    case "shortEdge":
+      mode = PMDuplexMode(kPMDuplexTumble)
+    default:
+      mode = PMDuplexMode(kPMDuplexNone)
+    }
+    let settings = PMPrintSettings(printInfo.pmPrintSettings())
+    if PMSetDuplex(settings, mode) == noErr {
+      printInfo.updateFromPMPrintSettings()
     }
   }
 }

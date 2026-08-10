@@ -78,7 +78,7 @@ It is invoked from:
 |---------|--------|-------|
 | Paste | **Working** | Engine paste via DocRange caret |
 | Cut / Copy | **Working** | DocRange + engine in glyph mode (R2.4) |
-| Format Painter | P2 | `onPressed: null` |
+| Format Painter | P2 | Wired — pickup / paint next selection |
 | Font family dropdown | **Working** | Menu + `setFontFamily` (fixed 2026-08-05) |
 | Font size dropdown | **Working** | Menu + `setFontSize` |
 | Increase / decrease font | Working | |
@@ -90,14 +90,15 @@ It is invoked from:
 | Font color / Highlight | **Working** | `ribbon_color_picker.dart` (`RibbonColorButton`, `WordColorPalettePanel`) → `setFontColor` / `setHighlight` / `clearHighlight` |
 | Bullets / Numbering | Working | |
 | Decrease / increase indent | **Working** | `decreaseIndent` / `increaseIndent` → `_applyParaFormatJson`; also Tab / Shift+Tab in `glyph_editor_surface.dart` |
-| Sort / Show ¶ | P2 | Disabled |
+| Sort | P2 | Disabled |
+| Show ¶ (eye) | P2 | Wired — toggle formatting marks |
 | Align L/C/R/Justify | **Working** | Apply + read sync on caret move (not immediately after apply — see anti-pattern 3) |
 | Line spacing / Shading & borders | P2 | Disabled |
 | Style: Normal | **Working** | `applyNormalStyle` wired |
 | Style: No Spacing | P2 | Disabled |
 | Style: Heading 1 | Working | |
 | Styles gallery chevron / pane | P2 | Disabled |
-| Add-ins | P2 | Disabled |
+| Add-ins | P2 | Wired — opens Plugins manager (F26.S3) |
 
 ### Insert (`insert_tab.dart`)
 
@@ -106,7 +107,9 @@ It is invoked from:
 | Table | Working | `insertTable` |
 | Pictures | Working | `insertImage` |
 | Page Break | **Working** | `insertPageBreak` → `insertPageBreakAtAsync` → `tw_insert_page_break` |
-| Cover Page, Shapes, Video, Header, Footer, Page Number, Text Box, Symbol | P2 | Disabled |
+| Cover Page | Working | Dialog → title/subtitle/author + page break |
+| Change / Rotate / Caption / Compress picture | Working | Enabled when an image is selected (tooltip: select first) |
+| Shapes, Header, Footer, Page Number, Text Box, Symbol | Working | See feature phases; audit row was stale |
 
 ### Design / Layout / References / Mailings
 

@@ -9,6 +9,11 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('F28.S1 production AI providers', () {
+    test('U-F28-S1-production-wires-http-transport', () {
+      final client = AiClient.productionDesktop();
+      expect(client.httpPost, isNotNull);
+    });
+
     test('U-F28-S1-hybrid-router-local', () {
       final http = MockAiHttpClient();
       final client = AiClient.productionDesktop(
