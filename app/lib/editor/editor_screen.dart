@@ -154,15 +154,18 @@ class _EditorScreenState extends State<EditorScreen> {
             },
             child: Column(
               children: [
-                WordTitleBar(
-                  controller: _controller,
-                  onHomePressed: () =>
-                      _ribbonKey.currentState?.selectTab(RibbonTab.home),
-                ),
-                WordRibbon(key: _ribbonKey, controller: _controller),
-                if (_controller.findPaneVisible)
+                if (!_controller.isReadMode)
+                  WordTitleBar(
+                    controller: _controller,
+                    onHomePressed: () =>
+                        _ribbonKey.currentState?.selectTab(RibbonTab.home),
+                  ),
+                if (!_controller.isReadMode)
+                  WordRibbon(key: _ribbonKey, controller: _controller),
+                if (!_controller.isReadMode && _controller.findPaneVisible)
                   FindPane(controller: _controller),
-                InfoBar(controller: _controller),
+                if (!_controller.isReadMode)
+                  InfoBar(controller: _controller),
                 Expanded(
                   child: DocumentView(controller: _controller),
                 ),

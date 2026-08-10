@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:tutuaword/editor/document_view_layout.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
 import 'package:tutuaword/ui/ribbon_widgets.dart';
+import 'package:tutuaword/ui/secondary_document_window.dart';
 import 'package:tutuaword/ui/word_theme.dart';
 
 class ViewTab extends StatelessWidget {
@@ -8,31 +10,57 @@ class ViewTab extends StatelessWidget {
 
   final EditorController controller;
 
+  Future<void> _openNewWindow(BuildContext context) async {
+    controller.markNewWindowOpened();
+    await SecondaryDocumentWindow.show(context, controller: controller);
+    controller.markNewWindowClosed();
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
       listenable: controller,
       builder: (context, _) {
+        final layout = controller.viewLayout;
         return RibbonTabScroller(
           children: [
               RibbonGroup(
                 label: 'Views',
                 child: Row(
                   children: [
-                    RibbonLargeButton(icon: Icons.article_outlined, label: 'Read\nMode', onPressed: null),
                     RibbonLargeButton(
+                      key: const Key('view_read_mode'),
+                      icon: Icons.article_outlined,
+                      label: 'Read\nMode',
+                      tooltip: 'Read-only reading view',
+                      onPressed: controller.setReadMode,
+                    ),
+                    RibbonLargeButton(
+                      key: const Key('view_print_layout'),
                       icon: Icons.print_outlined,
                       label: 'Print\nLayout',
-                      tooltip: 'Print layout editing view',
-                      onPressed: controller.printPreview ? controller.togglePrintPreview : null,
+                      tooltip: layout == DocumentViewLayout.printLayout &&
+                              !controller.printPreview
+                          ? 'Print layout (current)'
+                          : 'Print layout editing view',
+                      onPressed: controller.setPrintLayout,
                     ),
                     RibbonLargeButton(
+                      key: const Key('view_print_preview'),
                       icon: Icons.preview_outlined,
                       label: 'Print\nPreview',
-                      tooltip: 'Read-only print preview',
-                      onPressed: !controller.printPreview ? controller.togglePrintPreview : null,
+                      tooltip: controller.printPreview
+                          ? 'Print preview (current)'
+                          : 'Read-only print preview',
+                      onPressed: controller.setPrintPreviewMode,
                     ),
-                    RibbonLargeButton(icon: Icons.web, label: 'Web\nLayout', onPressed: null),
+                    RibbonLargeButton(
+                      key: const Key('view_web_layout'),
+                      icon: Icons.web,
+                      label: 'Web\nLayout',
+                      tooltip: 'Continuous web-style layout',
+                      onPressed: controller.setWebLayout,
+                    ),
                   ],
                 ),
               ),
@@ -84,9 +112,29 @@ class ViewTab extends StatelessWidget {
                 label: 'Zoom',
                 child: Row(
                   children: [
-                    RibbonLargeButton(icon: Icons.zoom_in, label: 'Zoom', onPressed: null),
-                    RibbonLargeButton(icon: Icons.fit_screen, label: 'One\nPage', onPressed: null),
-                    RibbonLargeButton(icon: Icons.view_week, label: 'Multiple\nPages', onPressed: null),
+                    Builder(
+                      builder: (context) => RibbonLargeButton(
+                        key: const Key('view_zoom'),
+                        icon: Icons.zoom_in,
+                        label: 'Zoom',
+                        tooltip: 'Choose zoom level',
+                        onPressed: () => controller.openZoomDialog(context),
+                      ),
+                    ),
+                    RibbonLargeButton(
+                      key: const Key('view_one_page'),
+                      icon: Icons.fit_screen,
+                      label: 'One\nPage',
+                      tooltip: 'Zoom to fit one page',
+                      onPressed: controller.zoomToOnePage,
+                    ),
+                    RibbonLargeButton(
+                      key: const Key('view_multiple_pages'),
+                      icon: Icons.view_week,
+                      label: 'Multiple\nPages',
+                      tooltip: 'Zoom to fit two pages side by side',
+                      onPressed: controller.zoomToMultiplePages,
+                    ),
                   ],
                 ),
               ),
@@ -95,9 +143,31 @@ class ViewTab extends StatelessWidget {
                 showDivider: false,
                 child: Row(
                   children: [
-                    RibbonLargeButton(icon: Icons.view_sidebar, label: 'New\nWindow', onPressed: null),
-                    RibbonLargeButton(icon: Icons.view_array, label: 'Arrange\nAll', onPressed: null),
-                    RibbonLargeButton(icon: Icons.vertical_split, label: 'Split', onPressed: null),
+                    Builder(
+                      builder: (context) => RibbonLargeButton(
+                        key: const Key('view_new_window'),
+                        icon: Icons.view_sidebar,
+                        label: 'New\nWindow',
+                        tooltip: 'Open another window on this document',
+                        onPressed: () => _openNewWindow(context),
+                      ),
+                    ),
+                    RibbonLargeButton(
+                      key: const Key('view_arrange_all'),
+                      icon: Icons.view_array,
+                      label: 'Arrange\nAll',
+                      tooltip: 'Tile document views in a split layout',
+                      onPressed: controller.arrangeAllViews,
+                    ),
+                    RibbonLargeButton(
+                      key: const Key('view_split'),
+                      icon: Icons.vertical_split,
+                      label: 'Split',
+                      tooltip: controller.splitView
+                          ? 'Close split view'
+                          : 'Split the window',
+                      onPressed: controller.toggleSplitView,
+                    ),
                   ],
                 ),
               ),

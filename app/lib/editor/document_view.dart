@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:tutuaword/editor/display_list.dart';
 import 'package:tutuaword/editor/document_painter.dart';
+import 'package:tutuaword/editor/document_view_layout.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
 import 'package:tutuaword/editor/glyph_editor_surface.dart';
 import 'package:tutuaword/editor/navigation_pane.dart';
@@ -37,6 +38,7 @@ class _DocumentViewState extends State<DocumentView> {
   int _loadedVersion = -1;
   int _loadedAtlasGeneration = -1;
   final ScrollController _scrollController = ScrollController();
+  final ScrollController _splitScrollController = ScrollController();
 
   /// Decoded document images shared across pages, keyed by asset id.
   final Map<String, ui.Image> _images = {};
@@ -54,6 +56,7 @@ class _DocumentViewState extends State<DocumentView> {
   void dispose() {
     widget.controller.removeListener(_onControllerUpdate);
     _scrollController.dispose();
+    _splitScrollController.dispose();
     _atlasImage?.dispose();
     _disposeImages();
     super.dispose();
@@ -94,14 +97,30 @@ class _DocumentViewState extends State<DocumentView> {
     if (mounted) setState(() {});
   }
 
-  double get _pageExtent =>
-      (widget.controller.pageHeight + _pageGap) * widget.controller.zoom;
+  double get _pageGapEffective {
+    final layout = widget.controller.viewLayout;
+    if (layout == DocumentViewLayout.webLayout) return 4.0;
+    if (layout == DocumentViewLayout.readMode) return 16.0;
+    return _pageGap;
+  }
+
+  double get _pageExtent {
+    final gap = _pageGapEffective;
+    return (widget.controller.pageHeight + gap) * widget.controller.zoom;
+  }
+
+  int get _rowCount {
+    final pages = widget.controller.pageCount;
+    final columns = widget.controller.pageColumns.clamp(1, 3);
+    return (pages + columns - 1) ~/ columns;
+  }
 
   void _onScroll() {
     final extent = _pageExtent;
     if (extent <= 0 || !_scrollController.hasClients) return;
-    final page = (_scrollController.offset / extent).floor();
-    widget.controller.setVisiblePage(page);
+    final row = (_scrollController.offset / extent).floor();
+    final columns = widget.controller.pageColumns.clamp(1, 3);
+    widget.controller.setVisiblePage(row * columns);
   }
 
   Future<void> _loadPage(int index) async {
@@ -210,7 +229,9 @@ class _DocumentViewState extends State<DocumentView> {
     // engine and can collapse an injected multi-page pageCount back to 1.
     widget.controller.selectPage(page);
     if (_scrollController.hasClients) {
-      final target = page.clamp(0, widget.controller.pageCount - 1) * _pageExtent;
+      final columns = widget.controller.pageColumns.clamp(1, 3);
+      final row = page.clamp(0, widget.controller.pageCount - 1) ~/ columns;
+      final target = row * _pageExtent;
       _scrollController.animateTo(
         target,
         duration: const Duration(milliseconds: 250),
@@ -225,7 +246,7 @@ class _DocumentViewState extends State<DocumentView> {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (controller.showNavigationPane)
+        if (controller.showNavigationPane && !controller.isReadMode)
           NavigationPane(
             controller: controller,
             currentPage: controller.currentPage,
@@ -233,61 +254,177 @@ class _DocumentViewState extends State<DocumentView> {
             onOutlineSelected: controller.jumpToOutlineEntry,
           ),
         Expanded(
-          child: Container(
-            color: WordTheme.canvasGray,
-            child: controller.showRuler
-                ? DocumentRulers(
-                    controller: controller,
-                    child: _buildCanvas(context, controller),
-                  )
-                : _buildCanvas(context, controller),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              controller.reportViewportSize(
+                Size(constraints.maxWidth, constraints.maxHeight),
+              );
+              final canvasBg = controller.isWebLayout || controller.isReadMode
+                  ? Colors.white
+                  : WordTheme.canvasGray;
+              final body = Container(
+                color: canvasBg,
+                child: controller.showRuler &&
+                        !controller.isReadMode &&
+                        !controller.isWebLayout
+                    ? DocumentRulers(
+                        controller: controller,
+                        child: _buildSplitOrCanvas(context, controller),
+                      )
+                    : _buildSplitOrCanvas(context, controller),
+              );
+              if (!controller.isReadMode) return body;
+              return Stack(
+                children: [
+                  body,
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: Material(
+                      color: Colors.black.withValues(alpha: 0.7),
+                      borderRadius: BorderRadius.circular(4),
+                      child: TextButton(
+                        key: const Key('exit_read_mode'),
+                        style: TextButton.styleFrom(
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
+                        ),
+                        onPressed: controller.setPrintLayout,
+                        child: const Text('Close Read Mode'),
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            },
           ),
         ),
-        if (controller.hasSelectedImage)
+        if (controller.hasSelectedImage && !controller.isReadMode)
           PictureInspectorPane(controller: controller),
-        if (controller.showAccessibilityChecker)
+        if (controller.showAccessibilityChecker && !controller.isReadMode)
           AccessibilityCheckerPane(controller: controller),
-        if (controller.showStyleInspector)
+        if (controller.showStyleInspector && !controller.isReadMode)
           StyleInspectorPane(controller: controller),
       ],
     );
   }
 
-  Widget _buildCanvas(BuildContext context, EditorController controller) {
+  Widget _buildSplitOrCanvas(BuildContext context, EditorController controller) {
+    if (!controller.splitView) {
+      return _buildCanvas(
+        context,
+        controller,
+        scrollController: _scrollController,
+        trackVisiblePage: true,
+      );
+    }
+    return Column(
+      children: [
+        Expanded(
+          child: _buildCanvas(
+            context,
+            controller,
+            scrollController: _scrollController,
+            trackVisiblePage: true,
+          ),
+        ),
+        MouseRegion(
+          cursor: SystemMouseCursors.resizeRow,
+          child: GestureDetector(
+            onTap: controller.toggleSplitView,
+            child: Container(
+              height: 6,
+              color: WordTheme.groupDivider,
+              alignment: Alignment.center,
+              child: Container(
+                width: 40,
+                height: 2,
+                color: WordTheme.ribbonTextDisabled,
+              ),
+            ),
+          ),
+        ),
+        Expanded(
+          child: _buildCanvas(
+            context,
+            controller,
+            scrollController: _splitScrollController,
+            trackVisiblePage: false,
+            forceReadOnly: true,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCanvas(
+    BuildContext context,
+    EditorController controller, {
+    required ScrollController scrollController,
+    required bool trackVisiblePage,
+    bool forceReadOnly = false,
+  }) {
+    final columns = controller.pageColumns.clamp(1, 3);
+    final gap = _pageGapEffective;
     return Stack(
       children: [
         ListView.builder(
-          key: const ValueKey('document-page-list'),
-          controller: _scrollController,
-          padding: const EdgeInsets.symmetric(vertical: _pageGap),
-          itemCount: controller.pageCount,
+          key: trackVisiblePage
+              ? const ValueKey('document-page-list')
+              : const ValueKey('document-page-list-split'),
+          controller: scrollController,
+          padding: EdgeInsets.symmetric(vertical: gap),
+          itemCount: _rowCount,
           itemExtent: _pageExtent,
-          itemBuilder: (context, index) {
-            _scheduleLoad(index);
-            final readOnly = !controller.isPageEditable(index);
-            return Center(
-              child: Transform.scale(
-                scale: controller.zoom,
-                alignment: Alignment.topCenter,
-                child: ClipRect(
-                  clipBehavior: Clip.hardEdge,
-                  child: SizedBox(
-                    width: controller.pageWidth,
-                    height: controller.pageHeight,
-                    child: GestureDetector(
-                      onTap: readOnly ? () => controller.setCurrentPage(index) : null,
-                      child: _PageCanvas(
-                        key: ValueKey('page-$index-${controller.pageDisplayVersion(index)}'),
-                        controller: controller,
-                        pageIndex: index,
-                        snapshot: _snapshots[index],
-                        atlasImage: _atlasImage,
-                        images: _images,
-                        readOnly: readOnly,
+          itemBuilder: (context, rowIndex) {
+            final children = <Widget>[];
+            for (var col = 0; col < columns; col++) {
+              final index = rowIndex * columns + col;
+              if (index >= controller.pageCount) break;
+              _scheduleLoad(index);
+              final readOnly =
+                  forceReadOnly || !controller.isPageEditable(index);
+              children.add(
+                Padding(
+                  padding: EdgeInsets.symmetric(horizontal: gap / 2),
+                  child: Transform.scale(
+                    scale: controller.zoom,
+                    alignment: Alignment.topCenter,
+                    child: ClipRect(
+                      clipBehavior: Clip.hardEdge,
+                      child: SizedBox(
+                        width: controller.pageWidth,
+                        height: controller.pageHeight,
+                        child: GestureDetector(
+                          onTap: readOnly
+                              ? () => controller.setCurrentPage(index)
+                              : null,
+                          child: _PageCanvas(
+                            key: ValueKey(
+                              'page-$index-${controller.pageDisplayVersion(index)}',
+                            ),
+                            controller: controller,
+                            pageIndex: index,
+                            snapshot: _snapshots[index],
+                            atlasImage: _atlasImage,
+                            images: _images,
+                            readOnly: readOnly,
+                          ),
+                        ),
                       ),
                     ),
                   ),
                 ),
+              );
+            }
+            return Center(
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: children,
               ),
             );
           },
@@ -322,6 +459,9 @@ class _PageCanvas extends StatelessWidget {
   bool get _canPaintDisplayList =>
       snapshot != null && snapshot!.hasPaintableContent;
 
+  bool get _webChrome =>
+      controller.isWebLayout || controller.isReadMode;
+
   @override
   Widget build(BuildContext context) {
     return ClipRect(
@@ -331,16 +471,22 @@ class _PageCanvas extends StatelessWidget {
         height: controller.pageHeight,
         decoration: BoxDecoration(
           color: Colors.white,
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.15),
-              blurRadius: 8,
-              offset: const Offset(0, 2),
-            ),
-          ],
+          boxShadow: _webChrome
+              ? null
+              : [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.15),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
           border: controller.printPreview
               ? Border.all(color: const Color(0xFFB4B4B4), width: 1)
-              : null,
+              : _webChrome
+                  ? Border(
+                      bottom: BorderSide(color: Colors.grey.shade200, width: 1),
+                    )
+                  : null,
         ),
         child: Stack(
           children: [

@@ -156,7 +156,7 @@ void main() {
 
       await pumpWide(tester, ViewTab(controller: controller));
 
-      await tester.tap(find.text('Navigation\nPane'));
+      await tester.tap(find.byKey(const Key('view_show_navigation_pane')));
       await tester.pump();
 
       expect(controller.showNavigationPane, isTrue);
@@ -276,11 +276,10 @@ void main() {
     testWidgets('Design tab disabled controls show Coming soon tooltip', (tester) async {
       await pumpWide(tester, DesignTab(controller: controller));
 
-      final tooltip = find.byTooltip(kComingSoonTooltip);
-      expect(tooltip, findsWidgets);
-
-      // Theme gallery cards and Page Borders are wired.
-      await tester.longPress(find.text('Page\nBorders'));
+      // Theme gallery overflow chevron is still a placeholder.
+      final chevron = find.byIcon(Icons.chevron_right);
+      expect(chevron, findsOneWidget);
+      await tester.longPress(chevron);
       await tester.pumpAndSettle();
       expect(find.text(kComingSoonTooltip), findsOneWidget);
     });
@@ -306,6 +305,22 @@ void main() {
       await tester.pump();
       expect(controller.printPreview, isFalse);
       expect(controller.statusText, contains('Print layout'));
+    });
+
+    testWidgets('View tab Read Mode and Split are wired', (tester) async {
+      await pumpWide(tester, ViewTab(controller: controller));
+
+      await tester.tap(find.text('Read\nMode'));
+      await tester.pump();
+      expect(controller.isReadMode, isTrue);
+
+      await tester.tap(find.text('Print\nLayout'));
+      await tester.pump();
+      expect(controller.isReadMode, isFalse);
+
+      await tester.tap(find.text('Split'));
+      await tester.pump();
+      expect(controller.splitView, isTrue);
     });
 
     testWidgets('Switching tabs via ribbon strip updates visible content', (tester) async {

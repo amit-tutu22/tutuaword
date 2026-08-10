@@ -43,24 +43,32 @@ class WordStatusBar extends StatelessWidget {
                   ),
                 ),
               ),
-              _ViewModeButton(icon: Icons.article_outlined, tooltip: 'Read Mode', onPressed: null),
+              _ViewModeButton(
+                icon: Icons.article_outlined,
+                tooltip: 'Read Mode',
+                selected: controller.isReadMode,
+                onPressed: controller.setReadMode,
+              ),
               _ViewModeButton(
                 icon: Icons.print_outlined,
                 tooltip: 'Print Layout',
-                selected: !controller.printPreview,
-                onPressed: () {
-                  if (controller.printPreview) controller.togglePrintPreview();
-                },
+                selected: !controller.printPreview &&
+                    !controller.isReadMode &&
+                    !controller.isWebLayout,
+                onPressed: controller.setPrintLayout,
               ),
               _ViewModeButton(
                 icon: Icons.preview_outlined,
                 tooltip: 'Print Preview',
                 selected: controller.printPreview,
-                onPressed: () {
-                  if (!controller.printPreview) controller.togglePrintPreview();
-                },
+                onPressed: controller.setPrintPreviewMode,
               ),
-              _ViewModeButton(icon: Icons.web, tooltip: 'Web Layout', onPressed: null),
+              _ViewModeButton(
+                icon: Icons.web,
+                tooltip: 'Web Layout',
+                selected: controller.isWebLayout,
+                onPressed: controller.setWebLayout,
+              ),
               _divider(),
               IconButton(
                 icon: const Icon(Icons.remove, size: 14),

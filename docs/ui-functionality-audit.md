@@ -131,9 +131,10 @@ These tabs receive **no** `EditorController` (`ribbon.dart`). Entire tabs are vi
 |---------|--------|-------|
 | Ruler | Working | `toggleRuler` |
 | Navigation Pane | Working | `toggleNavigationPane` |
-| Print Layout / Print Preview | Working | Paired buttons; each enabled only in the opposite mode, both call `togglePrintPreview` |
-| Zoom (View tab) | P2 | Disabled (`onPressed: null`); status bar slider **works** |
-| Read / Web / One page / Multiple pages / Split / New window | P2 | Disabled |
+| Print Layout / Print Preview | Working | `setPrintLayout` / `setPrintPreviewMode` |
+| Read Mode / Web Layout | Working | Read-only immersive / continuous canvas |
+| Zoom / One Page / Multiple Pages | Working | Dialog + fit-to-viewport; status bar slider also works |
+| New Window / Arrange All / Split | Working | In-app second window; arrange enables split; split toggles dual panes |
 
 ### Title bar (`title_bar.dart`)
 
