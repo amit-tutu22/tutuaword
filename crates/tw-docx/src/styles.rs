@@ -478,6 +478,9 @@ pub fn parse_section_properties(xml: &str) -> SectionFormat {
     if xml.contains("<w:titlePg") {
         format.different_first_page = true;
     }
+    if read_attr_value(xml, "w:pgSz", "w:orient").as_deref() == Some("landscape") {
+        format = format.with_orientation(true);
+    }
     format
 }
 

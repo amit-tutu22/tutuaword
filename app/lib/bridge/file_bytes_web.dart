@@ -13,7 +13,11 @@ Future<void> downloadBytes({
   final url = html.Url.createObjectUrlFromBlob(blob);
   final anchor = html.AnchorElement(href: url)
     ..setAttribute('download', filename)
-    ..click();
-  html.Url.revokeObjectUrl(url);
+    ..style.display = 'none';
+  html.document.body?.append(anchor);
+  anchor.click();
   anchor.remove();
+  // Revoke only after the browser has had time to start the download.
+  await Future<void>.delayed(const Duration(seconds: 1));
+  html.Url.revokeObjectUrl(url);
 }

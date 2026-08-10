@@ -1,4 +1,6 @@
-use crate::bundle::{export_document, import_document_bundle, FormatContext};
+use crate::bundle::{
+    export_document, import_document_bundle_with_password, FormatContext,
+};
 use crate::import::DetectedFormat;
 use crate::snapshot::{
     document_plain_text, document_properties_json, snapshot_from_pages, SinglePageSnapshot,
@@ -140,18 +142,27 @@ pub enum BridgeCommand {
     OpenDocument {
         data: Vec<u8>,
         path_hint: Option<String>,
+        password: Option<String>,
     },
     SaveDocument,
     SaveDocumentAs { format: DetectedFormat },
     SpellCheckDocument,
     GrammarCheckDocument,
     SetReadOnly { enabled: bool },
+    /// Set or clear the password used to encrypt DOCX on save (F22.S2).
+    SetEncryptionPassword { password: Option<String> },
     ToggleTrackChanges { enabled: bool },
     ApplyEdit { command: Command },
     SetCurrentPage { page: u32 },
     Undo,
     Redo,
     ExportPdf,
+    /// Font-embedded / VisualMatch PDF for the OS print dialog (F25.S1–S3).
+    ExportPdfForPrint {
+        layout: tw_pdf::PrintLayoutOptions,
+        /// When set, export only this body range (F25.S3 print selection).
+        selection: Option<tw_edit::DocRange>,
+    },
     PasteHtml {
         run_id: NodeId,
         offset: usize,
@@ -533,10 +544,23 @@ impl WorkerCore {
                     page_count,
                 });
             }
-            BridgeCommand::OpenDocument { data, path_hint } => {
-                match import_document_bundle(&data, path_hint.as_deref()) {
+            BridgeCommand::OpenDocument {
+                data,
+                path_hint,
+                password,
+            } => {
+                match import_document_bundle_with_password(
+                    &data,
+                    path_hint.as_deref(),
+                    password.as_deref(),
+                ) {
                     Ok(bundle) => {
                         self.format_ctx = FormatContext::from_bundle(bundle.clone(), path_hint);
+                        // Retain open password so subsequent DOCX saves stay encrypted (F22.S2).
+                        self.format_ctx.encryption_password = password
+                            .as_deref()
+                            .filter(|p| !p.is_empty())
+                            .map(|p| p.to_string());
                         self.session = EditSession::from_document(bundle.document);
                         self.current_page = 0;
                         self.rebuild(Relayout::Full)
@@ -612,6 +636,14 @@ impl WorkerCore {
                 self.session.document.settings.read_only = enabled;
                 self.rebuild(Relayout::Full)
                     .expect("full rebuild always produces a layout");
+                self.events.send(BridgeEvent::DisplayListReady {
+                    request_id: req_id,
+                    page: self.current_page,
+                    version: self.version,
+                });
+            }
+            BridgeCommand::SetEncryptionPassword { password } => {
+                self.format_ctx.encryption_password = password.filter(|p| !p.is_empty());
                 self.events.send(BridgeEvent::DisplayListReady {
                     request_id: req_id,
                     page: self.current_page,
@@ -781,6 +813,30 @@ impl WorkerCore {
                 let exporter = tw_pdf::DisplayListPdfExporter;
                 match exporter.export(&self.session.document, &tw_pdf::PdfExportOptions::default())
                 {
+                    Ok(data) => {
+                        self.events.send(BridgeEvent::DocumentSaved {
+                            request_id: req_id,
+                            data,
+                        });
+                    }
+                    Err(e) => {
+                        self.events.send(BridgeEvent::Error {
+                            request_id: req_id,
+                            message: e.to_string(),
+                        });
+                    }
+                }
+            }
+            BridgeCommand::ExportPdfForPrint { layout, selection } => {
+                let result = match selection {
+                    Some(range) => tw_pdf::prepare_print_pdf_selection(
+                        &self.session.document,
+                        &range,
+                        &layout,
+                    ),
+                    None => tw_pdf::prepare_print_pdf(&self.session.document, &layout),
+                };
+                match result {
                     Ok(data) => {
                         self.events.send(BridgeEvent::DocumentSaved {
                             request_id: req_id,

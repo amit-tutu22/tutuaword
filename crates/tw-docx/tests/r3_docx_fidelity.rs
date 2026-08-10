@@ -1,7 +1,10 @@
 //! R3.3 DOCX fidelity hardening gates.
 
+mod common;
+
 use std::io::{Cursor, Write};
 
+use common::{ensure_corpus, list_gate_corpus, F23_S1_CORPUS_MIN};
 use tw_docx::{export, export_docx, import, retention};
 use tw_model::Block;
 use zip::write::SimpleFileOptions;
@@ -57,17 +60,15 @@ pub const TIER_A_CORPUS_TAGS: &[&str] = &[
 
 #[test]
 fn r3_corpus_round_trip_retains_tier_a_element_counts() {
-    let corpus_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/corpus");
-    let entries: Vec<_> = std::fs::read_dir(&corpus_dir)
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().is_some_and(|ext| ext == "docx"))
-        .collect();
-    assert!(entries.len() >= 20, "corpus should have at least 20 docx files");
+    ensure_corpus();
+    let entries = list_gate_corpus();
+    assert!(
+        entries.len() >= F23_S1_CORPUS_MIN,
+        "corpus should have at least {F23_S1_CORPUS_MIN} gate-eligible docx files"
+    );
 
     let mut failures = Vec::new();
-    for entry in entries {
-        let path = entry.path();
+    for path in entries {
         let bytes = std::fs::read(&path).unwrap();
         let imported = import(&bytes).expect("import");
         let before_xml = String::from_utf8_lossy(

@@ -78,7 +78,7 @@ class WordTitleBar extends StatelessWidget {
                   _QuickAccessIcon(
                     icon: Icons.print_outlined,
                     tooltip: 'Print',
-                    onPressed: controller.togglePrintPreview,
+                    onPressed: () => controller.printDocument(context: context),
                   ),
                   _QuickAccessIcon(
                     icon: Icons.more_horiz,

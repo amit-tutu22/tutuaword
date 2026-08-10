@@ -10,7 +10,9 @@ import 'package:tutuaword/bridge/engine_types.dart';
 import 'package:tutuaword/bridge/find_format_filter.dart';
 import 'package:tutuaword/bridge/find_match.dart';
 import 'package:tutuaword/bridge/native_event_router.dart';
+import 'package:tutuaword/bridge/print_layout_settings.dart';
 import 'package:tutuaword/bridge/wasm_interop.dart';
+import 'package:tutuaword/editor/doc_range.dart';
 
 const Duration kWasmEditCompletionTimeout = kEditCompletionTimeout;
 
@@ -283,11 +285,102 @@ class WasmEngine {
     }
   }
 
+  String? fetchImageAltText(String imageId) {
+    try {
+      return _invoke('image_alt_text', [imageId]) as String?;
+    } catch (_) {
+      return null;
+    }
+  }
+
   String? fetchDocumentOutline() {
     try {
       return _invoke('document_outline_json', []) as String?;
     } catch (_) {
       return '[]';
+    }
+  }
+
+  String? fetchBookmarks() {
+    try {
+      return _invoke('bookmarks_json', []) as String?;
+    } catch (_) {
+      return '[]';
+    }
+  }
+
+  String? fetchSemanticTree() {
+    try {
+      return _invoke('semantic_tree_json', []) as String?;
+    } catch (_) {
+      return '[]';
+    }
+  }
+
+  String? fetchAccessibilityIssues() {
+    try {
+      return _invoke('accessibility_issues_json', []) as String?;
+    } catch (_) {
+      return '[]';
+    }
+  }
+
+  String? fetchDocumentInspect() {
+    try {
+      return _invoke('document_inspect_json', []) as String?;
+    } catch (_) {
+      return '[]';
+    }
+  }
+
+  bool removeInspectFindings({
+    bool comments = false,
+    bool metadata = false,
+    bool hiddenText = false,
+  }) {
+    try {
+      _invoke('remove_inspect_findings', [comments, metadata, hiddenText]);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  String? fetchDigitalSignatures() {
+    try {
+      return _invoke('digital_signatures_json', []) as String?;
+    } catch (_) {
+      return '[]';
+    }
+  }
+
+  String? verifyDigitalSignatures() {
+    try {
+      return _invoke('verify_signatures_json', []) as String?;
+    } catch (_) {
+      return '[]';
+    }
+  }
+
+  bool signDocument({
+    required String name,
+    String email = '',
+    String? organization,
+  }) {
+    try {
+      _invoke('sign_document', [name, email, organization]);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  bool clearDigitalSignatures() {
+    try {
+      _invoke('clear_digital_signatures', []);
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 
@@ -338,10 +431,19 @@ class WasmEngine {
     }
   }
 
-  int openDocumentBytes(Uint8List bytes, {String? path}) {
+  int openDocumentBytes(Uint8List bytes, {String? path, String? password}) {
     try {
-      if (path != null && path.isNotEmpty) {
-        _invoke('open_document_with_path', [bytes, path]);
+      final pw = password ?? '';
+      if (pw.isNotEmpty || (path != null && path.isNotEmpty)) {
+        try {
+          _invoke('open_document_with_password', [bytes, path ?? '', pw]);
+        } catch (_) {
+          if (path != null && path.isNotEmpty) {
+            _invoke('open_document_with_path', [bytes, path]);
+          } else {
+            _invoke('open_document', [bytes]);
+          }
+        }
       } else {
         _invoke('open_document', [bytes]);
       }
@@ -373,6 +475,46 @@ class WasmEngine {
       return _invoke('export_pdf', []) as Uint8List;
     } catch (_) {
       return null;
+    }
+  }
+
+  Uint8List? exportPdfBytesForPrint([
+    PrintLayoutSettings? layout,
+    DocRange? selection,
+  ]) {
+    final settings = layout ?? PrintLayoutSettings.defaults;
+    try {
+      if (selection != null && !selection.isCollapsed && selection.isValid) {
+        final (start, end) = selection.normalized();
+        return _invoke('export_pdf_for_print_selection', [
+          start.runId,
+          start.offset,
+          end.runId,
+          end.offset,
+          settings.scaleModeCode,
+          settings.scalePercent,
+          settings.marginLeft,
+          settings.marginRight,
+          settings.marginTop,
+          settings.marginBottom,
+          settings.duplexCode,
+          settings.effectivePagesPerSheet,
+          settings.booklet ? 1 : 0,
+        ]) as Uint8List;
+      }
+      return _invoke('export_pdf_for_print', [
+        settings.scaleModeCode,
+        settings.scalePercent,
+        settings.marginLeft,
+        settings.marginRight,
+        settings.marginTop,
+        settings.marginBottom,
+        settings.duplexCode,
+        settings.effectivePagesPerSheet,
+        settings.booklet ? 1 : 0,
+      ]) as Uint8List;
+    } catch (_) {
+      return exportPdfBytes();
     }
   }
 
@@ -500,6 +642,21 @@ class WasmEngine {
             start: start,
             end: end,
           )));
+
+  /// Composes DeleteRange + InsertText until WASM exposes a transactional replace.
+  Future<bool> replaceRangeAsync(
+    String runId,
+    int start,
+    int end,
+    String text,
+  ) async {
+    if (start < end) {
+      final ok = await deleteRangeAsync(runId, start, end);
+      if (!ok) return false;
+    }
+    if (text.isEmpty) return true;
+    return tryInsertTextAsync(runId, start, text);
+  }
 
   Future<bool> deleteDocRangeAsync(
     String startRunId,
@@ -700,6 +857,58 @@ class WasmEngine {
     required String name,
   }) =>
       enqueueEdit(() => _enqueueNamed('insert_bookmark', [runId, offset, name]));
+
+  Future<bool> insertHyperlinkAsync({
+    required String runId,
+    required int offset,
+    required String url,
+    required String text,
+    String? tooltip,
+  }) =>
+      enqueueEdit(
+        () => _enqueueNamed(
+          'insert_hyperlink',
+          [runId, offset, url, text, tooltip ?? ''],
+        ),
+      );
+
+  Future<bool> insertFormFieldAsync({
+    required String runId,
+    required int offset,
+    required String kind,
+    String? name,
+    String? initialValue,
+  }) =>
+      enqueueEdit(
+        () => _enqueueNamed(
+          'insert_form_field',
+          [runId, offset, kind, name ?? '', initialValue ?? ''],
+        ),
+      );
+
+  Future<bool> setFormFieldValueAsync({
+    required String runId,
+    required String value,
+  }) =>
+      enqueueEdit(
+        () => _enqueueNamed('set_form_field_value', [runId, value]),
+      );
+
+  Future<bool> insertMergeFieldAsync({
+    required String runId,
+    required int offset,
+    required String name,
+  }) =>
+      enqueueEdit(
+        () => _enqueueNamed('insert_merge_field', [runId, offset, name]),
+      );
+
+  Future<bool> applyMailMergeRowAsync({
+    required Map<String, String> values,
+  }) =>
+      enqueueEdit(
+        () => _enqueueNamed('apply_mail_merge_row', [jsonEncode(values)]),
+      );
 
   Future<bool> insertCrossReferenceAsync({
     required String runId,
@@ -919,6 +1128,9 @@ class WasmEngine {
   Future<bool> insertImageCaptionAsync(String imageId) =>
       enqueueEdit(() => _enqueueNamed('insert_image_caption', [imageId]));
 
+  Future<bool> setImageAltTextAsync(String imageId, String? altText) =>
+      enqueueEdit(() => _enqueueNamed('set_image_alt_text', [imageId, altText]));
+
   Future<bool> compressImageAsync(String imageId, int quality) =>
       enqueueEdit(() => _enqueueNamed('compress_image', [imageId, quality]));
 
@@ -1021,6 +1233,9 @@ class WasmEngine {
 
   bool setReadOnlyEnabled(bool enabled) =>
       _enqueueNamed('set_read_only', [enabled]) == 0;
+
+  bool setEncryptionPassword(String? password) =>
+      _enqueueNamed('set_encryption_password', [password ?? '']) == 0;
 
   bool acceptAllRevisions() =>
       _enqueueNamed('accept_all_revisions', []) == 0;

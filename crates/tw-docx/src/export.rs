@@ -48,6 +48,7 @@ pub fn export_docx(doc: &Document, package: &DocxPackage) -> Result<Vec<u8>, Doc
     let mut media = MediaWriter::new(&pkg);
     let mut charts = crate::chart::ChartWriter::new(&pkg);
     let mut diagrams = crate::diagram::DiagramWriter::new(&pkg);
+    let hyperlinks = crate::hyperlink::HyperlinkRels::build(doc, &pkg);
     for section in &doc.sections {
         for block in &section.blocks {
             if let Block::ShapeBlock(shape) = block {
@@ -68,7 +69,8 @@ pub fn export_docx(doc: &Document, package: &DocxPackage) -> Result<Vec<u8>, Doc
             }
         }
     }
-    let document_xml = serialize_document_xml(doc, package, &mut media, &charts, &diagrams);
+    let document_xml =
+        serialize_document_xml(doc, package, &mut media, &charts, &diagrams, &hyperlinks);
 
     pkg.parts
         .insert("word/document.xml".into(), document_xml.into_bytes());
@@ -109,6 +111,7 @@ pub fn export_docx(doc: &Document, package: &DocxPackage) -> Result<Vec<u8>, Doc
             &mut media,
             &charts,
             &diagrams,
+            &hyperlinks,
             &mut RevisionIdAllocator::new(),
         );
         pkg.parts
@@ -136,11 +139,30 @@ pub fn export_docx(doc: &Document, package: &DocxPackage) -> Result<Vec<u8>, Doc
         pkg.mark_modified(crate::comments::COMMENTS_PART.into());
         ensure_comments_content_type(&mut pkg);
         ensure_comments_relationship(&mut pkg);
+    } else {
+        // Document Inspector may have cleared comments (F22.S3).
+        strip_comments_part(&mut pkg);
     }
+
+    if !doc.signatures.is_empty() {
+        let signatures_xml = crate::signatures::serialize_signatures_xml(&doc.signatures);
+        pkg.parts.insert(
+            crate::signatures::SIGNATURES_PART.into(),
+            signatures_xml.into_bytes(),
+        );
+        pkg.mark_modified(crate::signatures::SIGNATURES_PART.into());
+        ensure_signatures_content_type(&mut pkg);
+        ensure_signatures_relationship(&mut pkg);
+    } else {
+        strip_signatures_part(&mut pkg);
+    }
+
+    write_core_properties(&mut pkg, &doc.properties);
 
     media.commit(&mut pkg);
     charts.commit(&mut pkg);
     diagrams.commit(&mut pkg);
+    hyperlinks.commit(&mut pkg);
 
     patch_settings_xml(&mut pkg, doc);
 
@@ -335,12 +357,223 @@ fn ensure_comments_relationship(pkg: &mut DocxPackage) {
     }
 }
 
+fn strip_comments_part(pkg: &mut DocxPackage) {
+    let comments_part = crate::comments::COMMENTS_PART;
+    if pkg.parts.remove(comments_part).is_some() {
+        pkg.mark_modified(comments_part.into());
+    }
+
+    let ct_part = "[Content_Types].xml";
+    if let Some(bytes) = pkg.parts.get(ct_part).cloned() {
+        let mut xml = String::from_utf8_lossy(&bytes).into_owned();
+        let before = xml.clone();
+        // Remove Override for comments (self-closing or paired).
+        while let Some(start) = xml.find(r#"PartName="/word/comments.xml""#) {
+            let open = xml[..start].rfind("<Override").unwrap_or(start);
+            let end = xml[start..]
+                .find("/>")
+                .map(|i| start + i + 2)
+                .or_else(|| {
+                    xml[start..]
+                        .find("</Override>")
+                        .map(|i| start + i + "</Override>".len())
+                });
+            if let Some(end) = end {
+                xml.replace_range(open..end, "");
+            } else {
+                break;
+            }
+        }
+        if xml != before {
+            pkg.parts.insert(ct_part.into(), xml.into_bytes());
+            pkg.mark_modified(ct_part.into());
+        }
+    }
+
+    let rels_part = "word/_rels/document.xml.rels";
+    if let Some(bytes) = pkg.parts.get(rels_part).cloned() {
+        let mut xml = String::from_utf8_lossy(&bytes).into_owned();
+        let before = xml.clone();
+        while let Some(start) = xml.find("Target=\"comments.xml\"") {
+            let open = xml[..start].rfind("<Relationship").unwrap_or(start);
+            let end = xml[start..]
+                .find("/>")
+                .map(|i| start + i + 2)
+                .or_else(|| {
+                    xml[start..]
+                        .find("</Relationship>")
+                        .map(|i| start + i + "</Relationship>".len())
+                });
+            if let Some(end) = end {
+                xml.replace_range(open..end, "");
+            } else {
+                break;
+            }
+        }
+        if xml != before {
+            pkg.parts.insert(rels_part.into(), xml.into_bytes());
+            pkg.mark_modified(rels_part.into());
+        }
+    }
+}
+
+fn ensure_signatures_content_type(pkg: &mut DocxPackage) {
+    let part = "[Content_Types].xml";
+    let bytes = pkg
+        .parts
+        .get(part)
+        .cloned()
+        .unwrap_or_else(|| MINIMAL_CONTENT_TYPES.to_vec());
+    let mut xml = String::from_utf8_lossy(&bytes).into_owned();
+    let override_tag = r#"<Override PartName="/customXml/digitalSignatures.xml" ContentType="application/xml"/>"#;
+    if !xml.contains("/customXml/digitalSignatures.xml") {
+        if let Some(end) = xml.rfind("</Types>") {
+            xml.insert_str(end, override_tag);
+        } else {
+            xml.push_str(override_tag);
+        }
+        pkg.parts.insert(part.into(), xml.into_bytes());
+        pkg.mark_modified(part.into());
+    }
+}
+
+fn ensure_signatures_relationship(pkg: &mut DocxPackage) {
+    let part = "word/_rels/document.xml.rels";
+    let bytes = pkg
+        .parts
+        .get(part)
+        .cloned()
+        .unwrap_or_else(|| b"<Relationships/>".to_vec());
+    let mut xml = String::from_utf8_lossy(&bytes).into_owned();
+    if !xml.contains("digitalSignatures.xml") {
+        let rel = r#"<Relationship Id="rIdDigitalSignatures" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="../customXml/digitalSignatures.xml"/>"#;
+        if let Some(end) = xml.rfind("</Relationships>") {
+            xml.insert_str(end, rel);
+        } else {
+            xml = format!("<Relationships>{rel}</Relationships>");
+        }
+        pkg.parts.insert(part.into(), xml.into_bytes());
+        pkg.mark_modified(part.into());
+    }
+}
+
+fn strip_signatures_part(pkg: &mut DocxPackage) {
+    let signatures_part = crate::signatures::SIGNATURES_PART;
+    if pkg.parts.remove(signatures_part).is_some() {
+        pkg.mark_modified(signatures_part.into());
+    }
+
+    let ct_part = "[Content_Types].xml";
+    if let Some(bytes) = pkg.parts.get(ct_part).cloned() {
+        let mut xml = String::from_utf8_lossy(&bytes).into_owned();
+        let before = xml.clone();
+        while let Some(start) = xml.find(r#"PartName="/customXml/digitalSignatures.xml""#) {
+            let open = xml[..start].rfind("<Override").unwrap_or(start);
+            let end = xml[start..]
+                .find("/>")
+                .map(|i| start + i + 2)
+                .or_else(|| {
+                    xml[start..]
+                        .find("</Override>")
+                        .map(|i| start + i + "</Override>".len())
+                });
+            if let Some(end) = end {
+                xml.replace_range(open..end, "");
+            } else {
+                break;
+            }
+        }
+        if xml != before {
+            pkg.parts.insert(ct_part.into(), xml.into_bytes());
+            pkg.mark_modified(ct_part.into());
+        }
+    }
+
+    let rels_part = "word/_rels/document.xml.rels";
+    if let Some(bytes) = pkg.parts.get(rels_part).cloned() {
+        let mut xml = String::from_utf8_lossy(&bytes).into_owned();
+        let before = xml.clone();
+        while let Some(start) = xml.find("digitalSignatures.xml") {
+            let open = xml[..start].rfind("<Relationship").unwrap_or(start);
+            let end = xml[start..]
+                .find("/>")
+                .map(|i| start + i + 2)
+                .or_else(|| {
+                    xml[start..]
+                        .find("</Relationship>")
+                        .map(|i| start + i + "</Relationship>".len())
+                });
+            if let Some(end) = end {
+                xml.replace_range(open..end, "");
+            } else {
+                break;
+            }
+        }
+        if xml != before {
+            pkg.parts.insert(rels_part.into(), xml.into_bytes());
+            pkg.mark_modified(rels_part.into());
+        }
+    }
+}
+
+fn write_core_properties(pkg: &mut DocxPackage, props: &tw_model::DocumentProperties) {
+    let part = crate::properties::CORE_PROPERTIES_PART;
+    let xml = crate::properties::serialize_core_properties(props);
+    pkg.parts.insert(part.into(), xml.into_bytes());
+    pkg.mark_modified(part.into());
+    ensure_core_properties_content_type(pkg);
+    ensure_core_properties_relationship(pkg);
+}
+
+fn ensure_core_properties_content_type(pkg: &mut DocxPackage) {
+    let part = "[Content_Types].xml";
+    let bytes = pkg
+        .parts
+        .get(part)
+        .cloned()
+        .unwrap_or_else(|| MINIMAL_CONTENT_TYPES.to_vec());
+    let mut xml = String::from_utf8_lossy(&bytes).into_owned();
+    let override_tag = r#"<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>"#;
+    if !xml.contains("/docProps/core.xml") {
+        if let Some(end) = xml.rfind("</Types>") {
+            xml.insert_str(end, override_tag);
+        } else {
+            xml.push_str(override_tag);
+        }
+        pkg.parts.insert(part.into(), xml.into_bytes());
+        pkg.mark_modified(part.into());
+    }
+}
+
+fn ensure_core_properties_relationship(pkg: &mut DocxPackage) {
+    let part = "_rels/.rels";
+    let bytes = pkg
+        .parts
+        .get(part)
+        .cloned()
+        .unwrap_or_else(|| b"<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"/>".to_vec());
+    let mut xml = String::from_utf8_lossy(&bytes).into_owned();
+    if !xml.contains("docProps/core.xml") {
+        let rel = r#"<Relationship Id="rIdCore" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>"#;
+        if let Some(end) = xml.rfind("</Relationships>") {
+            xml.insert_str(end, rel);
+        } else {
+            xml = format!(
+                r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{rel}</Relationships>"#
+            );
+        }
+        pkg.parts.insert(part.into(), xml.into_bytes());
+        pkg.mark_modified(part.into());
+    }
+}
+
 fn serialize_footnotes_xml(
     doc: &Document,
     package: &DocxPackage,
     media: &mut MediaWriter,
     charts: &crate::chart::ChartWriter,
     diagrams: &crate::diagram::DiagramWriter,
+    hyperlinks: &crate::hyperlink::HyperlinkRels,
     revision_ids: &mut RevisionIdAllocator,
 ) -> String {
     let mut xml = String::from(
@@ -356,7 +589,7 @@ fn serialize_footnotes_xml(
         xml.push_str(&format!(r#"<w:footnote w:id="{}">"#, footnote.id));
         for block in &footnote.blocks {
             xml.push_str(&serialize_block(
-                block, doc, package, media, charts, diagrams, revision_ids,
+                block, doc, package, media, charts, diagrams, hyperlinks, revision_ids,
             ));
         }
         xml.push_str("</w:footnote>");
@@ -371,6 +604,7 @@ fn serialize_document_xml(
     media: &mut MediaWriter,
     charts: &crate::chart::ChartWriter,
     diagrams: &crate::diagram::DiagramWriter,
+    hyperlinks: &crate::hyperlink::HyperlinkRels,
 ) -> String {
     let original_sect_pr = original_section_properties(source);
     let mut body = String::new();
@@ -380,7 +614,14 @@ fn serialize_document_xml(
     for (index, section) in doc.sections.iter().enumerate() {
         for block in &section.blocks {
             body.push_str(&serialize_block(
-                block, doc, source, media, charts, diagrams, &mut revision_ids,
+                block,
+                doc,
+                source,
+                media,
+                charts,
+                diagrams,
+                hyperlinks,
+                &mut revision_ids,
             ));
         }
         let sect_pr = serialize_section_properties(
@@ -413,11 +654,23 @@ fn serialize_block(
     media: &mut MediaWriter,
     charts: &crate::chart::ChartWriter,
     diagrams: &crate::diagram::DiagramWriter,
+    hyperlinks: &crate::hyperlink::HyperlinkRels,
     revision_ids: &mut RevisionIdAllocator,
 ) -> String {
     match block {
-        Block::Paragraph(para) => serialize_paragraph(para, doc, package, revision_ids),
-        Block::Table(table) => serialize_table(table, doc, package, media, charts, diagrams, revision_ids),
+        Block::Paragraph(para) => {
+            serialize_paragraph(para, doc, package, hyperlinks, revision_ids)
+        }
+        Block::Table(table) => serialize_table(
+            table,
+            doc,
+            package,
+            media,
+            charts,
+            diagrams,
+            hyperlinks,
+            revision_ids,
+        ),
         Block::ImageBlock(image) => serialize_image_paragraph(image, media),
         Block::ShapeBlock(shape) => serialize_shape_paragraph(shape, package, charts, diagrams),
         _ => String::from("<w:p/>"),
@@ -430,6 +683,7 @@ fn serialize_paragraph(
     para: &Paragraph,
     doc: &Document,
     package: &DocxPackage,
+    hyperlinks: &crate::hyperlink::HyperlinkRels,
     revision_ids: &mut RevisionIdAllocator,
 ) -> String {
     if para.runs.len() == 1 {
@@ -453,7 +707,7 @@ fn serialize_paragraph(
     let mut xml = String::from("<w:p>");
     xml.push_str(&serialize_paragraph_properties(para, doc));
     for run in &para.runs {
-        xml.push_str(&serialize_run(run, revision_ids));
+        xml.push_str(&serialize_run(run, revision_ids, hyperlinks));
     }
     xml.push_str("</w:p>");
     xml
@@ -653,7 +907,11 @@ fn ooxml_style_id(doc: &Document, style_id: StyleId) -> Option<String> {
 
 // -- runs ---------------------------------------------------------------------
 
-fn serialize_run(run: &Run, revision_ids: &mut RevisionIdAllocator) -> String {
+fn serialize_run(
+    run: &Run,
+    revision_ids: &mut RevisionIdAllocator,
+    hyperlinks: &crate::hyperlink::HyperlinkRels,
+) -> String {
     let deleted = matches!(
         run.revision.as_ref().map(|r| r.revision_type),
         Some(tw_model::RevisionType::Delete)
@@ -680,7 +938,9 @@ fn serialize_run(run: &Run, revision_ids: &mut RevisionIdAllocator) -> String {
         RunContent::Break(tw_model::BreakType::Page) => r#"<w:br w:type="page"/>"#.to_string(),
         RunContent::Break(tw_model::BreakType::Column) => r#"<w:br w:type="column"/>"#.to_string(),
         RunContent::Break(tw_model::BreakType::Line) => "<w:br/>".to_string(),
-        RunContent::Hyperlink { text, .. } => serialize_text(text, deleted),
+        RunContent::Hyperlink { text, target } => {
+            return serialize_hyperlink_run(run, text, target, deleted, revision_ids, hyperlinks);
+        }
         RunContent::Field(field) => {
             let instr = field
                 .instruction
@@ -739,6 +999,62 @@ fn serialize_run(run: &Run, revision_ids: &mut RevisionIdAllocator) -> String {
     );
 
     // Revision marks wrap the run; they are not run properties.
+    match &run.revision {
+        Some(rev) => {
+            let tag = if deleted { "w:del" } else { "w:ins" };
+            format!(
+                r#"<{tag} w:id="{}" w:author="{}" w:date="{}">{xml}</{tag}>"#,
+                revision_ids.id_for(&rev.id),
+                escape_xml(&rev.author),
+                rev.timestamp.to_rfc3339()
+            )
+        }
+        None => xml,
+    }
+}
+
+fn serialize_hyperlink_run(
+    run: &Run,
+    text: &str,
+    target: &tw_model::HyperlinkTarget,
+    deleted: bool,
+    revision_ids: &mut RevisionIdAllocator,
+    hyperlinks: &crate::hyperlink::HyperlinkRels,
+) -> String {
+    let inner = format!(
+        "<w:r>{}{}</w:r>",
+        serialize_run_properties(&run.format),
+        serialize_text(text, deleted)
+    );
+
+    let mut attrs = String::new();
+    if let Some(anchor) = crate::hyperlink::hyperlink_anchor(&target.url, &target.anchor) {
+        attrs.push_str(&format!(r#" w:anchor="{}""#, escape_xml(&anchor)));
+    } else if let Some(rid) = target.url.strip_prefix("r:id:") {
+        attrs.push_str(&format!(r#" r:id="{}""#, escape_xml(rid)));
+    } else if let Some(rid) = hyperlinks.rid_for(&target.url) {
+        attrs.push_str(&format!(r#" r:id="{rid}""#));
+    } else if crate::hyperlink::is_external_url(&target.url) {
+        // Relationship should have been pre-allocated; fall back to plain text.
+        return format!(
+            "<w:r>{}{}</w:r>",
+            serialize_run_properties(&run.format),
+            serialize_text(text, deleted)
+        );
+    } else {
+        return format!(
+            "<w:r>{}{}</w:r>",
+            serialize_run_properties(&run.format),
+            serialize_text(text, deleted)
+        );
+    }
+    if let Some(tooltip) = &target.tooltip {
+        if !tooltip.is_empty() {
+            attrs.push_str(&format!(r#" w:tooltip="{}""#, escape_xml(tooltip)));
+        }
+    }
+
+    let xml = format!("<w:hyperlink{attrs}>{inner}</w:hyperlink>");
     match &run.revision {
         Some(rev) => {
             let tag = if deleted { "w:del" } else { "w:ins" };
@@ -920,6 +1236,7 @@ fn serialize_table(
     media: &mut MediaWriter,
     charts: &crate::chart::ChartWriter,
     diagrams: &crate::diagram::DiagramWriter,
+    hyperlinks: &crate::hyperlink::HyperlinkRels,
     revision_ids: &mut RevisionIdAllocator,
 ) -> String {
     let widths = &table.format.column_widths;
@@ -944,7 +1261,15 @@ fn serialize_table(
 
     for row in &table.rows {
         xml.push_str(&serialize_table_row(
-            row, widths, doc, package, media, charts, diagrams, revision_ids,
+            row,
+            widths,
+            doc,
+            package,
+            media,
+            charts,
+            diagrams,
+            hyperlinks,
+            revision_ids,
         ));
     }
     xml.push_str("</w:tbl>");
@@ -976,6 +1301,7 @@ fn serialize_table_row(
     media: &mut MediaWriter,
     charts: &crate::chart::ChartWriter,
     diagrams: &crate::diagram::DiagramWriter,
+    hyperlinks: &crate::hyperlink::HyperlinkRels,
     revision_ids: &mut RevisionIdAllocator,
 ) -> String {
     let mut xml = String::from("<w:tr>");
@@ -996,7 +1322,15 @@ fn serialize_table_row(
             .copied()
             .sum::<f32>();
         xml.push_str(&serialize_table_cell(
-            cell, width, doc, package, media, charts, diagrams, revision_ids,
+            cell,
+            width,
+            doc,
+            package,
+            media,
+            charts,
+            diagrams,
+            hyperlinks,
+            revision_ids,
         ));
         column += span;
     }
@@ -1012,6 +1346,7 @@ fn serialize_table_cell(
     media: &mut MediaWriter,
     charts: &crate::chart::ChartWriter,
     diagrams: &crate::diagram::DiagramWriter,
+    hyperlinks: &crate::hyperlink::HyperlinkRels,
     revision_ids: &mut RevisionIdAllocator,
 ) -> String {
     let mut xml = String::from("<w:tc>");
@@ -1021,7 +1356,14 @@ fn serialize_table_cell(
     for block in &cell.blocks {
         has_paragraph |= matches!(block, Block::Paragraph(_));
         xml.push_str(&serialize_block(
-            block, doc, package, media, charts, diagrams, revision_ids,
+            block,
+            doc,
+            package,
+            media,
+            charts,
+            diagrams,
+            hyperlinks,
+            revision_ids,
         ));
     }
     // A cell must end with a paragraph or Word treats the file as corrupt.
@@ -1100,10 +1442,19 @@ fn serialize_image_paragraph(image: &ImageBlock, media: &mut MediaWriter) -> Str
     let rot = (image.transform.rotation_deg.rem_euclid(360.0) * 60000.0).round() as i64;
     let src_rect = image_src_rect(&image.transform);
 
+    let descr_attr = image
+        .alt_text
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| format!(r#" descr="{}""#, escape_xml(s)))
+        .unwrap_or_default();
     let graphic = format!(
-        r#"<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="{id}" name="{name}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="{relationship_id}"/>{src_rect}<a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm rot="{rot}"><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic>"#
+        r#"<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="{id}" name="{name}"{descr_attr}/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="{relationship_id}"/>{src_rect}<a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm rot="{rot}"><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic>"#
     );
-    let doc_pr = format!(r#"<wp:docPr id="{id}" name="Picture {id}"/><wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>"#);
+    let doc_pr = format!(
+        r#"<wp:docPr id="{id}" name="Picture {id}"{descr_attr}/><wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>"#
+    );
 
     let drawing = match image.anchor {
         Some(anchor) => {
@@ -1596,7 +1947,8 @@ mod tests {
         let mut media = MediaWriter::new(&package);
         let charts = crate::chart::ChartWriter::new(&package);
         let diagrams = crate::diagram::DiagramWriter::new(&package);
-        serialize_document_xml(doc, &package, &mut media, &charts, &diagrams)
+        let hyperlinks = crate::hyperlink::HyperlinkRels::build(doc, &package);
+        serialize_document_xml(doc, &package, &mut media, &charts, &diagrams, &hyperlinks)
     }
 
     #[test]

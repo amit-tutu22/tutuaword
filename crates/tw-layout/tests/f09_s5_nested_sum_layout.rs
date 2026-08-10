@@ -58,6 +58,8 @@ fn u_f09_s5_sum_numeric_above() {
             field_type: FieldType::TableSumAbove,
             instruction: Some(" =SUM(ABOVE) ".into()),
             display_text: None,
+            form: None,
+            merge_name: None,
         },
         &ctx,
     );
@@ -80,6 +82,8 @@ fn u_f09_s5_sum_field_layout() {
                 field_type: FieldType::TableSumAbove,
                 instruction: Some(" =SUM(ABOVE) ".into()),
                 display_text: None,
+                form: None,
+            merge_name: None,
             }),
             revision: None,
         }];

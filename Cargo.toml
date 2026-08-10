@@ -49,6 +49,10 @@ unicode-segmentation = "1"
 regex = "1"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 chrono = { version = "0.4", features = ["serde"] }
+sha2 = "0.10"
+ed25519-dalek = { version = "2", features = ["rand_core", "std"] }
+base64 = "0.22"
+rand = "0.8"
 parking_lot = "0.12"
 quick-xml = { version = "0.37", features = ["serialize"] }
 pulldown-cmark = "0.12"

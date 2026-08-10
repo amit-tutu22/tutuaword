@@ -14,6 +14,11 @@ void main() {
       addTearDown(controller.dispose);
 
       await pumpRibbonTab(tester, InsertTab(controller: controller));
+      await tester.scrollUntilVisible(
+        find.text('Header'),
+        120,
+        scrollable: find.byType(Scrollable).first,
+      );
       await tester.tap(find.text('Header'));
       await settleEngineStyle(tester);
 
@@ -50,9 +55,30 @@ void main() {
       await settleEngineStyle(tester);
 
       expect(controller.sessionController.statusText, contains('Page number inserted'));
+      expect(controller.editZone, DocumentEditZone.header);
       final seed = engine.fetchHeaderFooterSeedRun(isHeader: true);
       expect(seed, isNotNull);
       expect(engine.fetchTextRange(seed!, 0, seed, 1), '1');
+    });
+
+    testWidgets('I-F08-S2-page-number from body does not corrupt body text', (tester) async {
+      final engine = MockDocumentEngine();
+      final controller = createTestEditorController(engine: engine);
+      addTearDown(controller.dispose);
+
+      await typeTextDirect(controller, 'Amit kumar');
+      await settleEngineStyle(tester);
+      expect(controller.documentText.toLowerCase(), contains('amit kumar'));
+
+      await controller.insertPageNumberField();
+      await settleEngineStyle(tester);
+
+      expect(controller.editZone, DocumentEditZone.footer);
+      expect(controller.documentText.toLowerCase(), contains('amit kumar'));
+      expect(controller.documentText.startsWith('1Amit'), isFalse);
+      final footerSeed = engine.fetchHeaderFooterSeedRun(isHeader: false);
+      expect(footerSeed, isNotNull);
+      expect(engine.fetchTextRange(footerSeed!, 0, footerSeed, 1), '1');
     });
 
     testWidgets('I-F08-S3-first-page and odd-even toggles update state', (tester) async {
@@ -72,11 +98,21 @@ void main() {
         size: const Size(1400, 120),
       );
 
+      await tester.scrollUntilVisible(
+        find.byIcon(Icons.looks_one_outlined),
+        120,
+        scrollable: find.byType(Scrollable).first,
+      );
       await tester.tap(find.byIcon(Icons.looks_one_outlined));
       await settleEngineStyle(tester);
       expect(controller.differentFirstPage, isTrue);
       expect(controller.sessionController.statusText, contains('Different first page on'));
 
+      await tester.scrollUntilVisible(
+        find.byIcon(Icons.view_week_outlined),
+        120,
+        scrollable: find.byType(Scrollable).first,
+      );
       await tester.tap(find.byIcon(Icons.view_week_outlined));
       await settleEngineStyle(tester);
       expect(controller.evenAndOddHeaders, isTrue);

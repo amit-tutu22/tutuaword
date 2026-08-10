@@ -64,7 +64,7 @@ Six phases over 24 months. Each phase has measurable exit criteria that must pas
 | Insert 5 images with text wrap — layout correct | Golden-image test |
 | Create 3×3 table, merge cells, resize columns | Automated test |
 | Multi-level numbered list renders with correct indentation | Golden-image test |
-| Export to PDF — **structural** layout positions (Helvetica) | Automated PDF export test; **VisualMatch / font embedding deferred** ([risk-mitigation.md](risk-mitigation.md), [long-tail-gaps.md](long-tail-gaps.md)) |
+| Export to PDF — structural Helvetica + **VisualMatch** `/FontFile2` embedding (F23.S2) | `tw-pdf` export tests; subsetting / link annotations still open ([long-tail-gaps.md](long-tail-gaps.md)) |
 | 50-page document scrolls at 60 FPS | Frame time benchmark |
 
 ### Team: 8–10 engineers (+2 layout, +1 UI)

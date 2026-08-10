@@ -513,6 +513,50 @@ impl FontDatabase {
         None
     }
 
+    /// Resolves a layout/render font key back to a [`FontId`].
+    pub fn font_id_for_key(&self, key: u32) -> Option<FontId> {
+        self.key_map
+            .iter()
+            .find(|(_, &mapped)| mapped == key)
+            .map(|(&id, &mapped)| FontId { id, key: mapped })
+    }
+
+    /// Face bytes for a layout glyph's `font_id` key (PDF embedding / export).
+    pub fn load_face_data_by_key(&self, key: u32) -> Option<Vec<u8>> {
+        let font_id = self.font_id_for_key(key)?;
+        self.load_face_data(font_id)
+    }
+
+    /// Collection face index for a layout font key (`0` for single-face files).
+    pub fn face_index_for_key(&self, key: u32) -> Option<u32> {
+        let font_id = self.font_id_for_key(key)?;
+        Some(self.db.face(font_id.id)?.index)
+    }
+
+    /// Bytes suitable for PDF `/FontFile2` / `/FontFile3`: a single SFNT face.
+    ///
+    /// TrueType Collections (`.ttc`) are expanded to one face so exporters do
+    /// not have to ship the whole collection.
+    pub fn load_embeddable_sfnt_by_key(&self, key: u32) -> Option<Vec<u8>> {
+        let data = self.load_face_data_by_key(key)?;
+        let index = self.face_index_for_key(key).unwrap_or(0);
+        extract_embeddable_sfnt(&data, index)
+    }
+
+    /// Primary family name for a layout font key, when known.
+    pub fn family_name_for_key(&self, key: u32) -> Option<String> {
+        let font_id = self.font_id_for_key(key)?;
+        let face = self.db.face(font_id.id)?;
+        if let Some((name, _)) = face.families.first() {
+            return Some(name.clone());
+        }
+        if face.post_script_name.is_empty() {
+            None
+        } else {
+            Some(face.post_script_name.clone())
+        }
+    }
+
     pub fn load_face_data(&self, font_id: FontId) -> Option<Vec<u8>> {
         // Registered faces already hold their bytes, so a host-injected face
         // never reaches the source at all.
@@ -542,6 +586,84 @@ impl FontDatabase {
             .insert(font_id.key(), Arc::clone(&data));
         Some(data)
     }
+}
+
+/// Returns a single-font SFNT suitable for PDF embedding.
+///
+/// Passes through TrueType / OpenType CFF; extracts one face from a TTC.
+fn extract_embeddable_sfnt(data: &[u8], face_index: u32) -> Option<Vec<u8>> {
+    if data.len() < 4 {
+        return None;
+    }
+    match &data[0..4] {
+        [0x00, 0x01, 0x00, 0x00] | b"true" | b"typ1" | b"OTTO" => Some(data.to_vec()),
+        b"ttcf" => extract_face_from_ttc(data, face_index),
+        _ => None,
+    }
+}
+
+fn extract_face_from_ttc(data: &[u8], face_index: u32) -> Option<Vec<u8>> {
+    if data.len() < 12 || &data[0..4] != b"ttcf" {
+        return None;
+    }
+    let num_fonts = u32::from_be_bytes(data[8..12].try_into().ok()?);
+    if face_index >= num_fonts {
+        return None;
+    }
+    let offset_entry = 12 + (face_index as usize) * 4;
+    if offset_entry + 4 > data.len() {
+        return None;
+    }
+    let face_offset = u32::from_be_bytes(data[offset_entry..offset_entry + 4].try_into().ok()?) as usize;
+    if face_offset + 12 > data.len() {
+        return None;
+    }
+
+    let num_tables = u16::from_be_bytes(data[face_offset + 4..face_offset + 6].try_into().ok()?) as usize;
+    let table_dir_start = face_offset + 12;
+    let table_dir_end = table_dir_start + num_tables * 16;
+    if table_dir_end > data.len() {
+        return None;
+    }
+
+    let mut tables: Vec<( [u8; 4], u32, usize, usize)> = Vec::with_capacity(num_tables);
+    for i in 0..num_tables {
+        let e = table_dir_start + i * 16;
+        let tag: [u8; 4] = data[e..e + 4].try_into().ok()?;
+        let checksum = u32::from_be_bytes(data[e + 4..e + 8].try_into().ok()?);
+        let offset = u32::from_be_bytes(data[e + 8..e + 12].try_into().ok()?) as usize;
+        let length = u32::from_be_bytes(data[e + 12..e + 16].try_into().ok()?) as usize;
+        if offset.checked_add(length)? > data.len() {
+            return None;
+        }
+        tables.push((tag, checksum, offset, length));
+    }
+
+    // Offset table (12) + directory (16 * n) then table payloads, 4-byte aligned.
+    let mut out = Vec::new();
+    out.extend_from_slice(&data[face_offset..face_offset + 12]);
+    let mut dir = vec![0u8; num_tables * 16];
+    let mut cursor = 12 + num_tables * 16;
+    for (i, (tag, checksum, _offset, length)) in tables.iter().enumerate() {
+        while cursor % 4 != 0 {
+            cursor += 1;
+        }
+        let entry = i * 16;
+        dir[entry..entry + 4].copy_from_slice(tag);
+        dir[entry + 4..entry + 8].copy_from_slice(&checksum.to_be_bytes());
+        dir[entry + 8..entry + 12].copy_from_slice(&(cursor as u32).to_be_bytes());
+        dir[entry + 12..entry + 16].copy_from_slice(&(*length as u32).to_be_bytes());
+        cursor += length;
+    }
+    out.extend_from_slice(&dir);
+
+    for (_, _, offset, length) in &tables {
+        while out.len() % 4 != 0 {
+            out.push(0);
+        }
+        out.extend_from_slice(&data[*offset..*offset + *length]);
+    }
+    Some(out)
 }
 
 /// Wraps host bytes for `fontdb` without copying them: the database and this

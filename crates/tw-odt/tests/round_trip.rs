@@ -69,6 +69,62 @@ fn odt_export_bold_span() {
             .unwrap(),
     )
     .unwrap();
-    assert!(content.contains("Bold"));
-    assert!(content.contains("Bold") || content.contains("text:style-name"));
+    assert!(content.contains(r#"text:style-name="Bold""#));
+    assert!(content.contains("automatic-styles"));
+}
+
+#[test]
+fn u_f23_s3_odt_roundtrip() {
+    let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+  xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0">
+  <office:body><office:text>
+    <text:p><text:span>Hello ODT</text:span></text:p>
+  </office:text></office:body>
+</office:document-content>"#;
+    let bytes = minimal_odt(xml);
+    let imported = import(&bytes).unwrap();
+    assert_eq!(
+        imported.document.sections[0].blocks[0]
+            .paragraph()
+            .unwrap()
+            .full_text(),
+        "Hello ODT"
+    );
+
+    let mut doc = imported.document;
+    if let Block::Paragraph(para) = &mut doc.sections[0].blocks[0] {
+        para.runs.clear();
+        let mut bold = tw_model::Run::new_text("Edited");
+        bold.format.bold = Some(true);
+        let plain = tw_model::Run::new_text(" body");
+        para.runs = vec![bold, plain];
+    }
+
+    let mut package = imported.package;
+    package.mark_modified("content.xml".into());
+    let exported = export(&doc, &package).unwrap();
+    let reimported = import(&exported).unwrap();
+
+    let para = reimported.document.sections[0].blocks[0]
+        .paragraph()
+        .unwrap();
+    assert_eq!(para.full_text(), "Edited body");
+    assert!(
+        para.runs.iter().any(|r| r.format.bold == Some(true) && r.text() == "Edited"),
+        "bold run must survive ODT rewrite round-trip"
+    );
+    assert!(
+        para.runs.iter().any(|r| r.format.bold != Some(true) && r.text().contains("body")),
+        "plain run must survive ODT rewrite round-trip"
+    );
+
+    let content = String::from_utf8_lossy(
+        reimported
+            .package
+            .parts
+            .get("content.xml")
+            .expect("content.xml"),
+    );
+    assert!(content.contains(r#"text:style-name="Bold""#));
 }

@@ -7,7 +7,8 @@ mod snapshot;
 mod worker;
 
 pub use bundle::{
-    export_document, import_document_bundle, ExportError, FormatContext, ImportBundle,
+    export_document, import_document_bundle, import_document_bundle_with_password, ExportError,
+    FormatContext, ImportBundle,
 };
 pub use import::{
     detect_format, extension_from_path, format_from_extension, import_document, DetectedFormat,

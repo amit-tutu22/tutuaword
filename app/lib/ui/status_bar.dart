@@ -38,7 +38,7 @@ class WordStatusBar extends StatelessWidget {
                       _divider(),
                       _StatusItem('English (India)'),
                       _divider(),
-                      _StatusItem('Accessibility: Good to go'),
+                      _StatusItem(controller.accessibilityStatusLabel),
                     ],
                   ),
                 ),

@@ -38,18 +38,37 @@ class ViewTab extends StatelessWidget {
               ),
               RibbonGroup(
                 label: 'Show',
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
+                child: Row(
                   children: [
-                    _RibbonCheckbox(
-                      label: 'Ruler',
-                      value: controller.showRuler,
-                      onChanged: (_) => controller.toggleRuler(),
+                    Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        _RibbonCheckbox(
+                          label: 'Ruler',
+                          value: controller.showRuler,
+                          onChanged: (_) => controller.toggleRuler(),
+                        ),
+                        _RibbonCheckbox(
+                          label: 'Navigation\nPane',
+                          value: controller.showNavigationPane,
+                          onChanged: (_) => controller.toggleNavigationPane(),
+                        ),
+                      ],
                     ),
-                    _RibbonCheckbox(
-                      label: 'Navigation\nPane',
-                      value: controller.showNavigationPane,
-                      onChanged: (_) => controller.toggleNavigationPane(),
+                    RibbonLargeButton(
+                      icon: Icons.format_list_bulleted,
+                      label: 'Document\nOutline',
+                      tooltip: 'Show navigation pane outline (headings)',
+                      onPressed: controller.showNavigationOutline,
+                    ),
+                    Builder(
+                      builder: (context) => RibbonLargeButton(
+                        key: const Key('goto_button'),
+                        icon: Icons.arrow_forward,
+                        label: 'Go To',
+                        tooltip: 'Go to page, bookmark, or heading',
+                        onPressed: () => controller.openGoToDialog(context),
+                      ),
                     ),
                   ],
                 ),

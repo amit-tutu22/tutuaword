@@ -86,7 +86,7 @@ fn r1_atlas_separation_keystroke_ffi_under_2mb() {
         total_bytes
     );
 
-    // v4 page payloads must not embed atlas pixels (header only, no 16MB blob).
+    // v4+ page payloads must not embed atlas pixels (header only, no 16MB blob).
     let page_count = session.get_display_list_bytes().page_count as usize;
     for page in 0..page_count {
         let page_snap = session
@@ -96,8 +96,9 @@ fn r1_atlas_separation_keystroke_ffi_under_2mb() {
         assert!(page_bytes.len() >= 4);
         let file_version = u32::from_le_bytes(page_bytes[0..4].try_into().unwrap());
         assert_eq!(
-            file_version, 4,
-            "page {page} display list should be wire format v4"
+            file_version,
+            tw_render::DISPLAY_LIST_VERSION,
+            "page {page} display list should be current wire format"
         );
         assert!(
             page_bytes.len() < 512 * 1024,

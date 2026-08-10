@@ -59,6 +59,12 @@ impl NativeFormat {
             zip.start_file("settings.json", options)?;
             zip.write_all(settings.as_bytes())?;
 
+            if !doc.signatures.is_empty() {
+                let signatures = serde_json::to_string_pretty(&doc.signatures)?;
+                zip.start_file("signatures.json", options)?;
+                zip.write_all(signatures.as_bytes())?;
+            }
+
             zip.finish()?;
         }
 
@@ -71,7 +77,18 @@ impl NativeFormat {
 
         let mut content = String::new();
         archive.by_name("content.json")?.read_to_string(&mut content)?;
-        let doc: Document = serde_json::from_str(&content)?;
+        let mut doc: Document = serde_json::from_str(&content)?;
+
+        // Prefer dedicated signatures.json when present (F22.S4); content.json
+        // already carries signatures when the Document field was serialized.
+        if let Ok(mut file) = archive.by_name("signatures.json") {
+            let mut signatures_json = String::new();
+            file.read_to_string(&mut signatures_json)?;
+            if let Ok(signatures) = serde_json::from_str(&signatures_json) {
+                doc.signatures = signatures;
+            }
+        }
+
         Ok(doc)
     }
 

@@ -14,6 +14,8 @@ import 'package:tutuaword/bridge/engine_types.dart';
 import 'package:tutuaword/bridge/find_format_filter.dart';
 import 'package:tutuaword/bridge/find_match.dart';
 import 'package:tutuaword/bridge/native_event_router.dart';
+import 'package:tutuaword/bridge/print_layout_settings.dart';
+import 'package:tutuaword/editor/doc_range.dart';
 
 typedef TwEventCallbackNative = Void Function(Uint32, Uint64, Pointer<Uint8>, IntPtr);
 typedef TwEventCallbackDart = void Function(int, int, Pointer<Uint8>, int);
@@ -117,6 +119,19 @@ typedef TwOpenDocumentWithPathDart = int Function(
   Pointer<Utf8>,
 );
 
+typedef TwOpenDocumentWithPasswordNative = Int32 Function(
+  Pointer<Uint8>,
+  IntPtr,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+);
+typedef TwOpenDocumentWithPasswordDart = int Function(
+  Pointer<Uint8>,
+  int,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+);
+
 typedef TwSaveDocumentNative = Int32 Function(Pointer<Pointer<Uint8>>, Pointer<IntPtr>);
 typedef TwSaveDocumentDart = int Function(Pointer<Pointer<Uint8>>, Pointer<IntPtr>);
 
@@ -187,6 +202,40 @@ typedef TwInsertBibliographyNative = Int32 Function(Pointer<Utf8>);
 typedef TwInsertBibliographyDart = int Function(Pointer<Utf8>);
 typedef TwInsertBookmarkNative = Int32 Function(Pointer<Utf8>, Int32, Pointer<Utf8>);
 typedef TwInsertBookmarkDart = int Function(Pointer<Utf8>, int, Pointer<Utf8>);
+typedef TwInsertHyperlinkNative = Int32 Function(
+  Pointer<Utf8>,
+  Int32,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+);
+typedef TwInsertHyperlinkDart = int Function(
+  Pointer<Utf8>,
+  int,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+);
+typedef TwInsertFormFieldNative = Int32 Function(
+  Pointer<Utf8>,
+  Int32,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+);
+typedef TwInsertFormFieldDart = int Function(
+  Pointer<Utf8>,
+  int,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+);
+typedef TwSetFormFieldValueNative = Int32 Function(Pointer<Utf8>, Pointer<Utf8>);
+typedef TwSetFormFieldValueDart = int Function(Pointer<Utf8>, Pointer<Utf8>);
+typedef TwInsertMergeFieldNative = Int32 Function(Pointer<Utf8>, Int32, Pointer<Utf8>);
+typedef TwInsertMergeFieldDart = int Function(Pointer<Utf8>, int, Pointer<Utf8>);
+typedef TwApplyMailMergeRowNative = Int32 Function(Pointer<Utf8>);
+typedef TwApplyMailMergeRowDart = int Function(Pointer<Utf8>);
 typedef TwInsertCrossReferenceNative = Int32 Function(Pointer<Utf8>, Int32, Pointer<Utf8>);
 typedef TwInsertCrossReferenceDart = int Function(Pointer<Utf8>, int, Pointer<Utf8>);
 typedef TwInsertIndexNative = Int32 Function(Pointer<Utf8>);
@@ -228,6 +277,68 @@ typedef TwGetDocumentOutlineDart = int Function(
   Pointer<Pointer<Uint8>>,
   Pointer<IntPtr>,
 );
+typedef TwGetBookmarksNative = Int32 Function(
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwGetBookmarksDart = int Function(
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwGetSemanticTreeNative = Int32 Function(
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwGetSemanticTreeDart = int Function(
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwGetAccessibilityIssuesNative = Int32 Function(
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwGetAccessibilityIssuesDart = int Function(
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwGetDocumentInspectNative = Int32 Function(
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwGetDocumentInspectDart = int Function(
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwRemoveInspectFindingsNative = Int32 Function(Int32, Int32, Int32);
+typedef TwRemoveInspectFindingsDart = int Function(int, int, int);
+typedef TwGetDigitalSignaturesNative = Int32 Function(
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwGetDigitalSignaturesDart = int Function(
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwVerifyDigitalSignaturesNative = Int32 Function(
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwVerifyDigitalSignaturesDart = int Function(
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwSignDocumentNative = Int32 Function(
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+);
+typedef TwSignDocumentDart = int Function(
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+);
+typedef TwClearDigitalSignaturesNative = Int32 Function();
+typedef TwClearDigitalSignaturesDart = int Function();
 
 typedef TwClearFormatNative = Int32 Function(
   Pointer<Utf8>,
@@ -406,11 +517,78 @@ typedef TwSetImageTransformDart = int Function(
     Pointer<Utf8>, double, double, double, double, double, double);
 typedef TwInsertImageCaptionNative = Int32 Function(Pointer<Utf8>);
 typedef TwInsertImageCaptionDart = int Function(Pointer<Utf8>);
+typedef TwSetImageAltTextNative = Int32 Function(Pointer<Utf8>, Pointer<Utf8>);
+typedef TwSetImageAltTextDart = int Function(Pointer<Utf8>, Pointer<Utf8>);
+typedef TwGetImageAltTextNative = Int32 Function(
+    Pointer<Utf8>, Pointer<Pointer<Uint8>>, Pointer<IntPtr>);
+typedef TwGetImageAltTextDart = int Function(
+    Pointer<Utf8>, Pointer<Pointer<Uint8>>, Pointer<IntPtr>);
 typedef TwCompressImageNative = Int32 Function(Pointer<Utf8>, Uint8);
 typedef TwCompressImageDart = int Function(Pointer<Utf8>, int);
 
 typedef TwExportPdfNative = Int32 Function(Pointer<Pointer<Uint8>>, Pointer<IntPtr>);
 typedef TwExportPdfDart = int Function(Pointer<Pointer<Uint8>>, Pointer<IntPtr>);
+typedef TwExportPdfForPrintNative = Int32 Function(
+  Int32,
+  Float,
+  Float,
+  Float,
+  Float,
+  Float,
+  Int32,
+  Int32,
+  Int32,
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwExportPdfForPrintDart = int Function(
+  int,
+  double,
+  double,
+  double,
+  double,
+  double,
+  int,
+  int,
+  int,
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+
+typedef TwExportPdfForPrintSelectionNative = Int32 Function(
+  Pointer<Utf8>,
+  Uint32,
+  Pointer<Utf8>,
+  Uint32,
+  Int32,
+  Float,
+  Float,
+  Float,
+  Float,
+  Float,
+  Int32,
+  Int32,
+  Int32,
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwExportPdfForPrintSelectionDart = int Function(
+  Pointer<Utf8>,
+  int,
+  Pointer<Utf8>,
+  int,
+  int,
+  double,
+  double,
+  double,
+  double,
+  double,
+  int,
+  int,
+  int,
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
 
 typedef TwUndoNative = Int32 Function();
 typedef TwUndoDart = int Function();
@@ -478,6 +656,8 @@ typedef TwSetTrackChangesNative = Int32 Function(Int32);
 typedef TwSetTrackChangesDart = int Function(int);
 typedef TwSetReadOnlyNative = Int32 Function(Int32);
 typedef TwSetReadOnlyDart = int Function(int);
+typedef TwSetEncryptionPasswordNative = Int32 Function(Pointer<Utf8>);
+typedef TwSetEncryptionPasswordDart = int Function(Pointer<Utf8>);
 typedef TwAcceptAllRevisionsNative = Int32 Function();
 typedef TwAcceptAllRevisionsDart = int Function();
 typedef TwRejectAllRevisionsNative = Int32 Function();
@@ -573,9 +753,19 @@ class NativeEngine {
   late final TwGetTextRangeDart getTextRange;
   late final TwGetCaretFormatDart getCaretFormat;
   late final TwGetDocumentOutlineDart getDocumentOutline;
+  late final TwGetBookmarksDart getBookmarks;
+  late final TwGetSemanticTreeDart getSemanticTree;
+  late final TwGetAccessibilityIssuesDart getAccessibilityIssues;
+  TwGetDocumentInspectDart? getDocumentInspect;
+  TwRemoveInspectFindingsDart? removeInspectFindingsNative;
+  TwGetDigitalSignaturesDart? getDigitalSignatures;
+  TwVerifyDigitalSignaturesDart? verifyDigitalSignaturesNative;
+  TwSignDocumentDart? signDocumentNative;
+  TwClearDigitalSignaturesDart? clearDigitalSignaturesNative;
   late final TwClearFormatDart clearFormatNative;
   late final TwInsertPageBreakDart insertPageBreak;
   late final TwOpenDocumentWithPathDart openDocumentWithPath;
+  TwOpenDocumentWithPasswordDart? openDocumentWithPassword;
   late final TwNewDocumentDart newDocumentNative;
   late final TwSaveDocumentDart saveDocument;
   late final TwSetCurrentPageDart setCurrentPage;
@@ -600,6 +790,11 @@ class NativeEngine {
   late final TwInsertCitationDart insertCitation;
   late final TwInsertBibliographyDart insertBibliography;
   late final TwInsertBookmarkDart insertBookmark;
+  late final TwInsertHyperlinkDart insertHyperlink;
+  late final TwInsertFormFieldDart insertFormField;
+  late final TwSetFormFieldValueDart setFormFieldValue;
+  late final TwInsertMergeFieldDart insertMergeField;
+  late final TwApplyMailMergeRowDart applyMailMergeRow;
   late final TwInsertCrossReferenceDart insertCrossReference;
   late final TwInsertIndexDart insertIndex;
   late final TwApplyBulletListDart applyBulletList;
@@ -640,9 +835,13 @@ class NativeEngine {
   late final TwSetImageAnchorDart setImageAnchor;
   late final TwSetImageTransformDart setImageTransform;
   late final TwInsertImageCaptionDart insertImageCaption;
+  late final TwSetImageAltTextDart setImageAltText;
+  late final TwGetImageAltTextDart getImageAltText;
   late final TwCompressImageDart compressImage;
   late final TwReplaceImageBytesDart replaceImageBytes;
   late final TwExportPdfDart exportPdf;
+  TwExportPdfForPrintDart? exportPdfForPrint;
+  TwExportPdfForPrintSelectionDart? exportPdfForPrintSelection;
   late final TwUndoDart undo;
   late final TwRedoDart redo;
   late final TwSaveDocumentAsDart saveDocumentAs;
@@ -651,6 +850,7 @@ class NativeEngine {
   late final TwCompareDocumentTextDart compareDocumentTextNative;
   late final TwFindMatchesDart findMatchesNative;
   late final TwSetReadOnlyDart setReadOnlyNative;
+  TwSetEncryptionPasswordDart? setEncryptionPasswordNative;
   late final TwSetTrackChangesDart setTrackChanges;
   late final TwAcceptAllRevisionsDart acceptAllRevisionsNative;
   late final TwRejectAllRevisionsDart rejectAllRevisionsNative;
@@ -732,12 +932,69 @@ class NativeEngine {
       engine.getDocumentOutline =
           lib.lookupFunction<TwGetDocumentOutlineNative, TwGetDocumentOutlineDart>(
               'tw_get_document_outline');
+      engine.getBookmarks =
+          lib.lookupFunction<TwGetBookmarksNative, TwGetBookmarksDart>(
+              'tw_get_bookmarks');
+      engine.getSemanticTree =
+          lib.lookupFunction<TwGetSemanticTreeNative, TwGetSemanticTreeDart>(
+              'tw_get_semantic_tree');
+      engine.getAccessibilityIssues = lib.lookupFunction<
+          TwGetAccessibilityIssuesNative,
+          TwGetAccessibilityIssuesDart>('tw_get_accessibility_issues');
+      try {
+        engine.getDocumentInspect = lib.lookupFunction<
+            TwGetDocumentInspectNative,
+            TwGetDocumentInspectDart>('tw_get_document_inspect');
+      } catch (_) {
+        engine.getDocumentInspect = null;
+      }
+      try {
+        engine.removeInspectFindingsNative = lib.lookupFunction<
+            TwRemoveInspectFindingsNative,
+            TwRemoveInspectFindingsDart>('tw_remove_inspect_findings');
+      } catch (_) {
+        engine.removeInspectFindingsNative = null;
+      }
+      try {
+        engine.getDigitalSignatures = lib.lookupFunction<
+            TwGetDigitalSignaturesNative,
+            TwGetDigitalSignaturesDart>('tw_get_digital_signatures');
+      } catch (_) {
+        engine.getDigitalSignatures = null;
+      }
+      try {
+        engine.verifyDigitalSignaturesNative = lib.lookupFunction<
+            TwVerifyDigitalSignaturesNative,
+            TwVerifyDigitalSignaturesDart>('tw_verify_digital_signatures');
+      } catch (_) {
+        engine.verifyDigitalSignaturesNative = null;
+      }
+      try {
+        engine.signDocumentNative = lib.lookupFunction<TwSignDocumentNative,
+            TwSignDocumentDart>('tw_sign_document');
+      } catch (_) {
+        engine.signDocumentNative = null;
+      }
+      try {
+        engine.clearDigitalSignaturesNative = lib.lookupFunction<
+            TwClearDigitalSignaturesNative,
+            TwClearDigitalSignaturesDart>('tw_clear_digital_signatures');
+      } catch (_) {
+        engine.clearDigitalSignaturesNative = null;
+      }
       engine.clearFormatNative =
           lib.lookupFunction<TwClearFormatNative, TwClearFormatDart>('tw_clear_format');
       engine.insertPageBreak = lib.lookupFunction<TwInsertPageBreakNative, TwInsertPageBreakDart>(
           'tw_insert_page_break');
       engine.openDocumentWithPath = lib.lookupFunction<TwOpenDocumentWithPathNative,
           TwOpenDocumentWithPathDart>('tw_open_document_with_path');
+      try {
+        engine.openDocumentWithPassword = lib.lookupFunction<
+            TwOpenDocumentWithPasswordNative,
+            TwOpenDocumentWithPasswordDart>('tw_open_document_with_password');
+      } catch (_) {
+        engine.openDocumentWithPassword = null;
+      }
       engine.newDocumentNative =
           lib.lookupFunction<TwNewDocumentNative, TwNewDocumentDart>('tw_new_document');
       engine.saveDocument =
@@ -788,6 +1045,19 @@ class NativeEngine {
               'tw_insert_bibliography');
       engine.insertBookmark = lib.lookupFunction<TwInsertBookmarkNative, TwInsertBookmarkDart>(
           'tw_insert_bookmark');
+      engine.insertHyperlink = lib.lookupFunction<TwInsertHyperlinkNative, TwInsertHyperlinkDart>(
+          'tw_insert_hyperlink');
+      engine.insertFormField = lib.lookupFunction<TwInsertFormFieldNative, TwInsertFormFieldDart>(
+          'tw_insert_form_field');
+      engine.setFormFieldValue =
+          lib.lookupFunction<TwSetFormFieldValueNative, TwSetFormFieldValueDart>(
+              'tw_set_form_field_value');
+      engine.insertMergeField =
+          lib.lookupFunction<TwInsertMergeFieldNative, TwInsertMergeFieldDart>(
+              'tw_insert_merge_field');
+      engine.applyMailMergeRow =
+          lib.lookupFunction<TwApplyMailMergeRowNative, TwApplyMailMergeRowDart>(
+              'tw_apply_mail_merge_row');
       engine.insertCrossReference = lib
           .lookupFunction<TwInsertCrossReferenceNative, TwInsertCrossReferenceDart>(
               'tw_insert_cross_reference');
@@ -875,12 +1145,32 @@ class NativeEngine {
           'tw_set_image_transform');
       engine.insertImageCaption = lib.lookupFunction<TwInsertImageCaptionNative, TwInsertImageCaptionDart>(
           'tw_insert_image_caption');
+      engine.setImageAltText = lib.lookupFunction<TwSetImageAltTextNative, TwSetImageAltTextDart>(
+          'tw_set_image_alt_text');
+      engine.getImageAltText = lib.lookupFunction<TwGetImageAltTextNative, TwGetImageAltTextDart>(
+          'tw_get_image_alt_text');
       engine.compressImage = lib.lookupFunction<TwCompressImageNative, TwCompressImageDart>(
           'tw_compress_image');
       engine.replaceImageBytes = lib.lookupFunction<TwReplaceImageBytesNative,
           TwReplaceImageBytesDart>('tw_replace_image_bytes');
       engine.exportPdf =
           lib.lookupFunction<TwExportPdfNative, TwExportPdfDart>('tw_export_pdf');
+      try {
+        engine.exportPdfForPrint =
+            lib.lookupFunction<TwExportPdfForPrintNative, TwExportPdfForPrintDart>(
+          'tw_export_pdf_for_print',
+        );
+      } catch (_) {
+        engine.exportPdfForPrint = null;
+      }
+      try {
+        engine.exportPdfForPrintSelection = lib.lookupFunction<
+            TwExportPdfForPrintSelectionNative, TwExportPdfForPrintSelectionDart>(
+          'tw_export_pdf_for_print_selection',
+        );
+      } catch (_) {
+        engine.exportPdfForPrintSelection = null;
+      }
       engine.undo = lib.lookupFunction<TwUndoNative, TwUndoDart>('tw_undo');
       engine.redo = lib.lookupFunction<TwRedoNative, TwRedoDart>('tw_redo');
       engine.saveDocumentAs = lib.lookupFunction<TwSaveDocumentAsNative, TwSaveDocumentAsDart>(
@@ -897,6 +1187,13 @@ class NativeEngine {
           lib.lookupFunction<TwSetTrackChangesNative, TwSetTrackChangesDart>('tw_set_track_changes');
       engine.setReadOnlyNative =
           lib.lookupFunction<TwSetReadOnlyNative, TwSetReadOnlyDart>('tw_set_read_only');
+      try {
+        engine.setEncryptionPasswordNative = lib.lookupFunction<
+            TwSetEncryptionPasswordNative,
+            TwSetEncryptionPasswordDart>('tw_set_encryption_password');
+      } catch (_) {
+        engine.setEncryptionPasswordNative = null;
+      }
       engine.acceptAllRevisionsNative = lib.lookupFunction<TwAcceptAllRevisionsNative,
           TwAcceptAllRevisionsDart>('tw_accept_all_revisions');
       engine.rejectAllRevisionsNative = lib.lookupFunction<TwRejectAllRevisionsNative,
@@ -1340,6 +1637,155 @@ extension NativeEngineOps on NativeEngine {
     }
   }
 
+  String? fetchBookmarks() {
+    final outPtr = calloc<Pointer<Uint8>>();
+    final outLen = calloc<IntPtr>();
+    try {
+      final result = getBookmarks(outPtr, outLen);
+      if (result != 0) return null;
+      final len = outLen.value;
+      final ptr = outPtr.value;
+      if (ptr == nullptr || len == 0) return '[]';
+      final json = ptr.cast<Utf8>().toDartString(length: len);
+      freeBuffer(ptr, len);
+      return json;
+    } finally {
+      calloc.free(outPtr);
+      calloc.free(outLen);
+    }
+  }
+
+  String? fetchSemanticTree() {
+    final outPtr = calloc<Pointer<Uint8>>();
+    final outLen = calloc<IntPtr>();
+    try {
+      final result = getSemanticTree(outPtr, outLen);
+      if (result != 0) return null;
+      final len = outLen.value;
+      final ptr = outPtr.value;
+      if (ptr == nullptr || len == 0) return '[]';
+      final json = ptr.cast<Utf8>().toDartString(length: len);
+      freeBuffer(ptr, len);
+      return json;
+    } finally {
+      calloc.free(outPtr);
+      calloc.free(outLen);
+    }
+  }
+
+  String? fetchAccessibilityIssues() {
+    final outPtr = calloc<Pointer<Uint8>>();
+    final outLen = calloc<IntPtr>();
+    try {
+      final result = getAccessibilityIssues(outPtr, outLen);
+      if (result != 0) return null;
+      final len = outLen.value;
+      final ptr = outPtr.value;
+      if (ptr == nullptr || len == 0) return '[]';
+      final json = ptr.cast<Utf8>().toDartString(length: len);
+      freeBuffer(ptr, len);
+      return json;
+    } finally {
+      calloc.free(outPtr);
+      calloc.free(outLen);
+    }
+  }
+
+  String? fetchDocumentInspect() {
+    final native = getDocumentInspect;
+    if (native == null) return '[]';
+    final outPtr = calloc<Pointer<Uint8>>();
+    final outLen = calloc<IntPtr>();
+    try {
+      final result = native(outPtr, outLen);
+      if (result != 0) return null;
+      final len = outLen.value;
+      final ptr = outPtr.value;
+      if (ptr == nullptr || len == 0) return '[]';
+      final json = ptr.cast<Utf8>().toDartString(length: len);
+      freeBuffer(ptr, len);
+      return json;
+    } finally {
+      calloc.free(outPtr);
+      calloc.free(outLen);
+    }
+  }
+
+  bool removeInspectFindings({
+    bool comments = false,
+    bool metadata = false,
+    bool hiddenText = false,
+  }) {
+    final native = removeInspectFindingsNative;
+    if (native == null) return false;
+    return native(comments ? 1 : 0, metadata ? 1 : 0, hiddenText ? 1 : 0) == 0;
+  }
+
+  String? fetchDigitalSignatures() {
+    final native = getDigitalSignatures;
+    if (native == null) return '[]';
+    final outPtr = calloc<Pointer<Uint8>>();
+    final outLen = calloc<IntPtr>();
+    try {
+      final result = native(outPtr, outLen);
+      if (result != 0) return null;
+      final len = outLen.value;
+      final ptr = outPtr.value;
+      if (ptr == nullptr || len == 0) return '[]';
+      final json = ptr.cast<Utf8>().toDartString(length: len);
+      freeBuffer(ptr, len);
+      return json;
+    } finally {
+      calloc.free(outPtr);
+      calloc.free(outLen);
+    }
+  }
+
+  String? verifyDigitalSignatures() {
+    final native = verifyDigitalSignaturesNative;
+    if (native == null) return '[]';
+    final outPtr = calloc<Pointer<Uint8>>();
+    final outLen = calloc<IntPtr>();
+    try {
+      final result = native(outPtr, outLen);
+      if (result != 0) return null;
+      final len = outLen.value;
+      final ptr = outPtr.value;
+      if (ptr == nullptr || len == 0) return '[]';
+      final json = ptr.cast<Utf8>().toDartString(length: len);
+      freeBuffer(ptr, len);
+      return json;
+    } finally {
+      calloc.free(outPtr);
+      calloc.free(outLen);
+    }
+  }
+
+  bool signDocument({
+    required String name,
+    String email = '',
+    String? organization,
+  }) {
+    final native = signDocumentNative;
+    if (native == null) return false;
+    final namePtr = name.toNativeUtf8();
+    final emailPtr = email.toNativeUtf8();
+    final orgPtr = organization?.toNativeUtf8() ?? nullptr;
+    try {
+      return native(namePtr, emailPtr, orgPtr) == 0;
+    } finally {
+      calloc.free(namePtr);
+      calloc.free(emailPtr);
+      if (orgPtr != nullptr) calloc.free(orgPtr);
+    }
+  }
+
+  bool clearDigitalSignatures() {
+    final native = clearDigitalSignaturesNative;
+    if (native == null) return false;
+    return native() == 0;
+  }
+
   String? fetchSectionFormat({String? caretRunId}) {
     final caretPtr = caretRunId?.toNativeUtf8() ?? nullptr;
     final outPtr = calloc<Pointer<Uint8>>();
@@ -1420,6 +1866,27 @@ extension NativeEngineOps on NativeEngine {
   }
 
   @override
+  String? fetchImageAltText(String imageId) {
+    final idPtr = imageId.toNativeUtf8();
+    final outPtr = calloc<Pointer<Uint8>>();
+    final outLen = calloc<IntPtr>();
+    try {
+      final result = getImageAltText(idPtr, outPtr, outLen);
+      if (result != 0) return null;
+      final len = outLen.value;
+      final ptr = outPtr.value;
+      if (ptr == nullptr) return '';
+      final text = len == 0 ? '' : ptr.cast<Utf8>().toDartString(length: len);
+      freeBuffer(ptr, len);
+      return text;
+    } finally {
+      calloc.free(idPtr);
+      calloc.free(outPtr);
+      calloc.free(outLen);
+    }
+  }
+
+  @override
   String? latestOfficeMathRunId() {
     final outPtr = calloc<Pointer<Uint8>>();
     final outLen = calloc<IntPtr>();
@@ -1479,17 +1946,28 @@ extension NativeEngineOps on NativeEngine {
   /// no request id for Dart to correlate against the `DocumentOpened` event.
   /// Making this awaitable needs the export split into an enqueue that returns
   /// the request id plus a result getter (Rust-side change).
-  int openDocumentBytes(Uint8List bytes, {String? path}) {
+  int openDocumentBytes(Uint8List bytes, {String? path, String? password}) {
     final ptr = calloc<Uint8>(bytes.length);
     final pathPtr = path?.toNativeUtf8();
+    final passwordPtr = password?.toNativeUtf8();
     try {
       ptr.asTypedList(bytes.length).setAll(0, bytes);
+      final withPassword = openDocumentWithPassword;
+      if (withPassword != null) {
+        return withPassword(
+          ptr,
+          bytes.length,
+          pathPtr ?? nullptr.cast<Utf8>(),
+          passwordPtr ?? nullptr.cast<Utf8>(),
+        );
+      }
       return openDocumentWithPath(
         ptr,
         bytes.length,
         pathPtr ?? nullptr.cast<Utf8>(),
       );
     } finally {
+      if (passwordPtr != null) calloc.free(passwordPtr);
       if (pathPtr != null) calloc.free(pathPtr);
       calloc.free(ptr);
     }
@@ -1683,6 +2161,21 @@ extension NativeEngineOps on NativeEngine {
           start: start,
           end: end,
         )));
+  }
+
+  /// Composes DeleteRange + InsertText until FFI exposes a transactional replace.
+  Future<bool> replaceRangeAsync(
+    String runId,
+    int start,
+    int end,
+    String text,
+  ) async {
+    if (start < end) {
+      final ok = await deleteRangeAsync(runId, start, end);
+      if (!ok) return false;
+    }
+    if (text.isEmpty) return true;
+    return tryInsertTextAsync(runId, start, text);
   }
 
   Future<bool> deleteDocRangeAsync(
@@ -2007,6 +2500,92 @@ extension NativeEngineOps on NativeEngine {
     } finally {
       calloc.free(runPtr);
       calloc.free(namePtr);
+    }
+  }
+
+  Future<bool> insertHyperlinkAsync({
+    required String runId,
+    required int offset,
+    required String url,
+    required String text,
+    String? tooltip,
+  }) async {
+    final runPtr = runId.toNativeUtf8();
+    final urlPtr = url.toNativeUtf8();
+    final textPtr = text.toNativeUtf8();
+    final tooltipPtr = (tooltip ?? '').toNativeUtf8();
+    try {
+      return enqueueEdit(
+        () => insertHyperlink(runPtr, offset, urlPtr, textPtr, tooltipPtr),
+      );
+    } finally {
+      calloc.free(runPtr);
+      calloc.free(urlPtr);
+      calloc.free(textPtr);
+      calloc.free(tooltipPtr);
+    }
+  }
+
+  Future<bool> insertFormFieldAsync({
+    required String runId,
+    required int offset,
+    required String kind,
+    String? name,
+    String? initialValue,
+  }) async {
+    final runPtr = runId.toNativeUtf8();
+    final kindPtr = kind.toNativeUtf8();
+    final namePtr = (name ?? '').toNativeUtf8();
+    final valuePtr = (initialValue ?? '').toNativeUtf8();
+    try {
+      return enqueueEdit(
+        () => insertFormField(runPtr, offset, kindPtr, namePtr, valuePtr),
+      );
+    } finally {
+      calloc.free(runPtr);
+      calloc.free(kindPtr);
+      calloc.free(namePtr);
+      calloc.free(valuePtr);
+    }
+  }
+
+  Future<bool> setFormFieldValueAsync({
+    required String runId,
+    required String value,
+  }) async {
+    final runPtr = runId.toNativeUtf8();
+    final valuePtr = value.toNativeUtf8();
+    try {
+      return enqueueEdit(() => setFormFieldValue(runPtr, valuePtr));
+    } finally {
+      calloc.free(runPtr);
+      calloc.free(valuePtr);
+    }
+  }
+
+  Future<bool> insertMergeFieldAsync({
+    required String runId,
+    required int offset,
+    required String name,
+  }) async {
+    final runPtr = runId.toNativeUtf8();
+    final namePtr = name.toNativeUtf8();
+    try {
+      return enqueueEdit(() => insertMergeField(runPtr, offset, namePtr));
+    } finally {
+      calloc.free(runPtr);
+      calloc.free(namePtr);
+    }
+  }
+
+  Future<bool> applyMailMergeRowAsync({
+    required Map<String, String> values,
+  }) async {
+    final jsonPtr = jsonEncode(values).toNativeUtf8();
+    try {
+      return enqueueEdit(() => applyMailMergeRow(jsonPtr));
+    } finally {
+      calloc.free(jsonPtr);
     }
   }
 
@@ -2444,6 +3023,17 @@ extension NativeEngineOps on NativeEngine {
     }
   }
 
+  Future<bool> setImageAltTextAsync(String imageId, String? altText) async {
+    final idPtr = imageId.toNativeUtf8();
+    final altPtr = (altText ?? '').toNativeUtf8();
+    try {
+      return enqueueEdit(() => setImageAltText(idPtr, altPtr));
+    } finally {
+      calloc.free(idPtr);
+      calloc.free(altPtr);
+    }
+  }
+
   Future<bool> compressImageAsync(String imageId, int quality) async {
     final ptr = imageId.toNativeUtf8();
     try {
@@ -2548,6 +3138,92 @@ extension NativeEngineOps on NativeEngine {
     try {
       final result = exportPdf(outPtr, outLen);
       if (result != 0) return null;
+      final len = outLen.value;
+      final ptr = outPtr.value;
+      if (ptr == nullptr || len == 0) return Uint8List(0);
+      final bytes = ptr.asTypedList(len).sublist(0);
+      freeBuffer(ptr, len);
+      return bytes;
+    } finally {
+      calloc.free(outPtr);
+      calloc.free(outLen);
+    }
+  }
+
+  @override
+  Uint8List? exportPdfBytesForPrint([
+    PrintLayoutSettings? layout,
+    DocRange? selection,
+  ]) {
+    final settings = layout ?? PrintLayoutSettings.defaults;
+    final outPtr = calloc<Pointer<Uint8>>();
+    final outLen = calloc<IntPtr>();
+    try {
+      final int result;
+      if (selection != null && !selection.isCollapsed && selection.isValid) {
+        final selFn = exportPdfForPrintSelection;
+        if (selFn == null) {
+          // Fall back to full-document print when selection export is unavailable.
+          final forPrint = exportPdfForPrint;
+          if (forPrint == null) return exportPdfBytes();
+          result = forPrint(
+            settings.scaleModeCode,
+            settings.scalePercent,
+            settings.marginLeft,
+            settings.marginRight,
+            settings.marginTop,
+            settings.marginBottom,
+            settings.duplexCode,
+            settings.effectivePagesPerSheet,
+            settings.booklet ? 1 : 0,
+            outPtr,
+            outLen,
+          );
+        } else {
+          final (start, end) = selection.normalized();
+          final startPtr = start.runId.toNativeUtf8();
+          final endPtr = end.runId.toNativeUtf8();
+          try {
+            result = selFn(
+              startPtr,
+              start.offset,
+              endPtr,
+              end.offset,
+              settings.scaleModeCode,
+              settings.scalePercent,
+              settings.marginLeft,
+              settings.marginRight,
+              settings.marginTop,
+              settings.marginBottom,
+              settings.duplexCode,
+              settings.effectivePagesPerSheet,
+              settings.booklet ? 1 : 0,
+              outPtr,
+              outLen,
+            );
+          } finally {
+            calloc.free(startPtr);
+            calloc.free(endPtr);
+          }
+        }
+      } else {
+        final forPrint = exportPdfForPrint;
+        if (forPrint == null) return exportPdfBytes();
+        result = forPrint(
+          settings.scaleModeCode,
+          settings.scalePercent,
+          settings.marginLeft,
+          settings.marginRight,
+          settings.marginTop,
+          settings.marginBottom,
+          settings.duplexCode,
+          settings.effectivePagesPerSheet,
+          settings.booklet ? 1 : 0,
+          outPtr,
+          outLen,
+        );
+      }
+      if (result != 0) return exportPdfBytes();
       final len = outLen.value;
       final ptr = outPtr.value;
       if (ptr == nullptr || len == 0) return Uint8List(0);
@@ -2720,6 +3396,19 @@ extension NativeEngineOps on NativeEngine {
   bool setTrackChangesEnabled(bool enabled) => setTrackChanges(enabled ? 1 : 0) == 0;
 
   bool setReadOnlyEnabled(bool enabled) => setReadOnlyNative(enabled ? 1 : 0) == 0;
+
+  bool setEncryptionPassword(String? password) {
+    final native = setEncryptionPasswordNative;
+    if (native == null) return false;
+    final ptr = (password == null || password.isEmpty)
+        ? nullptr.cast<Utf8>()
+        : password.toNativeUtf8();
+    try {
+      return native(ptr) == 0;
+    } finally {
+      if (password != null && password.isNotEmpty) calloc.free(ptr);
+    }
+  }
 
   bool acceptAllRevisions() => acceptAllRevisionsNative() == 0;
 

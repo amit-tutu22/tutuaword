@@ -7,6 +7,8 @@ import 'package:tutuaword/bridge/engine_types.dart';
 import 'package:tutuaword/bridge/find_format_filter.dart';
 import 'package:tutuaword/bridge/find_match.dart';
 import 'package:tutuaword/bridge/native_engine.dart';
+import 'package:tutuaword/bridge/print_layout_settings.dart';
+import 'package:tutuaword/editor/doc_range.dart';
 
 /// Adapts [NativeEngine] to [DocumentEngine].
 class FfiDocumentEngine implements DocumentEngine {
@@ -56,7 +58,55 @@ class FfiDocumentEngine implements DocumentEngine {
   String? latestOfficeMathRunId() => _inner.latestOfficeMathRunId();
 
   @override
+  String? fetchImageAltText(String imageId) => _inner.fetchImageAltText(imageId);
+
+  @override
   String? fetchDocumentOutline() => _inner.fetchDocumentOutline();
+
+  @override
+  String? fetchBookmarks() => _inner.fetchBookmarks();
+
+  @override
+  String? fetchSemanticTree() => _inner.fetchSemanticTree();
+
+  @override
+  String? fetchAccessibilityIssues() => _inner.fetchAccessibilityIssues();
+
+  @override
+  String? fetchDocumentInspect() => _inner.fetchDocumentInspect();
+
+  @override
+  bool removeInspectFindings({
+    bool comments = false,
+    bool metadata = false,
+    bool hiddenText = false,
+  }) =>
+      _inner.removeInspectFindings(
+        comments: comments,
+        metadata: metadata,
+        hiddenText: hiddenText,
+      );
+
+  @override
+  String? fetchDigitalSignatures() => _inner.fetchDigitalSignatures();
+
+  @override
+  String? verifyDigitalSignatures() => _inner.verifyDigitalSignatures();
+
+  @override
+  bool signDocument({
+    required String name,
+    String email = '',
+    String? organization,
+  }) =>
+      _inner.signDocument(
+        name: name,
+        email: email,
+        organization: organization,
+      );
+
+  @override
+  bool clearDigitalSignatures() => _inner.clearDigitalSignatures();
 
   @override
   DocumentProperties fetchDocumentProperties() =>
@@ -78,8 +128,8 @@ class FfiDocumentEngine implements DocumentEngine {
   bool newDocument() => _inner.newDocument();
 
   @override
-  int openDocumentBytes(Uint8List bytes, {String? path}) =>
-      _inner.openDocumentBytes(bytes, path: path);
+  int openDocumentBytes(Uint8List bytes, {String? path, String? password}) =>
+      _inner.openDocumentBytes(bytes, path: path, password: password);
 
   @override
   Uint8List? saveDocumentBytes() => _inner.saveDocumentBytes();
@@ -90,6 +140,13 @@ class FfiDocumentEngine implements DocumentEngine {
 
   @override
   Uint8List? exportPdfBytes() => _inner.exportPdfBytes();
+
+  @override
+  Uint8List? exportPdfBytesForPrint([
+    PrintLayoutSettings? layout,
+    DocRange? selection,
+  ]) =>
+      _inner.exportPdfBytesForPrint(layout, selection);
 
   @override
   HitTestResult? hitTestPage(int page, double x, double y) =>
@@ -140,6 +197,15 @@ class FfiDocumentEngine implements DocumentEngine {
   @override
   Future<bool> deleteRangeAsync(String runId, int start, int end) =>
       _inner.deleteRangeAsync(runId, start, end);
+
+  @override
+  Future<bool> replaceRangeAsync(
+    String runId,
+    int start,
+    int end,
+    String text,
+  ) =>
+      _inner.replaceRangeAsync(runId, start, end, text);
 
   @override
   Future<bool> deleteDocRangeAsync(
@@ -333,6 +399,59 @@ class FfiDocumentEngine implements DocumentEngine {
     required String name,
   }) =>
       _inner.insertBookmarkAsync(runId: runId, offset: offset, name: name);
+
+  @override
+  Future<bool> insertHyperlinkAsync({
+    required String runId,
+    required int offset,
+    required String url,
+    required String text,
+    String? tooltip,
+  }) =>
+      _inner.insertHyperlinkAsync(
+        runId: runId,
+        offset: offset,
+        url: url,
+        text: text,
+        tooltip: tooltip,
+      );
+
+  @override
+  Future<bool> insertFormFieldAsync({
+    required String runId,
+    required int offset,
+    required String kind,
+    String? name,
+    String? initialValue,
+  }) =>
+      _inner.insertFormFieldAsync(
+        runId: runId,
+        offset: offset,
+        kind: kind,
+        name: name,
+        initialValue: initialValue,
+      );
+
+  @override
+  Future<bool> setFormFieldValueAsync({
+    required String runId,
+    required String value,
+  }) =>
+      _inner.setFormFieldValueAsync(runId: runId, value: value);
+
+  @override
+  Future<bool> insertMergeFieldAsync({
+    required String runId,
+    required int offset,
+    required String name,
+  }) =>
+      _inner.insertMergeFieldAsync(runId: runId, offset: offset, name: name);
+
+  @override
+  Future<bool> applyMailMergeRowAsync({
+    required Map<String, String> values,
+  }) =>
+      _inner.applyMailMergeRowAsync(values: values);
 
   @override
   Future<bool> insertCrossReferenceAsync({
@@ -578,6 +697,10 @@ class FfiDocumentEngine implements DocumentEngine {
       _inner.insertImageCaptionAsync(imageId);
 
   @override
+  Future<bool> setImageAltTextAsync(String imageId, String? altText) =>
+      _inner.setImageAltTextAsync(imageId, altText);
+
+  @override
   Future<bool> compressImageAsync(String imageId, int quality) =>
       _inner.compressImageAsync(imageId, quality);
 
@@ -631,6 +754,10 @@ class FfiDocumentEngine implements DocumentEngine {
 
   @override
   bool setReadOnlyEnabled(bool enabled) => _inner.setReadOnlyEnabled(enabled);
+
+  @override
+  bool setEncryptionPassword(String? password) =>
+      _inner.setEncryptionPassword(password);
 
   @override
   bool setTrackChangesEnabled(bool enabled) =>

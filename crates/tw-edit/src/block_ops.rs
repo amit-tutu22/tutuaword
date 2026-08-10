@@ -176,6 +176,7 @@ pub fn insert_image(
             anchor: None,
             transform: tw_model::ImageTransform::default(),
             caption_paragraph_id: None,
+            alt_text: None,
         }
     } else {
         ImageBlock::placeholder(width, height)
@@ -412,6 +413,35 @@ pub fn set_image_size(
     Ok(EditResult {
         affected_nodes: vec![image_id],
         old_image_size: Some(old_size),
+        ..Default::default()
+    })
+}
+
+/// Set or clear accessibility alternative text on an image block (F21.S3).
+pub fn set_image_alt_text(
+    doc: &mut Document,
+    image_id: NodeId,
+    alt_text: Option<String>,
+) -> Result<EditResult, EditError> {
+    let (si, bi) = doc
+        .find_block_location(image_id)
+        .ok_or(EditError::BlockNotFound(image_id))?;
+
+    let block = doc
+        .block_at_mut(si, bi)
+        .ok_or(EditError::BlockNotFound(image_id))?;
+    let Some(image) = block.image_mut() else {
+        return Err(EditError::BlockNotFound(image_id));
+    };
+
+    let old_alt = image.alt_text.clone();
+    image.alt_text = alt_text
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    Ok(EditResult {
+        affected_nodes: vec![image_id],
+        old_image_alt_text: Some(old_alt),
         ..Default::default()
     })
 }

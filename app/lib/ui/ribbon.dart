@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
+import 'package:tutuaword/ui/ribbon_focusable.dart';
 import 'package:tutuaword/ui/ribbon_tabs/design_tab.dart';
 import 'package:tutuaword/ui/ribbon_tabs/home_tab.dart';
 import 'package:tutuaword/ui/ribbon_tabs/insert_tab.dart';
@@ -51,21 +52,27 @@ class WordRibbonState extends State<WordRibbon> {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        _TabStrip(
-          activeTab: _activeTab,
-          onTabSelected: (tab) => setState(() => _activeTab = tab),
-        ),
-        Container(
-          height: WordTheme.ribbonHeight,
-          color: WordTheme.ribbonSurface,
-          child: ClipRect(
-            child: _buildTabContent(),
+    // Reading-order traversal: tab strip L→R, then enabled controls in the
+    // active tab body (F21.S2).
+    return FocusTraversalGroup(
+      key: const Key('word_ribbon'),
+      policy: ReadingOrderTraversalPolicy(),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _TabStrip(
+            activeTab: _activeTab,
+            onTabSelected: (tab) => setState(() => _activeTab = tab),
           ),
-        ),
-      ],
+          Container(
+            height: WordTheme.ribbonHeight,
+            color: WordTheme.ribbonSurface,
+            child: ClipRect(
+              child: _buildTabContent(),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -76,7 +83,7 @@ class WordRibbonState extends State<WordRibbon> {
       RibbonTab.design => DesignTab(controller: widget.controller),
       RibbonTab.layout => LayoutTab(controller: widget.controller),
       RibbonTab.references => ReferencesTab(controller: widget.controller),
-      RibbonTab.mailings => const MailingsTab(),
+      RibbonTab.mailings => MailingsTab(controller: widget.controller),
       RibbonTab.review => ReviewTab(controller: widget.controller),
       RibbonTab.view => ViewTab(controller: widget.controller),
     };
@@ -106,6 +113,7 @@ class _TabStrip extends StatelessWidget {
                 children: [
                   const SizedBox(width: WordTheme.trafficLightInset),
                   ...RibbonTab.values.map((tab) => _TabItem(
+                        key: Key('ribbon_tab_${tab.name}'),
                         label: tab.label,
                         selected: tab == activeTab,
                         onTap: () => onTabSelected(tab),
@@ -122,8 +130,9 @@ class _TabStrip extends StatelessWidget {
   }
 }
 
-class _TabItem extends StatefulWidget {
+class _TabItem extends StatelessWidget {
   const _TabItem({
+    super.key,
     required this.label,
     required this.selected,
     required this.onTap,
@@ -134,70 +143,61 @@ class _TabItem extends StatefulWidget {
   final VoidCallback onTap;
 
   @override
-  State<_TabItem> createState() => _TabItemState();
-}
-
-class _TabItemState extends State<_TabItem> {
-  bool _hovered = false;
-
-  @override
   Widget build(BuildContext context) {
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: Container(
+    return RibbonFocusable(
+      enabled: true,
+      onActivate: onTap,
+      builder: (context, {required hovered, required focused}) {
+        return Container(
           padding: const EdgeInsets.symmetric(horizontal: 14),
           decoration: BoxDecoration(
-            color: _hovered ? WordTheme.ribbonHover : Colors.transparent,
-            border: widget.selected
-                ? const Border(
-                    bottom: BorderSide(color: WordTheme.activeTabUnderline, width: 2),
-                  )
-                : null,
+            color: (hovered || focused)
+                ? WordTheme.ribbonHover
+                : Colors.transparent,
+            border: Border(
+              bottom: BorderSide(
+                color: selected
+                    ? WordTheme.activeTabUnderline
+                    : (focused ? WordTheme.activeTabUnderline.withValues(alpha: 0.5) : Colors.transparent),
+                width: selected || focused ? 2 : 0,
+              ),
+            ),
           ),
           alignment: Alignment.center,
           child: Text(
-            widget.label,
-            style: widget.selected ? WordTheme.tabLabelActive : WordTheme.tabLabel,
+            label,
+            style: selected ? WordTheme.tabLabelActive : WordTheme.tabLabel,
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }
 
-class _ShareButton extends StatefulWidget {
+class _ShareButton extends StatelessWidget {
   const _ShareButton({this.onPressed, this.tooltip});
 
   final VoidCallback? onPressed;
   final String? tooltip;
 
   @override
-  State<_ShareButton> createState() => _ShareButtonState();
-}
-
-class _ShareButtonState extends State<_ShareButton> {
-  bool _hovered = false;
-
-  @override
   Widget build(BuildContext context) {
-    final enabled = widget.onPressed != null;
-    final tooltip = widget.tooltip ?? (enabled ? null : kComingSoonTooltip);
+    final enabled = onPressed != null;
+    final tip = tooltip ?? (enabled ? null : kComingSoonTooltip);
 
     return wrapRibbonTooltip(
-      tooltip,
-      MouseRegion(
-        onEnter: (_) => setState(() => _hovered = true),
-        onExit: (_) => setState(() => _hovered = false),
-        child: GestureDetector(
-          onTap: widget.onPressed,
-          child: Container(
+      tip,
+      RibbonFocusable(
+        enabled: enabled,
+        onActivate: onPressed,
+        builder: (context, {required hovered, required focused}) {
+          return Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            decoration: BoxDecoration(
-              color: _hovered && enabled ? WordTheme.ribbonHover : Colors.transparent,
-              borderRadius: BorderRadius.circular(3),
+            decoration: ribbonFocusDecoration(
+              fill: (hovered || focused) && enabled
+                  ? WordTheme.ribbonHover
+                  : Colors.transparent,
+              focused: focused,
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
@@ -216,8 +216,8 @@ class _ShareButtonState extends State<_ShareButton> {
                 ),
               ],
             ),
-          ),
-        ),
+          );
+        },
       ),
     );
   }

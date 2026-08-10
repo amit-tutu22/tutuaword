@@ -8,6 +8,7 @@ import 'package:tutuaword/editor/editor_menu.dart';
 import 'package:tutuaword/ui/document_properties_dialog.dart';
 import 'package:tutuaword/ui/find_pane.dart';
 import 'package:tutuaword/ui/info_bar.dart';
+import 'package:tutuaword/ui/password_dialog.dart';
 import 'package:tutuaword/ui/ribbon.dart';
 import 'package:tutuaword/ui/status_bar.dart';
 import 'package:tutuaword/ui/title_bar.dart';
@@ -47,10 +48,24 @@ class _EditorScreenState extends State<EditorScreen> {
     }
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _controller.setPasswordPrompt(({fileName, errorMessage}) {
+      if (!mounted) return Future<String?>.value(null);
+      return PasswordDialog.show(
+        context,
+        fileName: fileName,
+        errorMessage: errorMessage,
+      );
+    });
+  }
+
   void _onUpdate() => setState(() {});
 
   @override
   void dispose() {
+    _controller.setPasswordPrompt(null);
     _controller.removeListener(_onUpdate);
     if (_ownsController) {
       _controller.dispose();
@@ -63,23 +78,41 @@ class _EditorScreenState extends State<EditorScreen> {
     return EditorMenuBar(
       controller: _controller,
       onNew: () => _controller.newDocument(),
+      onNewFromTemplate: () =>
+          unawaited(_controller.openNewFromTemplateDialog(context)),
       onOpen: () => _controller.openDocument(),
       onOpenRecent: (path) => _controller.openRecentDocument(path),
       onSave: () => _controller.saveDocument(),
       onSaveAs: (ext) => _controller.saveDocumentAs(extension: ext),
+      onSaveAsTemplate: () =>
+          unawaited(_controller.openSaveAsTemplateDialog(context)),
+      onPrint: () => unawaited(_controller.printDocument(context: context)),
       onShowProperties: () => DocumentPropertiesDialog.show(
         context,
         _controller.documentProperties,
       ),
       onShowPasteSpecial: () => _controller.showPasteSpecialDialog(context),
+      onShowGoTo: () => unawaited(_controller.openGoToDialog(context)),
+      onProtectWithPassword: () =>
+          unawaited(_controller.protectWithPassword(context)),
+      onRemovePassword: () =>
+          unawaited(_controller.removePasswordProtection()),
+      onInspectDocument: () =>
+          unawaited(_controller.inspectDocument(context)),
+      onDigitalSignatures: () =>
+          unawaited(_controller.manageDigitalSignatures(context)),
       child: Material(
         color: WordTheme.tabStripSurface,
         child: Shortcuts(
           shortcuts: const <ShortcutActivator, Intent>{
             SingleActivator(LogicalKeyboardKey.keyF, meta: true): _OpenFindIntent(),
             SingleActivator(LogicalKeyboardKey.keyF, control: true): _OpenFindIntent(),
+            SingleActivator(LogicalKeyboardKey.keyG, meta: true): _OpenGoToIntent(),
+            SingleActivator(LogicalKeyboardKey.keyG, control: true): _OpenGoToIntent(),
             SingleActivator(LogicalKeyboardKey.keyA, meta: true): _SelectAllDocumentIntent(),
             SingleActivator(LogicalKeyboardKey.keyA, control: true): _SelectAllDocumentIntent(),
+            SingleActivator(LogicalKeyboardKey.keyP, meta: true): _PrintDocumentIntent(),
+            SingleActivator(LogicalKeyboardKey.keyP, control: true): _PrintDocumentIntent(),
           },
           child: Actions(
             actions: <Type, Action<Intent>>{
@@ -89,9 +122,21 @@ class _EditorScreenState extends State<EditorScreen> {
                   return null;
                 },
               ),
+              _OpenGoToIntent: CallbackAction<_OpenGoToIntent>(
+                onInvoke: (_) {
+                  unawaited(_controller.openGoToDialog(context));
+                  return null;
+                },
+              ),
               _SelectAllDocumentIntent: CallbackAction<_SelectAllDocumentIntent>(
                 onInvoke: (_) {
                   unawaited(_controller.selectAll());
+                  return null;
+                },
+              ),
+              _PrintDocumentIntent: CallbackAction<_PrintDocumentIntent>(
+                onInvoke: (_) {
+                  unawaited(_controller.printDocument(context: context));
                   return null;
                 },
               ),
@@ -124,6 +169,14 @@ class _OpenFindIntent extends Intent {
   const _OpenFindIntent();
 }
 
+class _OpenGoToIntent extends Intent {
+  const _OpenGoToIntent();
+}
+
 class _SelectAllDocumentIntent extends Intent {
   const _SelectAllDocumentIntent();
+}
+
+class _PrintDocumentIntent extends Intent {
+  const _PrintDocumentIntent();
 }

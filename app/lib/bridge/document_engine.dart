@@ -5,6 +5,7 @@ import 'package:tutuaword/bridge/document_properties.dart';
 import 'package:tutuaword/bridge/find_format_filter.dart';
 import 'package:tutuaword/bridge/find_match.dart';
 import 'package:tutuaword/bridge/engine_types.dart';
+import 'package:tutuaword/bridge/print_layout_settings.dart';
 import 'package:tutuaword/editor/doc_range.dart';
 
 /// Minimal engine surface used by editor controllers (FFI or mock).
@@ -26,6 +27,32 @@ abstract class DocumentEngine {
   String? fetchCaretFormat(String runId);
   String? fetchSectionFormat({String? caretRunId});
   String? fetchDocumentOutline();
+  /// JSON array of bookmarks: `{ name, run_id, paragraph_id, page }` (F19.S4).
+  String? fetchBookmarks();
+  /// JSON semantic accessibility tree (F21.S1).
+  String? fetchSemanticTree();
+  /// JSON accessibility checker issues (F21.S4).
+  String? fetchAccessibilityIssues();
+  /// JSON Document Inspector findings (F22.S3).
+  String? fetchDocumentInspect();
+  /// Remove selected Document Inspector categories (F22.S3).
+  bool removeInspectFindings({
+    bool comments = false,
+    bool metadata = false,
+    bool hiddenText = false,
+  });
+  /// JSON digital signatures list (F22.S4).
+  String? fetchDigitalSignatures();
+  /// JSON verification results for all signatures (F22.S4).
+  String? verifyDigitalSignatures();
+  /// Sign the document with the given identity (F22.S4).
+  bool signDocument({
+    required String name,
+    String email = '',
+    String? organization,
+  });
+  /// Remove all digital signatures (F22.S4).
+  bool clearDigitalSignatures();
   DocumentProperties fetchDocumentProperties();
   bool isDocumentReadOnly();
 
@@ -41,16 +68,28 @@ abstract class DocumentEngine {
   /// UUID of the last equation run in document order, if any.
   String? latestOfficeMathRunId();
 
+  /// Alternative text for [imageId], or null when the image is missing (F21.S3).
+  /// Empty string means the image has no alt text set.
+  String? fetchImageAltText(String imageId);
+
   /// True while [page] awaits background reflow, so [hitTestPage] on it returns
   /// null for "not laid out yet" rather than "nothing here".
   bool isPageStale(int page);
   String? getLastError();
 
   bool newDocument();
-  int openDocumentBytes(Uint8List bytes, {String? path});
+  int openDocumentBytes(Uint8List bytes, {String? path, String? password});
   Uint8List? saveDocumentBytes();
   Uint8List? saveDocumentAsBytes(String formatExtension);
   Uint8List? exportPdfBytes();
+
+  /// Print-ready PDF (VisualMatch with structural fallback) for File→Print (F25.S1–S3).
+  ///
+  /// When [selection] is set, only that body range is printed (F25.S3).
+  Uint8List? exportPdfBytesForPrint([
+    PrintLayoutSettings? layout,
+    DocRange? selection,
+  ]);
 
   HitTestResult? hitTestPage(int page, double x, double y);
   HitTestResult? fetchDocumentTailHit(int page);
@@ -70,6 +109,13 @@ abstract class DocumentEngine {
   Future<bool> tryPasteHtmlAsync(String runId, int offset, String html);
   Future<bool> tryPasteDocxAsync(String runId, int offset, Uint8List bytes);
   Future<bool> deleteRangeAsync(String runId, int start, int end);
+  /// Replace `[start, end)` in a run with [text] (F28.S2; prefer single undo).
+  Future<bool> replaceRangeAsync(
+    String runId,
+    int start,
+    int end,
+    String text,
+  );
   Future<bool> deleteDocRangeAsync(
     String startRunId,
     int startOffset,
@@ -153,6 +199,38 @@ abstract class DocumentEngine {
     required String runId,
     required int offset,
     required String name,
+  });
+  Future<bool> insertHyperlinkAsync({
+    required String runId,
+    required int offset,
+    required String url,
+    required String text,
+    String? tooltip,
+  });
+  /// Insert a plain-text or checkbox form field (F26.S1).
+  ///
+  /// [kind] is `"text"` / `"formtext"` or `"checkbox"` / `"formcheckbox"`.
+  Future<bool> insertFormFieldAsync({
+    required String runId,
+    required int offset,
+    required String kind,
+    String? name,
+    String? initialValue,
+  });
+  /// Update / toggle an existing form field value (F26.S1).
+  Future<bool> setFormFieldValueAsync({
+    required String runId,
+    required String value,
+  });
+  /// Insert a mail-merge field (`MERGEFIELD Name`) (F26.S2).
+  Future<bool> insertMergeFieldAsync({
+    required String runId,
+    required int offset,
+    required String name,
+  });
+  /// Replace merge fields using one CSV row (column → value) (F26.S2).
+  Future<bool> applyMailMergeRowAsync({
+    required Map<String, String> values,
   });
   Future<bool> insertCrossReferenceAsync({
     required String runId,
@@ -243,6 +321,8 @@ abstract class DocumentEngine {
     double opacity = 1,
   });
   Future<bool> insertImageCaptionAsync(String imageId);
+  /// Set or clear image alt text (null/empty clears) — F21.S3.
+  Future<bool> setImageAltTextAsync(String imageId, String? altText);
   Future<bool> compressImageAsync(String imageId, int quality);
   Future<bool> undoEditAsync();
   Future<bool> redoEditAsync();
@@ -265,9 +345,13 @@ abstract class DocumentEngine {
   });
   String? compareDocumentText(String otherText);
   bool setReadOnlyEnabled(bool enabled);
+  /// Set or clear the password used to encrypt DOCX on save (F22.S2).
+  /// Pass null or empty to clear.
+  bool setEncryptionPassword(String? password);
   bool setTrackChangesEnabled(bool enabled);
   bool acceptAllRevisions();
   bool rejectAllRevisions();
+
   bool acceptRevisionAtCaret({String? caretRunId});
   bool rejectRevisionAtCaret({String? caretRunId});
   String? adjacentRevisionRunId(String? caretRunId, {required bool forward});

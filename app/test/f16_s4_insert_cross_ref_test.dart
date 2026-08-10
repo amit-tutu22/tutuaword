@@ -15,6 +15,8 @@ void main() {
       await pumpRibbonTab(tester, ReferencesTab(controller: controller));
       await tester.tap(find.byKey(const Key('insert_bookmark')));
       await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('bookmark_insert_button')));
+      await tester.pumpAndSettle();
       await settleEngineStyle(tester);
       await tester.scrollUntilVisible(
         find.byKey(const Key('insert_cross_reference')),
@@ -36,6 +38,8 @@ void main() {
 
       await pumpRibbonTab(tester, ReferencesTab(controller: controller));
       await tester.tap(find.byKey(const Key('insert_bookmark')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('bookmark_insert_button')));
       await tester.pumpAndSettle();
       await settleEngineStyle(tester);
       await tester.scrollUntilVisible(
@@ -79,6 +83,8 @@ void main() {
       );
 
       await tester.tap(find.text('Bookmark'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('bookmark_insert_button')));
       await tester.pumpAndSettle();
       await settleEngineStyle(tester);
       await tester.tap(find.text('CrossRef'));

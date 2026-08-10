@@ -9,11 +9,13 @@ pub mod command_builders;
 mod normalize;
 pub mod paste;
 pub mod range;
+mod replace;
 mod session;
 
 pub use command::*;
 pub use command_json::*;
 pub use command_builders::*;
+pub use replace::{replace_run_range, replace_run_range_commands};
 pub use session::*;
 pub use undo::{TransactionGuard, UndoEntry};
 pub use range::paragraph_id_for_run;
@@ -329,7 +331,7 @@ use serde::{Deserialize, Serialize};
 
 use access::{with_paragraph_mut, with_run_mut};
 use regex::Regex;
-use tw_model::{BibliographySource, Block, CharFormat, CommentThread, Document, DocumentTheme, FieldData, FieldType, Footnote, FootnoteRef, NodeId, NumberingRef, ParaFormat, Revision, RevisionType, Run, RunContent, StyleId, StyleSheetError, bookmark_run, build_bibliography_blocks, build_index_blocks, build_toc_blocks, citation_ref_run, cross_ref_field_data, document_outline, field_instruction, resolve_theme};
+use tw_model::{BibliographySource, Block, CharFormat, CommentThread, Document, DocumentTheme, FieldData, FieldType, Footnote, FootnoteRef, FormFieldKind, NodeId, NumberingRef, ParaFormat, Paragraph, Revision, RevisionType, Run, RunContent, Section, StyleId, StyleSheetError, apply_mail_merge_row, bookmark_run, build_bibliography_blocks, build_index_blocks, build_toc_blocks, citation_ref_run, cross_ref_field_data, document_outline, field_instruction, form_checkbox_display, form_checkbox_field_data, form_text_field_data, hyperlink_run, merge_field_data, resolve_theme};
 
 enum FindPattern {
     Literal,
@@ -478,6 +480,9 @@ pub fn apply(
             image_id,
             caption_paragraph_id,
         } => block_ops::remove_image_caption(doc, *image_id, *caption_paragraph_id)?,
+        Command::SetImageAltText { image_id, alt_text } => {
+            block_ops::set_image_alt_text(doc, *image_id, alt_text.clone())?
+        }
         Command::CompressImage { image_id, quality } => {
             block_ops::compress_image(doc, *image_id, *quality)?
         }
@@ -603,6 +608,32 @@ pub fn apply(
             offset,
             field_type,
         } => insert_field(doc, *run_id, *offset, field_type.clone())?,
+        Command::InsertFormField {
+            run_id,
+            offset,
+            kind,
+            name,
+            initial_value,
+        } => insert_form_field(
+            doc,
+            *run_id,
+            *offset,
+            *kind,
+            name.clone(),
+            initial_value.clone(),
+        )?,
+        Command::SetFormFieldValue { run_id, value } => {
+            set_form_field_value(doc, *run_id, value)?
+        }
+        Command::InsertMergeField {
+            run_id,
+            offset,
+            name,
+        } => insert_merge_field(doc, *run_id, *offset, name)?,
+        Command::ApplyMailMergeRow { values } => {
+            apply_mail_merge_row(doc, values);
+            EditResult::default()
+        }
         Command::InsertFootnote { run_id, offset } => {
             insert_footnote(doc, *run_id, *offset)?
         }
@@ -629,6 +660,13 @@ pub fn apply(
             offset,
             name,
         } => insert_bookmark(doc, *run_id, *offset, name.clone())?,
+        Command::InsertHyperlink {
+            run_id,
+            offset,
+            url,
+            text,
+            tooltip,
+        } => insert_hyperlink(doc, *run_id, *offset, url.clone(), text.clone(), tooltip.clone())?,
         Command::InsertCrossReference {
             run_id,
             offset,
@@ -796,6 +834,19 @@ pub fn apply(
         Command::RestoreRevisionRuns { snapshots } => {
             restore_revision_runs(doc, snapshots)?
         }
+        Command::RemoveInspectFindings {
+            comments,
+            metadata,
+            hidden_text,
+        } => remove_inspect_findings(doc, *comments, *metadata, *hidden_text)?,
+        Command::AddDigitalSignature { signature } => {
+            doc.signatures.push(signature.clone());
+            EditResult::default()
+        }
+        Command::ClearDigitalSignatures => {
+            doc.signatures.clear();
+            EditResult::default()
+        }
     };
 
     normalize::normalize_runs(doc);
@@ -882,6 +933,112 @@ fn resolve_all_revisions(
     })
 }
 
+/// Document Inspector remove (F22.S3): comments, metadata, and/or hidden runs.
+fn remove_inspect_findings(
+    doc: &mut Document,
+    comments: bool,
+    metadata: bool,
+    hidden_text: bool,
+) -> Result<EditResult, EditError> {
+    let mut affected = Vec::new();
+
+    if comments {
+        doc.comments.clear();
+        for section in &mut doc.sections {
+            remove_comment_refs_in_blocks(&mut section.blocks, &mut affected);
+            for hf in section.headers.values_mut() {
+                remove_comment_refs_in_blocks(&mut hf.blocks, &mut affected);
+            }
+            for hf in section.footers.values_mut() {
+                remove_comment_refs_in_blocks(&mut hf.blocks, &mut affected);
+            }
+        }
+    }
+
+    if metadata {
+        if doc.properties.title.is_some() {
+            doc.properties.title = None;
+        }
+        if doc.properties.author.is_some() {
+            doc.properties.author = None;
+        }
+    }
+
+    if hidden_text {
+        for section in &mut doc.sections {
+            remove_hidden_runs_in_blocks(&mut section.blocks, &mut affected);
+            for hf in section.headers.values_mut() {
+                remove_hidden_runs_in_blocks(&mut hf.blocks, &mut affected);
+            }
+            for hf in section.footers.values_mut() {
+                remove_hidden_runs_in_blocks(&mut hf.blocks, &mut affected);
+            }
+        }
+    }
+
+    Ok(EditResult {
+        affected_nodes: affected,
+        ..Default::default()
+    })
+}
+
+fn remove_comment_refs_in_blocks(blocks: &mut [Block], affected: &mut Vec<NodeId>) {
+    for block in blocks {
+        match block {
+            Block::Paragraph(para) => {
+                let before = para.runs.len();
+                para.runs
+                    .retain(|run| !matches!(run.content, RunContent::CommentRef(_)));
+                if para.runs.len() != before {
+                    affected.push(para.id);
+                }
+                if para.runs.is_empty() {
+                    para.runs.push(Run::new_text(""));
+                }
+            }
+            Block::Table(table) => {
+                for row in &mut table.rows {
+                    for cell in &mut row.cells {
+                        remove_comment_refs_in_blocks(&mut cell.blocks, affected);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn remove_hidden_runs_in_blocks(blocks: &mut [Block], affected: &mut Vec<NodeId>) {
+    for block in blocks {
+        match block {
+            Block::Paragraph(para) => {
+                let removed: Vec<_> = para
+                    .runs
+                    .iter()
+                    .filter(|r| r.format.hidden == Some(true))
+                    .map(|r| r.id)
+                    .collect();
+                if removed.is_empty() {
+                    continue;
+                }
+                affected.extend(removed);
+                para.runs.retain(|run| run.format.hidden != Some(true));
+                if para.runs.is_empty() {
+                    para.runs.push(Run::new_text(""));
+                }
+            }
+            Block::Table(table) => {
+                for row in &mut table.rows {
+                    for cell in &mut row.cells {
+                        remove_hidden_runs_in_blocks(&mut cell.blocks, affected);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 fn apply_resolution(
     run: &mut Run,
     _run_id: NodeId,
@@ -923,6 +1080,93 @@ fn restore_revision_runs(
     })
 }
 
+fn insert_form_field(
+    doc: &mut Document,
+    run_id: NodeId,
+    offset: usize,
+    kind: FormFieldKind,
+    name: Option<String>,
+    initial_value: Option<String>,
+) -> Result<EditResult, EditError> {
+    let field = match kind {
+        FormFieldKind::PlainText => {
+            form_text_field_data(name, initial_value.unwrap_or_default())
+        }
+        FormFieldKind::Checkbox => {
+            let checked = initial_value
+                .as_deref()
+                .map(|v| {
+                    matches!(
+                        v.trim().to_ascii_lowercase().as_str(),
+                        "1" | "true" | "yes" | "checked" | "x"
+                    )
+                })
+                .unwrap_or(false);
+            form_checkbox_field_data(name, checked)
+        }
+    };
+    insert_field_with_data(doc, run_id, offset, field)
+}
+
+fn insert_merge_field(
+    doc: &mut Document,
+    run_id: NodeId,
+    offset: usize,
+    name: &str,
+) -> Result<EditResult, EditError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(EditError::InvalidRange);
+    }
+    insert_field_with_data(doc, run_id, offset, merge_field_data(name))
+}
+
+fn set_form_field_value(
+    doc: &mut Document,
+    run_id: NodeId,
+    value: &str,
+) -> Result<EditResult, EditError> {
+    let updated = with_run_mut(doc, run_id, |run| {
+        let RunContent::Field(field) = &mut run.content else {
+            return false;
+        };
+        match field.field_type {
+            FieldType::FormText => {
+                let text = value.to_string();
+                field.display_text = Some(text.clone());
+                let meta = field.form.get_or_insert_with(Default::default);
+                meta.default_text = Some(text);
+                meta.checked = None;
+                true
+            }
+            FieldType::FormCheckbox => {
+                let checked = match value.trim().to_ascii_lowercase().as_str() {
+                    "toggle" => !field
+                        .form
+                        .as_ref()
+                        .and_then(|f| f.checked)
+                        .unwrap_or(false),
+                    "1" | "true" | "yes" | "checked" | "x" => true,
+                    _ => false,
+                };
+                field.display_text = Some(form_checkbox_display(checked));
+                let meta = field.form.get_or_insert_with(Default::default);
+                meta.checked = Some(checked);
+                true
+            }
+            _ => false,
+        }
+    })
+    .ok_or(EditError::RunNotFound(run_id))?;
+    if !updated {
+        return Err(EditError::InvalidRange);
+    }
+    Ok(EditResult {
+        affected_nodes: vec![run_id],
+        ..Default::default()
+    })
+}
+
 fn insert_field(
     doc: &mut Document,
     run_id: NodeId,
@@ -942,6 +1186,8 @@ fn insert_field(
                             field_type: field_type.clone(),
                             instruction: Some(field_instruction(&field_type)),
                             display_text: None,
+                            form: None,
+            merge_name: None,
                         });
                     })
                     .ok_or(EditError::RunNotFound(run_id))?;
@@ -984,6 +1230,8 @@ fn insert_field(
             field_type,
             instruction: Some(instruction),
             display_text: None,
+            form: None,
+            merge_name: None,
         }),
         revision: None,
     };
@@ -1347,6 +1595,108 @@ fn insert_bibliography(
     Ok(EditResult {
         affected_nodes: affected,
         created_node_id: first_created,
+        ..Default::default()
+    })
+}
+
+fn insert_hyperlink(
+    doc: &mut Document,
+    run_id: NodeId,
+    offset: usize,
+    url: String,
+    text: String,
+    tooltip: Option<String>,
+) -> Result<EditResult, EditError> {
+    let url = url.trim().to_string();
+    let text = if text.is_empty() {
+        url.clone()
+    } else {
+        text
+    };
+    if url.is_empty() || text.is_empty() {
+        return Err(EditError::InvalidRange);
+    }
+
+    let loc = doc
+        .find_run_location(run_id)
+        .ok_or(EditError::RunNotFound(run_id))?;
+
+    // Edit in place when the caret is already on a hyperlink run.
+    if doc
+        .run_at(loc)
+        .is_some_and(|run| matches!(&run.content, RunContent::Hyperlink { .. }))
+    {
+        let updated = hyperlink_run(&url, &text, tooltip);
+        with_run_mut(doc, run_id, |run| {
+            run.content = updated.content;
+            run.format.underline = Some(tw_model::UnderlineStyle::Single);
+            if run.format.color.is_none() {
+                run.format.color = updated.format.color;
+            }
+        })
+        .ok_or(EditError::RunNotFound(run_id))?;
+        return Ok(EditResult {
+            affected_nodes: vec![run_id],
+            created_node_id: Some(run_id),
+            seed_run_id: Some(run_id),
+            ..Default::default()
+        });
+    }
+
+    if offset == 0 {
+        if let Some(para) = doc.paragraph_at_loc(loc) {
+            if let Some(run) = para.runs.get(loc.run_index) {
+                if matches!(&run.content, RunContent::Text(t) if t.is_empty()) {
+                    let link = hyperlink_run(url, text, tooltip);
+                    let id = link.id;
+                    with_run_mut(doc, run_id, |run| *run = link)
+                        .ok_or(EditError::RunNotFound(run_id))?;
+                    return Ok(EditResult {
+                        affected_nodes: vec![id],
+                        created_node_id: Some(id),
+                        seed_run_id: Some(id),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+    }
+
+    let format = doc
+        .run_at(loc)
+        .ok_or(EditError::RunNotFound(run_id))?
+        .format
+        .clone();
+    let mut insert_at = loc.run_index;
+
+    if doc
+        .run_at(loc)
+        .is_some_and(|run| matches!(run.content, RunContent::Text(_)))
+    {
+        let char_len = run_char_len_by_id(doc, run_id);
+        if offset > 0 && offset < char_len {
+            split_run_at(doc, loc, run_id, offset)?;
+            insert_at = loc.run_index + 1;
+        } else if offset >= char_len {
+            insert_at = loc.run_index + 1;
+        }
+    }
+
+    let mut link = hyperlink_run(url, text, tooltip);
+    // Preserve ambient font/size; still force link cues.
+    link.format.font_family = format.font_family;
+    link.format.font_size = format.font_size;
+    let link_id = link.id;
+
+    let para = doc
+        .paragraph_at_loc_mut(loc)
+        .ok_or(EditError::RunNotFound(run_id))?;
+    para.runs.insert(insert_at, link);
+
+    Ok(EditResult {
+        affected_nodes: vec![link_id],
+        created_node_id: Some(link_id),
+        seed_run_id: Some(link_id),
         ..Default::default()
     })
 }
@@ -2945,6 +3295,121 @@ fn run_in_doc_range(
 ) -> bool {
     doc.find_run_location(run_id)
         .is_some_and(|loc| loc >= start_loc && loc <= end_loc)
+}
+
+fn clone_run_slice(run: &Run, start: usize, end: usize) -> Option<Run> {
+    let len = run_char_len(run);
+    let start = start.min(len);
+    let end = end.min(len);
+    if start >= end {
+        return None;
+    }
+    let text = run_slice(run, start..end);
+    let content = match &run.content {
+        RunContent::Text(_) => RunContent::Text(text),
+        RunContent::Hyperlink { target, .. } => RunContent::Hyperlink {
+            target: target.clone(),
+            text,
+        },
+        other if start == 0 && end == len => other.clone(),
+        _ => RunContent::Text(text),
+    };
+    Some(Run {
+        id: NodeId::new(),
+        format: run.format.clone(),
+        content,
+        revision: None,
+    })
+}
+
+/// Clone the selected body range into a standalone document for print (F25.S3).
+///
+/// Preserves paragraph/run formatting and interior tables/images/shapes.
+/// Collapsed or empty ranges return [`EditError::InvalidRange`].
+pub fn document_from_range(doc: &Document, range: &DocRange) -> Result<Document, EditError> {
+    let range = crate::range::normalize_range(doc, range)?;
+    if crate::range::positions_equal(&range.start, &range.end) {
+        return Err(EditError::InvalidRange);
+    }
+
+    let start_loc = doc
+        .find_run_location(range.start.run_id)
+        .ok_or(EditError::RunNotFound(range.start.run_id))?;
+    let end_loc = doc
+        .find_run_location(range.end.run_id)
+        .ok_or(EditError::RunNotFound(range.end.run_id))?;
+
+    let mut out = Document::new();
+    out.styles = doc.styles.clone();
+    out.settings = doc.settings.clone();
+    // Print selection is body-only; drop headers/footers and comments.
+    let src_section = doc
+        .sections
+        .get(start_loc.section_index)
+        .or_else(|| doc.sections.first());
+    let mut section = Section::new();
+    if let Some(src) = src_section {
+        section.format = src.format.clone();
+    }
+    section.blocks.clear();
+
+    for (si, src_sec) in doc.sections.iter().enumerate() {
+        for (bi, block) in src_sec.blocks.iter().enumerate() {
+            let block_key = (si, tw_model::BlockZone::Body.sort_key(), bi);
+            let interior_object =
+                block_key > start_loc.block_key() && block_key < end_loc.block_key();
+            if interior_object {
+                match block {
+                    Block::Table(_) | Block::ShapeBlock(_) | Block::ImageBlock(_) => {
+                        section.blocks.push(block.clone());
+                        continue;
+                    }
+                    Block::Paragraph(_) => {}
+                    _ => {}
+                }
+            }
+            if block_key < start_loc.block_key() || block_key > end_loc.block_key() {
+                continue;
+            }
+            let Some(para) = block.paragraph() else {
+                continue;
+            };
+            let mut runs = Vec::new();
+            for run in &para.runs {
+                if !run_in_doc_range(run.id, start_loc, end_loc, doc) {
+                    continue;
+                }
+                let run_start = if run.id == range.start.run_id {
+                    range.start.char_offset
+                } else {
+                    0
+                };
+                let run_end = if run.id == range.end.run_id {
+                    range.end.char_offset
+                } else {
+                    run_char_len(run)
+                };
+                if let Some(cloned) = clone_run_slice(run, run_start, run_end) {
+                    runs.push(cloned);
+                }
+            }
+            if runs.is_empty() {
+                continue;
+            }
+            section.blocks.push(Block::Paragraph(Paragraph {
+                id: NodeId::new(),
+                format: para.format.clone(),
+                style_id: para.style_id,
+                runs,
+            }));
+        }
+    }
+
+    if section.blocks.is_empty() {
+        return Err(EditError::InvalidRange);
+    }
+    out.sections = vec![section];
+    Ok(out)
 }
 
 /// Read plain text for a document-order range without mutating the model.

@@ -1,12 +1,16 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:archive/archive.dart';
 import 'package:flutter/material.dart';
 import 'package:tutuaword/bridge/document_engine.dart';
+import 'package:tutuaword/bridge/document_io.dart';
 import 'package:tutuaword/bridge/document_properties.dart';
 import 'package:tutuaword/bridge/engine_types.dart';
 import 'package:tutuaword/bridge/find_format_filter.dart';
 import 'package:tutuaword/bridge/find_match.dart';
+import 'package:tutuaword/bridge/print_layout_settings.dart';
+import 'package:tutuaword/editor/doc_range.dart';
 
 /// In-memory engine for widget/unit tests (R2.4 — no TextField fallback).
 class MockDocumentEngine implements DocumentEngine {
@@ -78,11 +82,14 @@ class MockDocumentEngine implements DocumentEngine {
   String _imageWrap = 'inline';
   double _imageAnchorX = 0;
   double _imageAnchorY = 0;
+  String? _lastError;
+  String? _encryptionPassword;
   int _imageAnchorOriginX = 0;
   int _imageAnchorOriginY = 0;
   double _imageRotationDeg = 0;
   double _imageOpacity = 1;
   bool _imageCaptionInserted = false;
+  String _imageAltText = '';
   Uint8List? _replacedImageBytes;
   String? _mockChartId;
   Map<String, dynamic>? _chartData;
@@ -90,6 +97,10 @@ class MockDocumentEngine implements DocumentEngine {
   final Map<String, String> _officeMathXml = {};
   bool _evenAndOddHeaders = false;
   final Map<String, String> _fieldDisplay = {};
+  /// Form field run id → kind (`text` / `checkbox`) and current value (F26.S1).
+  final Map<String, String> _formFieldKind = {};
+  final Map<String, String> _formFieldValue = {};
+  String? lastFormFieldRunId;
   bool _headerReady = false;
   bool _footerReady = false;
   int _version = 1;
@@ -167,6 +178,9 @@ class MockDocumentEngine implements DocumentEngine {
   bool get hasTable => _tableRows != null && _tableCols != null;
   int? get tableRows => _tableRows;
   int? get tableCols => _tableCols;
+
+  int? _lastDiagramType;
+  int? get lastDiagramType => _lastDiagramType;
   double get tableBorderWidth => _tableBorderWidth;
   int? get tableCellShadingArgb => _tableCellShadingArgb;
   List<double>? get tableColumnWidths => _tableColumnWidths;
@@ -186,6 +200,7 @@ class MockDocumentEngine implements DocumentEngine {
   double? get lastImageOpacity => _mockImageId == null ? null : _imageOpacity;
   bool? get lastImageCaptionInserted =>
       _mockImageId == null ? null : _imageCaptionInserted;
+  String? get lastImageAltText => _mockImageId == null ? null : _imageAltText;
   Uint8List? get lastReplacedImageBytes => _replacedImageBytes;
   int get tableLeadColspan => _tableLeadColspan;
 
@@ -279,7 +294,18 @@ class MockDocumentEngine implements DocumentEngine {
   }
 
   @override
+  /// Injected multi-heading outline for F19.S2 widget tests.
+  List<Map<String, dynamic>>? _outlineOverride;
+
+  /// Override [fetchDocumentOutline] with an explicit headings tree fixture.
+  void setOutlineEntriesForTest(List<Map<String, dynamic>> entries) {
+    _outlineOverride = entries;
+  }
+
   String? fetchDocumentOutline() {
+    if (_outlineOverride != null) {
+      return jsonEncode(_outlineOverride);
+    }
     final level = _mockOutlineLevel();
     if (level == null) return '[]';
     final text = _text.split('\n').first.trim();
@@ -293,6 +319,116 @@ class MockDocumentEngine implements DocumentEngine {
         'page': 0,
       },
     ]);
+  }
+
+  List<Map<String, dynamic>>? _semanticTreeOverride;
+  List<Map<String, dynamic>>? _accessibilityIssuesOverride;
+  List<Map<String, dynamic>>? _documentInspectOverride;
+  int _inspectCommentCount = 0;
+  int _inspectMetadataCount = 0;
+  int _inspectHiddenCount = 0;
+  String? _mockTitle;
+  String? _mockAuthor;
+
+  /// Override [fetchSemanticTree] with an explicit fixture (F21.S1).
+  void setSemanticTreeForTest(List<Map<String, dynamic>> roots) {
+    _semanticTreeOverride = roots;
+  }
+
+  /// Override [fetchAccessibilityIssues] with an explicit fixture (F21.S4).
+  void setAccessibilityIssuesForTest(List<Map<String, dynamic>> issues) {
+    _accessibilityIssuesOverride = issues;
+  }
+
+  /// Seed Document Inspector counts for tests (F22.S3).
+  void setDocumentInspectCountsForTest({
+    int comments = 0,
+    int metadata = 0,
+    int hiddenText = 0,
+    String? title,
+    String? author,
+  }) {
+    _documentInspectOverride = null;
+    _inspectCommentCount = comments;
+    _inspectMetadataCount = metadata;
+    _inspectHiddenCount = hiddenText;
+    _mockTitle = title;
+    _mockAuthor = author;
+    if (metadata == 0 && (title != null || author != null)) {
+      _inspectMetadataCount =
+          (title != null && title.trim().isNotEmpty ? 1 : 0) +
+              (author != null && author.trim().isNotEmpty ? 1 : 0);
+    }
+  }
+
+  @override
+  String? fetchSemanticTree() {
+    if (_semanticTreeOverride != null) {
+      return jsonEncode(_semanticTreeOverride);
+    }
+    final level = _mockOutlineLevel();
+    final text = _text.split('\n').first.trim();
+    if (text.isEmpty) return '[]';
+    if (level != null) {
+      return jsonEncode([
+        {
+          'id': defaultRunId,
+          'role': 'heading',
+          'level': level,
+          'text': text,
+          'children': <Map<String, dynamic>>[],
+        },
+      ]);
+    }
+    return jsonEncode([
+      {
+        'id': defaultRunId,
+        'role': 'paragraph',
+        'text': text,
+        'children': <Map<String, dynamic>>[],
+      },
+    ]);
+  }
+
+  @override
+  String? fetchAccessibilityIssues() {
+    if (_accessibilityIssuesOverride != null) {
+      return jsonEncode(_accessibilityIssuesOverride);
+    }
+    final issues = <Map<String, dynamic>>[];
+    final level = _mockOutlineLevel();
+    final text = _text.split('\n').first.trim();
+    if (level != null && text.isEmpty) {
+      issues.add({
+        'rule': 'empty_heading',
+        'severity': 'error',
+        'message': 'Heading is empty',
+        'node_id': defaultRunId,
+        'run_id': defaultRunId,
+      });
+    }
+    if (_mockImageId != null && _imageAltText.trim().isEmpty) {
+      issues.add({
+        'rule': 'missing_alt',
+        'severity': 'error',
+        'message': 'Picture is missing alternative text',
+        'node_id': _mockImageId,
+      });
+    }
+    final color = _charFormat['color'];
+    if (color is Map &&
+        color['r'] == 200 &&
+        color['g'] == 200 &&
+        color['b'] == 200) {
+      issues.add({
+        'rule': 'low_contrast',
+        'severity': 'warning',
+        'message': 'Text contrast ratio 1.6:1 is below 4.5:1 (WCAG AA)',
+        'node_id': defaultRunId,
+        'run_id': defaultRunId,
+      });
+    }
+    return jsonEncode(issues);
   }
 
   int? _mockOutlineLevel() {
@@ -310,7 +446,114 @@ class MockDocumentEngine implements DocumentEngine {
   }
 
   @override
-  DocumentProperties fetchDocumentProperties() => DocumentProperties.empty;
+  String? fetchDocumentInspect() {
+    if (_documentInspectOverride != null) {
+      return jsonEncode(_documentInspectOverride);
+    }
+    final findings = <Map<String, dynamic>>[];
+    if (_inspectCommentCount > 0) {
+      findings.add({
+        'category': 'comments',
+        'count': _inspectCommentCount,
+        'message':
+            '$_inspectCommentCount comment${_inspectCommentCount == 1 ? '' : 's'}',
+      });
+    }
+    if (_inspectMetadataCount > 0) {
+      findings.add({
+        'category': 'metadata',
+        'count': _inspectMetadataCount,
+        'message':
+            '$_inspectMetadataCount document propert${_inspectMetadataCount == 1 ? 'y' : 'ies'}',
+      });
+    }
+    if (_inspectHiddenCount > 0) {
+      findings.add({
+        'category': 'hidden_text',
+        'count': _inspectHiddenCount,
+        'message':
+            '$_inspectHiddenCount hidden text run${_inspectHiddenCount == 1 ? '' : 's'}',
+      });
+    }
+    return jsonEncode(findings);
+  }
+
+  @override
+  bool removeInspectFindings({
+    bool comments = false,
+    bool metadata = false,
+    bool hiddenText = false,
+  }) {
+    if (comments) _inspectCommentCount = 0;
+    if (metadata) {
+      _inspectMetadataCount = 0;
+      _mockTitle = null;
+      _mockAuthor = null;
+    }
+    if (hiddenText) _inspectHiddenCount = 0;
+    return true;
+  }
+
+  final List<Map<String, dynamic>> _digitalSignatures = [];
+  bool _signaturesTampered = false;
+
+  /// Mark mock signatures as tampered for verification tests (F22.S4).
+  void setSignaturesTamperedForTest(bool value) => _signaturesTampered = value;
+
+  @override
+  String? fetchDigitalSignatures() => jsonEncode(_digitalSignatures);
+
+  @override
+  String? verifyDigitalSignatures() {
+    return jsonEncode(_digitalSignatures.map((sig) {
+      final status = _signaturesTampered ? 'tampered' : 'valid';
+      return {
+        'signature_id': sig['id'],
+        'status': status,
+        'signer_name': (sig['signer'] as Map?)?['name'] ?? '',
+        'message': _signaturesTampered
+            ? 'Document has changed since it was signed'
+            : 'Signature is valid',
+      };
+    }).toList());
+  }
+
+  @override
+  bool signDocument({
+    required String name,
+    String email = '',
+    String? organization,
+  }) {
+    if (name.trim().isEmpty) return false;
+    _digitalSignatures.add({
+      'id': 'mock-sig-${_digitalSignatures.length + 1}',
+      'signer': {
+        'name': name.trim(),
+        'email': email,
+        if (organization != null && organization.isNotEmpty)
+          'organization': organization,
+      },
+      'timestamp': DateTime.now().toUtc().toIso8601String(),
+      'public_key': 'mock',
+      'signature_value': 'mock',
+      'signed_content_hash': 'mockhash',
+    });
+    _signaturesTampered = false;
+    return true;
+  }
+
+  @override
+  bool clearDigitalSignatures() {
+    _digitalSignatures.clear();
+    _signaturesTampered = false;
+    return true;
+  }
+
+  @override
+  DocumentProperties fetchDocumentProperties() => DocumentProperties(
+        title: _mockTitle,
+        author: _mockAuthor,
+      );
 
   @override
   bool isDocumentReadOnly() => _readOnly;
@@ -327,7 +570,10 @@ class MockDocumentEngine implements DocumentEngine {
   }
 
   @override
-  String? getLastError() => null;
+  String? getLastError() => _lastError;
+
+  bool _looksPasswordProtected(Uint8List bytes, {String? path}) =>
+      DocumentReader.isPasswordProtectedDocx(bytes, path: path);
 
   @override
   bool newDocument() {
@@ -363,7 +609,41 @@ class MockDocumentEngine implements DocumentEngine {
   }
 
   @override
-  int openDocumentBytes(Uint8List bytes, {String? path}) {
+  int openDocumentBytes(Uint8List bytes, {String? path, String? password}) {
+    if (_looksPasswordProtected(bytes, path: path)) {
+      if (password == null || password.isEmpty) {
+        _lastError = 'document is password-protected';
+        return -2;
+      }
+      if (password != 'secret') {
+        _lastError = 'incorrect password';
+        return -2;
+      }
+      // Mock decrypt: treat as empty body after a correct password.
+      _text = '';
+      _encryptionPassword = password;
+      _version++;
+      _lastError = null;
+      return 0;
+    }
+    _encryptionPassword = null;
+    // Real OOXML / ZIP templates (F24.S1): extract body text for widget tests.
+    if (bytes.length >= 2 && bytes[0] == 0x50 && bytes[1] == 0x4B) {
+      try {
+        _text = DocumentReader.extractText(bytes, path: path ?? 'template.docx');
+        _headerText = '';
+        _footerText = '';
+        _headerReady = false;
+        _footerReady = false;
+        _tableRows = null;
+        _tableCols = null;
+        _version++;
+        _lastError = null;
+        return 0;
+      } catch (_) {
+        // Fall through to JSON / printable-byte parsers.
+      }
+    }
     try {
       final decoded = jsonDecode(String.fromCharCodes(bytes));
       if (decoded is Map<String, dynamic>) {
@@ -451,39 +731,79 @@ class MockDocumentEngine implements DocumentEngine {
   }
 
   @override
-  Uint8List? saveDocumentBytes() => Uint8List.fromList(jsonEncode({
-        'body': _text,
-        if (_headerReady) 'header': _headerText,
-        if (_footerReady) 'footer': _footerText,
-        if (_tableRows != null && _tableCols != null)
-          'table': {
-            'rows': _tableRows,
-            'cols': _tableCols,
-            'lead_colspan': _tableLeadColspan,
-            if (_tableBorderWidth > 0) 'border_width': _tableBorderWidth,
-            if (_tableCellShadingArgb != null) 'cell_shading': _tableCellShadingArgb,
-            if (_tableColumnWidths != null) 'column_widths': _tableColumnWidths,
-            if (_tableAutofitApplied) 'autofit': true,
-            if (_tableSortedAscending) 'sorted_asc': true,
-            if (_nestedTableCount > 0) 'nested_count': _nestedTableCount,
-            if (_tableSumFieldInserted) 'sum_field': true,
-          },
-        if (_insertedImageBytes != null)
-          'image': {
-            'id': _mockImageId ?? 'mock-image-1',
-            'bytes': _insertedImageBytes!.toList(),
-            if (_insertedImageMime != null) 'mime': _insertedImageMime,
-            'width': _imageDisplayWidth,
-            'height': _imageDisplayHeight,
-            'wrap': _imageWrap,
-          },
-      }).codeUnits);
+  Uint8List? saveDocumentBytes() {
+    final plain = Uint8List.fromList(jsonEncode({
+      'body': _text,
+      if (_headerReady) 'header': _headerText,
+      if (_footerReady) 'footer': _footerText,
+      if (_tableRows != null && _tableCols != null)
+        'table': {
+          'rows': _tableRows,
+          'cols': _tableCols,
+          'lead_colspan': _tableLeadColspan,
+          if (_tableBorderWidth > 0) 'border_width': _tableBorderWidth,
+          if (_tableCellShadingArgb != null) 'cell_shading': _tableCellShadingArgb,
+          if (_tableColumnWidths != null) 'column_widths': _tableColumnWidths,
+          if (_tableAutofitApplied) 'autofit': true,
+          if (_tableSortedAscending) 'sorted_asc': true,
+          if (_nestedTableCount > 0) 'nested_count': _nestedTableCount,
+          if (_tableSumFieldInserted) 'sum_field': true,
+        },
+      if (_insertedImageBytes != null)
+        'image': {
+          'id': _mockImageId ?? 'mock-image-1',
+          'bytes': _insertedImageBytes!.toList(),
+          if (_insertedImageMime != null) 'mime': _insertedImageMime,
+          'width': _imageDisplayWidth,
+          'height': _imageDisplayHeight,
+          'wrap': _imageWrap,
+        },
+    }).codeUnits);
+    final password = _encryptionPassword;
+    if (password == null || password.isEmpty) return plain;
+    return _mockEncryptedPackage(plain);
+  }
 
   @override
   Uint8List? saveDocumentAsBytes(String formatExtension) => saveDocumentBytes();
 
+  /// Synthetic encrypted OOXML markers for tests (not real Agile crypto).
+  Uint8List _mockEncryptedPackage(Uint8List plaintext) {
+    final archive = Archive()
+      ..addFile(ArchiveFile(
+        '[Content_Types].xml',
+        32,
+        '<?xml version="1.0"?><Types/>'.codeUnits,
+      ))
+      ..addFile(ArchiveFile('EncryptionInfo', 9, 'encrypted'.codeUnits))
+      ..addFile(ArchiveFile('EncryptedPackage', plaintext.length, plaintext));
+    return Uint8List.fromList(ZipEncoder().encode(archive)!);
+  }
+
+  /// Minimal PDF used by File→Print tests (F25.S1/S2).
+  static final Uint8List mockPrintPdf = Uint8List.fromList(
+    '%PDF-1.4\n1 0 obj<< /Type /Catalog >>endobj\ntrailer<<>>\n%%EOF\n'
+        .codeUnits,
+  );
+
+  /// Last layout passed to [exportPdfBytesForPrint] (F25.S2 tests).
+  PrintLayoutSettings? lastPrintLayout;
+
+  /// Last selection passed to [exportPdfBytesForPrint] (F25.S3 tests).
+  DocRange? lastPrintSelection;
+
   @override
   Uint8List? exportPdfBytes() => Uint8List(0);
+
+  @override
+  Uint8List? exportPdfBytesForPrint([
+    PrintLayoutSettings? layout,
+    DocRange? selection,
+  ]) {
+    lastPrintLayout = layout ?? PrintLayoutSettings.defaults;
+    lastPrintSelection = selection;
+    return Uint8List.fromList(mockPrintPdf);
+  }
 
   CaretGeometry _geomForOffset(String runId, int offset) {
     final buffer = _bufferForRun(runId);
@@ -636,6 +956,27 @@ class MockDocumentEngine implements DocumentEngine {
   @override
   Future<bool> deleteRangeAsync(String runId, int start, int end) async {
     _deleteRange(runId, start, end);
+    return true;
+  }
+
+  @override
+  Future<bool> replaceRangeAsync(
+    String runId,
+    int start,
+    int end,
+    String text,
+  ) async {
+    final buffer = _bufferForRun(runId);
+    final lo = start.clamp(0, buffer.length);
+    final hi = end.clamp(0, buffer.length);
+    if (lo == hi && text.isEmpty) return true;
+    _pushUndo();
+    final next = buffer.substring(0, lo) + text + buffer.substring(hi);
+    _setBufferForRun(runId, next);
+    if (_trackChanges && text.isNotEmpty) {
+      _trackedRevisions.add(_TrackedRevision(runId: runId, offset: lo, text: text));
+    }
+    _version++;
     return true;
   }
 
@@ -1021,6 +1362,21 @@ class MockDocumentEngine implements DocumentEngine {
   }
 
   final Map<String, String> _bookmarks = {};
+  final List<Map<String, dynamic>> _bookmarkEntries = [];
+  List<Map<String, dynamic>>? _bookmarksOverride;
+
+  /// Override [fetchBookmarks] with an explicit fixture (F19.S4).
+  void setBookmarksForTest(List<Map<String, dynamic>> entries) {
+    _bookmarksOverride = entries;
+  }
+
+  @override
+  String? fetchBookmarks() {
+    if (_bookmarksOverride != null) {
+      return jsonEncode(_bookmarksOverride);
+    }
+    return jsonEncode(_bookmarkEntries);
+  }
 
   @override
   Future<bool> insertBookmarkAsync({
@@ -1034,6 +1390,125 @@ class MockDocumentEngine implements DocumentEngine {
     }
     final anchor = _text.substring(offset.clamp(0, _text.length)).trim();
     _bookmarks[name] = anchor.isEmpty ? name : anchor;
+    _bookmarkEntries.removeWhere(
+      (e) => (e['name'] as String?)?.toLowerCase() == name.toLowerCase(),
+    );
+    _bookmarkEntries.add({
+      'name': name,
+      'run_id': runId,
+      'paragraph_id': runId,
+      'page': 0,
+    });
+    _version++;
+    return true;
+  }
+
+  @override
+  Future<bool> insertHyperlinkAsync({
+    required String runId,
+    required int offset,
+    required String url,
+    required String text,
+    String? tooltip,
+  }) async {
+    _pushUndo();
+    final display = text.isEmpty ? url : text;
+    _insert(runId, offset, display);
+    _version++;
+    return true;
+  }
+
+  @override
+  Future<bool> insertFormFieldAsync({
+    required String runId,
+    required int offset,
+    required String kind,
+    String? name,
+    String? initialValue,
+  }) async {
+    _pushUndo();
+    final normalized = kind.toLowerCase();
+    final isCheckbox =
+        normalized == 'checkbox' || normalized == 'formcheckbox' || normalized == 'check';
+    final value = initialValue ?? '';
+    final display = isCheckbox
+        ? (const {'1', 'true', 'yes', 'checked', 'x'}.contains(value.trim().toLowerCase())
+            ? '☑'
+            : '☐')
+        : (value.isEmpty ? '____' : value);
+    final fieldId =
+        '00000000-0000-0000-0000-${(_formFieldKind.length + 40).toString().padLeft(12, '0')}';
+    _formFieldKind[fieldId] = isCheckbox ? 'checkbox' : 'text';
+    _formFieldValue[fieldId] = isCheckbox
+        ? (display == '☑' ? 'true' : 'false')
+        : display;
+    lastFormFieldRunId = fieldId;
+    _fieldDisplay[fieldId] = display;
+    _insert(runId, offset, display);
+    if (name != null && name.isNotEmpty) {
+      // Name is metadata-only in the mock; keep it out of plain text.
+    }
+    _version++;
+    return true;
+  }
+
+  @override
+  Future<bool> setFormFieldValueAsync({
+    required String runId,
+    required String value,
+  }) async {
+    final kind = _formFieldKind[runId];
+    if (kind == null) return false;
+    _pushUndo();
+    if (kind == 'checkbox') {
+      final lower = value.trim().toLowerCase();
+      final current = _formFieldValue[runId] == 'true';
+      final checked = lower == 'toggle'
+          ? !current
+          : const {'1', 'true', 'yes', 'checked', 'x'}.contains(lower);
+      _formFieldValue[runId] = checked ? 'true' : 'false';
+      _fieldDisplay[runId] = checked ? '☑' : '☐';
+      final old = current ? '☑' : '☐';
+      final next = checked ? '☑' : '☐';
+      _text = _text.replaceFirst(old, next);
+    } else {
+      final old = _formFieldValue[runId] ?? '';
+      _formFieldValue[runId] = value;
+      _fieldDisplay[runId] = value;
+      if (old.isNotEmpty && _text.contains(old)) {
+        _text = _text.replaceFirst(old, value);
+      } else {
+        _text = '$_text$value';
+      }
+    }
+    _version++;
+    return true;
+  }
+
+  @override
+  Future<bool> insertMergeFieldAsync({
+    required String runId,
+    required int offset,
+    required String name,
+  }) async {
+    if (name.trim().isEmpty) return false;
+    _pushUndo();
+    final display = '«${name.trim()}»';
+    _insert(runId, offset, display);
+    _version++;
+    return true;
+  }
+
+  @override
+  Future<bool> applyMailMergeRowAsync({
+    required Map<String, String> values,
+  }) async {
+    _pushUndo();
+    var next = _text;
+    for (final entry in values.entries) {
+      next = next.replaceAll('«${entry.key}»', entry.value);
+    }
+    _text = next;
     _version++;
     return true;
   }
@@ -1148,6 +1623,12 @@ class MockDocumentEngine implements DocumentEngine {
 
   @override
   String? fetchOfficeMathXml(String runId) => _officeMathXml[runId];
+
+  @override
+  String? fetchImageAltText(String imageId) {
+    if (_mockImageId == null || imageId != _mockImageId) return null;
+    return _imageAltText;
+  }
 
   @override
   String? latestOfficeMathRunId() => _mockOfficeMathRunId;
@@ -1419,7 +1900,12 @@ class MockDocumentEngine implements DocumentEngine {
   Future<bool> insertWordArtAsync(String text) async => true;
 
   @override
-  Future<bool> insertDiagramAsync({int diagramType = 0}) async => true;
+  Future<bool> insertDiagramAsync({int diagramType = 0}) async {
+    _pushUndo();
+    _lastDiagramType = diagramType;
+    _version++;
+    return true;
+  }
 
   @override
   Future<bool> insertChartAsync({int chartType = 0}) async {
@@ -1596,6 +2082,15 @@ class MockDocumentEngine implements DocumentEngine {
     if (_mockImageId == null) return false;
     _pushUndo();
     _imageCaptionInserted = true;
+    _version++;
+    return true;
+  }
+
+  @override
+  Future<bool> setImageAltTextAsync(String imageId, String? altText) async {
+    if (_mockImageId == null) return false;
+    _pushUndo();
+    _imageAltText = (altText ?? '').trim();
     _version++;
     return true;
   }
@@ -1848,6 +2343,13 @@ class MockDocumentEngine implements DocumentEngine {
   @override
   bool setReadOnlyEnabled(bool enabled) {
     _readOnly = enabled;
+    return true;
+  }
+
+  @override
+  bool setEncryptionPassword(String? password) {
+    _encryptionPassword =
+        (password == null || password.isEmpty) ? null : password;
     return true;
   }
 

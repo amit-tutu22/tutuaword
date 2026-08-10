@@ -32,6 +32,8 @@ fn u_f16_s4_cross_ref_layout_text() {
                 field_type: FieldType::CrossRef,
                 instruction: Some(" REF SectionRef \\h ".into()),
                 display_text: Some("Introduction".into()),
+                form: None,
+            merge_name: None,
             }),
             revision: None,
         },

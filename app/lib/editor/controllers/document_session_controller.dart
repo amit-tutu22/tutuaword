@@ -8,6 +8,8 @@ import 'package:path/path.dart' as p;
 import 'package:tutuaword/bridge/document_io.dart';
 import 'package:tutuaword/bridge/document_properties.dart';
 import 'package:tutuaword/bridge/document_session_store.dart';
+import 'package:tutuaword/bridge/print_layout_settings.dart';
+import 'package:tutuaword/editor/doc_range.dart';
 import 'package:tutuaword/bridge/file_bytes.dart';
 import 'package:tutuaword/bridge/macos_file_access.dart';
 import 'package:tutuaword/bridge/twdoc_io.dart';
@@ -16,8 +18,16 @@ import 'package:tutuaword/editor/controllers/engine_host.dart';
 import 'package:tutuaword/editor/controllers/formatting_controller.dart';
 import 'package:tutuaword/editor/controllers/selection_controller.dart';
 import 'package:tutuaword/editor/controllers/view_controller.dart';
+import 'package:tutuaword/editor/document_templates.dart';
 
 typedef SessionNotifyCallback = void Function();
+
+/// Ask the user for a password when opening an encrypted document (F22.S1).
+/// Return null to cancel the open.
+typedef PasswordPromptCallback = Future<String?> Function({
+  String? fileName,
+  String? errorMessage,
+});
 
 /// Open/save/autosave/recents/properties and document lifecycle.
 class DocumentSessionController extends ChangeNotifier {
@@ -30,10 +40,12 @@ class DocumentSessionController extends ChangeNotifier {
     DocumentSessionStore? sessionStore,
     bool enableAutosave = true,
     Duration? autosaveInterval,
+    PasswordPromptCallback? passwordPrompt,
   })  : _host = host,
         _selection = selection,
         _formatting = formatting,
         _view = view,
+        _passwordPrompt = passwordPrompt,
         _sessionStore = sessionStore ?? DocumentSessionStore.defaultStore() {
     _recentEntries = _sessionStore.loadRecentEntries();
     if (enableAutosave) {
@@ -52,6 +64,7 @@ class DocumentSessionController extends ChangeNotifier {
   final ViewController _view;
   final SessionNotifyCallback onSessionChanged;
   final DocumentSessionStore _sessionStore;
+  PasswordPromptCallback? _passwordPrompt;
 
   AutosaveScheduler? _autosaveScheduler;
   List<RecentDocumentEntry> _recentEntries = const [];
@@ -59,6 +72,7 @@ class DocumentSessionController extends ChangeNotifier {
   String _statusText = '';
   String? _currentPath;
   bool _documentReadOnly = false;
+  bool _encryptionPasswordSet = false;
   DocumentProperties _documentProperties = DocumentProperties.empty;
   String? _infoMessage;
   bool _trackChanges = false;
@@ -72,6 +86,8 @@ class DocumentSessionController extends ChangeNotifier {
   String get statusText => _statusText;
   String? get currentPath => _currentPath;
   bool get documentReadOnly => _documentReadOnly;
+  /// True when subsequent DOCX saves will be password-encrypted (F22.S2).
+  bool get encryptionPasswordSet => _encryptionPasswordSet;
   DocumentProperties get documentProperties => _documentProperties;
   String? get infoMessage => _infoMessage;
   bool get trackChanges => _trackChanges;
@@ -103,6 +119,11 @@ class DocumentSessionController extends ChangeNotifier {
     _statusText = text;
     notifyListeners();
     onSessionChanged();
+  }
+
+  /// Install/replace the password prompt used for encrypted opens (F22.S1).
+  void setPasswordPrompt(PasswordPromptCallback? prompt) {
+    _passwordPrompt = prompt;
   }
 
   void clearInfoMessage() {
@@ -229,7 +250,9 @@ class DocumentSessionController extends ChangeNotifier {
     _infoMessage = null;
     _documentProperties = DocumentProperties.empty;
     _documentReadOnly = false;
+    _encryptionPasswordSet = false;
     if (_host.engine != null) {
+      _host.engine!.setEncryptionPassword(null);
       _host.engine!.setCurrentPageIndex(0);
       _host.refreshFromEngine(full: true);
       _refreshDocumentMetadata();
@@ -291,41 +314,181 @@ class DocumentSessionController extends ChangeNotifier {
     }
   }
 
-  Future<void> _openDocumentBytes(Uint8List bytes, {required String path}) async {
-    if (DocumentReader.isPasswordProtectedDocx(bytes, path: path)) {
-      _statusText = 'Password-protected documents are not supported';
+  /// Open a built-in starter template as an untitled document (F24.S1).
+  Future<void> newFromTemplate({
+    required Uint8List bytes,
+    required String templateTitle,
+    required String assetPath,
+  }) async {
+    _statusText = 'Opening template…';
+    notifyListeners();
+    try {
+      await _openDocumentBytes(
+        bytes,
+        path: assetPath,
+        asUntitled: true,
+        statusOverride: 'New from template: $templateTitle',
+      );
+    } catch (e) {
+      _statusText = 'Template open failed: $e';
       notifyListeners();
-      return;
     }
+  }
+
+  /// User templates saved under the session store (F24.S3).
+  List<UserTemplateEntry> get userTemplates => _sessionStore.loadUserTemplates();
+
+  Future<Uint8List?> readUserTemplateBytes(String id) =>
+      _sessionStore.readUserTemplateBytes(id);
+
+  /// Snapshot the current document as a reusable `.docx` template (F24.S3).
+  ///
+  /// Does not change [currentPath] or clear dirty state — Save As is unchanged.
+  Future<UserTemplateEntry?> saveAsTemplate({
+    required String title,
+    required String themeName,
+  }) async {
+    try {
+      final bytes = await _serializeDocument(formatExtension: 'docx');
+      if (bytes.isEmpty) {
+        _statusText = 'Save as template failed: empty document';
+        notifyListeners();
+        return null;
+      }
+      final entry = await _sessionStore.saveUserTemplate(
+        title: title,
+        themeName: themeName,
+        bytes: bytes,
+      );
+      _statusText = 'Saved template: ${entry.title}';
+      notifyListeners();
+      onSessionChanged();
+      return entry;
+    } catch (e) {
+      _statusText = 'Save as template failed: $e';
+      notifyListeners();
+      return null;
+    }
+  }
+
+  Future<void> _openDocumentBytes(
+    Uint8List bytes, {
+    required String path,
+    bool asUntitled = false,
+    String? statusOverride,
+  }) async {
+    var requiresPassword =
+        DocumentReader.isPasswordProtectedDocx(bytes, path: path);
+    String? password;
+    String? promptError;
+
     if (_host.engine != null) {
-      final code = _host.engine!.openDocumentBytes(bytes, path: path);
-      if (code == 0) {
-        _view.reset();
-        _host.engine!.setCurrentPageIndex(0);
-        _host.refreshFromEngine(full: true);
-        _refreshDocumentMetadata();
-        _selection.reset();
-        _selection.ensureGlyphCaret();
-        _formatting.syncFromCaret();
-        _statusText = _documentReadOnly ? 'Opened (read-only)' : 'Opened';
-      } else {
-        final err = _host.engine!.getLastError();
-        _statusText = (err != null && err.toLowerCase().contains('password'))
-            ? 'Password-protected documents are not supported'
-            : 'Open failed: ${err ?? 'unknown error'}';
+      while (true) {
+        if (requiresPassword && (password == null || password.isEmpty)) {
+          final prompted = await _promptForPassword(
+            path: path,
+            errorMessage: promptError,
+          );
+          if (prompted == _PasswordPromptOutcome.cancelled) {
+            _statusText = 'Open cancelled';
+            notifyListeners();
+            return;
+          }
+          if (prompted == _PasswordPromptOutcome.unavailable) {
+            _statusText = 'Password required to open this document';
+            notifyListeners();
+            return;
+          }
+          password = prompted.password;
+        }
+
+        final code = _host.engine!.openDocumentBytes(
+          bytes,
+          path: path,
+          password: password,
+        );
+        if (code == 0) {
+          _view.reset();
+          _host.engine!.setCurrentPageIndex(0);
+          _host.refreshFromEngine(full: true);
+          _refreshDocumentMetadata();
+          _selection.reset();
+          _selection.ensureGlyphCaret();
+          _formatting.syncFromCaret();
+          // Opening with a password retains encryption for subsequent DOCX saves.
+          _encryptionPasswordSet =
+              requiresPassword && (password?.isNotEmpty ?? false);
+          _statusText = statusOverride ??
+              (_documentReadOnly ? 'Opened (read-only)' : 'Opened');
+          break;
+        }
+
+        final err = _host.engine!.getLastError() ?? 'unknown error';
+        final lower = err.toLowerCase();
+        if (lower.contains('incorrect password')) {
+          requiresPassword = true;
+          promptError = 'Incorrect password. Try again.';
+          password = null;
+          if (_passwordPrompt == null) {
+            _statusText = 'Incorrect password';
+            notifyListeners();
+            return;
+          }
+          continue;
+        }
+        if (lower.contains('password-protected') ||
+            lower.contains('password required')) {
+          requiresPassword = true;
+          promptError = 'Password required.';
+          password = null;
+          if (_passwordPrompt == null) {
+            _statusText = 'Password required to open this document';
+            notifyListeners();
+            return;
+          }
+          continue;
+        }
+        _statusText = 'Open failed: $err';
         notifyListeners();
         return;
       }
+    } else if (requiresPassword) {
+      _statusText = 'Password required to open this document';
+      notifyListeners();
+      return;
     } else {
       _host.setDocumentText(DocumentReader.extractText(bytes, path: path));
       _host.clearDisplayCaches();
-      _statusText = 'Opened';
+      _statusText = statusOverride ?? 'Opened';
     }
-    _currentPath = path;
-    await _recordRecentPath(path);
+    if (asUntitled) {
+      _currentPath = null;
+      await _sessionStore.clearAutosave();
+    } else {
+      _currentPath = path;
+      await _recordRecentPath(path);
+    }
     _syncSavedGeneration();
     notifyListeners();
     onSessionChanged();
+  }
+
+  Future<_PasswordPromptOutcome> _promptForPassword({
+    required String path,
+    String? errorMessage,
+  }) async {
+    final prompt = _passwordPrompt;
+    if (prompt == null) {
+      return _PasswordPromptOutcome.unavailable;
+    }
+    final value = await prompt(
+      fileName: p.basename(path),
+      errorMessage: errorMessage,
+    );
+    if (value == null) {
+      return _PasswordPromptOutcome.cancelled;
+    }
+    return _PasswordPromptOutcome.submitted(value);
   }
 
   Future<void> saveDocument() => _saveWithExtension(
@@ -414,6 +577,18 @@ class DocumentSessionController extends ChangeNotifier {
     } catch (_) {
       return false;
     }
+  }
+
+  /// Bytes for the OS print dialog — VisualMatch when the engine supports it (F25.S1–S3).
+  Uint8List? printPdfBytes([
+    PrintLayoutSettings? layout,
+    DocRange? selection,
+  ]) {
+    final engine = _host.engine;
+    if (engine == null) return null;
+    final forPrint = engine.exportPdfBytesForPrint(layout, selection);
+    if (forPrint != null && forPrint.isNotEmpty) return forPrint;
+    return engine.exportPdfBytes();
   }
 
   Future<Uint8List> _serializeDocument({String? formatExtension}) async {
@@ -706,7 +881,17 @@ class DocumentSessionController extends ChangeNotifier {
 
   Future<void> proofDocument() async {
     await spellCheckDocument();
+    final spellCount = _spellMisspellings.length;
     await grammarCheckDocument();
+    final grammarCount = _grammarIssues.length;
+    if (spellCount == 0 && grammarCount == 0) {
+      _statusText = 'No spelling or grammar issues found';
+    } else {
+      // Keep "N issue" phrasing so status consumers can match spelling counts.
+      _statusText =
+          'Proofing: $spellCount issue(s) spelling, $grammarCount issue(s) grammar';
+    }
+    notifyListeners();
   }
 
   void compareWithText(String otherText) {
@@ -736,6 +921,144 @@ class DocumentSessionController extends ChangeNotifier {
     }
     notifyListeners();
     onSessionChanged();
+  }
+
+  /// Protect subsequent DOCX saves with [password] (F22.S2).
+  bool protectWithPassword(String password) {
+    if (_host.engine == null) {
+      _statusText = 'Protect unavailable';
+      notifyListeners();
+      return false;
+    }
+    if (password.isEmpty) {
+      _statusText = 'Password required';
+      notifyListeners();
+      return false;
+    }
+    final ok = _host.engine!.setEncryptionPassword(password);
+    if (ok) {
+      _encryptionPasswordSet = true;
+      _statusText = 'Document will be encrypted on DOCX save';
+    } else {
+      _statusText = 'Protect with password failed';
+    }
+    notifyListeners();
+    onSessionChanged();
+    return ok;
+  }
+
+  /// Clear encryption password so DOCX saves are plaintext (F22.S2).
+  bool removePasswordProtection() {
+    if (_host.engine == null) {
+      _statusText = 'Remove password unavailable';
+      notifyListeners();
+      return false;
+    }
+    final ok = _host.engine!.setEncryptionPassword(null);
+    if (ok) {
+      _encryptionPasswordSet = false;
+      _statusText = 'Password protection removed';
+    } else {
+      _statusText = 'Remove password failed';
+    }
+    notifyListeners();
+    onSessionChanged();
+    return ok;
+  }
+
+  /// JSON Document Inspector findings (F22.S3).
+  String? fetchDocumentInspectJson() {
+    if (_host.engine == null) return '[]';
+    return _host.engine!.fetchDocumentInspect();
+  }
+
+  /// Remove selected Document Inspector categories (F22.S3).
+  bool removeInspectFindings({
+    bool comments = false,
+    bool metadata = false,
+    bool hiddenText = false,
+  }) {
+    if (_host.engine == null) {
+      _statusText = 'Inspect Document unavailable';
+      notifyListeners();
+      return false;
+    }
+    if (!comments && !metadata && !hiddenText) {
+      return true;
+    }
+    final ok = _host.engine!.removeInspectFindings(
+      comments: comments,
+      metadata: metadata,
+      hiddenText: hiddenText,
+    );
+    if (ok) {
+      _refreshDocumentMetadata();
+      _statusText = 'Document inspected';
+      _editGeneration += 1;
+    } else {
+      _statusText = 'Inspect Document remove failed';
+    }
+    notifyListeners();
+    onSessionChanged();
+    return ok;
+  }
+
+  /// JSON digital signatures (F22.S4).
+  String? fetchDigitalSignaturesJson() {
+    if (_host.engine == null) return '[]';
+    return _host.engine!.fetchDigitalSignatures();
+  }
+
+  /// JSON signature verification results (F22.S4).
+  String? verifyDigitalSignaturesJson() {
+    if (_host.engine == null) return '[]';
+    return _host.engine!.verifyDigitalSignatures();
+  }
+
+  /// Sign the document (F22.S4).
+  bool signDocument({
+    required String name,
+    String email = '',
+    String? organization,
+  }) {
+    if (_host.engine == null) {
+      _statusText = 'Sign Document unavailable';
+      notifyListeners();
+      return false;
+    }
+    final ok = _host.engine!.signDocument(
+      name: name,
+      email: email,
+      organization: organization,
+    );
+    if (ok) {
+      _statusText = 'Document signed by $name';
+      _editGeneration += 1;
+    } else {
+      _statusText = 'Sign Document failed';
+    }
+    notifyListeners();
+    onSessionChanged();
+    return ok;
+  }
+
+  /// Remove all digital signatures (F22.S4).
+  bool clearDigitalSignatures() {
+    if (_host.engine == null) {
+      _statusText = 'Clear signatures unavailable';
+      notifyListeners();
+      return false;
+    }
+    final ok = _host.engine!.clearDigitalSignatures();
+    if (ok) {
+      _statusText = 'Digital signatures removed';
+      _editGeneration += 1;
+    } else {
+      _statusText = 'Clear signatures failed';
+    }
+    notifyListeners();
+    onSessionChanged();
+    return ok;
   }
 
   Future<void> applyEngineStyle(
@@ -768,4 +1091,24 @@ class DocumentSessionController extends ChangeNotifier {
     unawaited(_releaseScopedAccess());
     if (Platform.isMacOS) unawaited(MacOSFileAccess.stopAllAccess());
   }
+}
+
+class _PasswordPromptOutcome {
+  const _PasswordPromptOutcome._(this.password, this._kind);
+  final String? password;
+  final int _kind;
+
+  static const unavailable = _PasswordPromptOutcome._(null, 0);
+  static const cancelled = _PasswordPromptOutcome._(null, 1);
+  static _PasswordPromptOutcome submitted(String password) =>
+      _PasswordPromptOutcome._(password, 2);
+
+  @override
+  bool operator ==(Object other) =>
+      other is _PasswordPromptOutcome &&
+      other._kind == _kind &&
+      other.password == password;
+
+  @override
+  int get hashCode => Object.hash(_kind, password);
 }

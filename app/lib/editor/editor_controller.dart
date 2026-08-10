@@ -7,13 +7,19 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:tutuaword/bridge/accessibility_issue.dart';
+import 'package:tutuaword/bridge/bookmark_entry.dart';
 import 'package:tutuaword/bridge/document_engine.dart';
 import 'package:tutuaword/bridge/document_properties.dart';
 import 'package:tutuaword/bridge/engine_loader.dart';
 import 'package:tutuaword/bridge/engine_types.dart';
+import 'package:tutuaword/bridge/document_print.dart';
+import 'package:tutuaword/bridge/document_print_platform.dart';
 import 'package:tutuaword/bridge/document_session_store.dart';
 import 'package:tutuaword/bridge/mock_native_engine.dart';
+import 'package:tutuaword/bridge/print_layout_settings.dart';
 import 'package:tutuaword/bridge/outline_entry.dart';
+import 'package:tutuaword/bridge/semantic_node.dart';
 import 'package:tutuaword/editor/controllers/document_session_controller.dart';
 import 'package:tutuaword/editor/controllers/engine_host.dart';
 import 'package:tutuaword/editor/controllers/find_controller.dart';
@@ -28,8 +34,36 @@ import 'package:tutuaword/editor/display_list.dart';
 import 'package:tutuaword/editor/recent_symbols.dart';
 import 'package:tutuaword/editor/image_hit_test.dart';
 import 'package:tutuaword/editor/shape_hit_test.dart';
+import 'package:tutuaword/editor/text_to_speech.dart';
+import 'package:tutuaword/editor/text_to_speech_platform.dart';
 import 'package:tutuaword/ui/chart_data_dialog.dart';
 import 'package:tutuaword/ui/equation_dialog.dart';
+import 'package:tutuaword/editor/document_templates.dart';
+import 'package:tutuaword/ui/goto_dialog.dart';
+import 'package:tutuaword/bridge/mail_merge_csv.dart';
+import 'package:tutuaword/bridge/ai_client.dart';
+import 'package:tutuaword/bridge/plugin_registry.dart';
+import 'package:tutuaword/bridge/ai_generate.dart';
+import 'package:tutuaword/bridge/ai_smart_edit.dart';
+import 'package:tutuaword/bridge/ai_visual.dart';
+import 'package:tutuaword/ui/ai_chat_dialog.dart';
+import 'package:tutuaword/ui/ai_generate_dialog.dart';
+import 'package:tutuaword/ui/ai_rewrite_dialog.dart';
+import 'package:tutuaword/ui/ai_settings_dialog.dart';
+import 'package:tutuaword/ui/ai_smart_edit_dialog.dart';
+import 'package:tutuaword/ui/ai_visual_dialog.dart';
+import 'package:tutuaword/ui/form_field_dialog.dart';
+import 'package:tutuaword/ui/hyperlink_dialog.dart';
+import 'package:tutuaword/ui/mail_merge_dialogs.dart';
+import 'package:tutuaword/ui/plugins_dialog.dart';
+import 'package:tutuaword/ui/new_from_template_dialog.dart';
+import 'package:tutuaword/ui/save_as_template_dialog.dart';
+import 'package:tutuaword/bridge/digital_signature.dart';
+import 'package:tutuaword/bridge/document_inspect_finding.dart';
+import 'package:tutuaword/ui/digital_signature_dialog.dart';
+import 'package:tutuaword/ui/document_inspector_dialog.dart';
+import 'package:tutuaword/ui/print_settings_dialog.dart';
+import 'package:tutuaword/ui/protect_password_dialog.dart';
 import 'package:tutuaword/ui/symbol_dialog.dart';
 import 'package:tutuaword/ui/paragraph_borders_dialog.dart';
 import 'package:tutuaword/ui/paragraph_spacing_dialog.dart';
@@ -64,11 +98,16 @@ class EditorController extends ChangeNotifier {
     DocumentEngine? engine,
     DocumentSessionStore? sessionStore,
     RecentSymbolsStore? recentSymbols,
+    TextToSpeechEngine? textToSpeech,
+    DocumentPrintHost? printHost,
+    PasswordPromptCallback? passwordPrompt,
     bool enableAutosave = true,
     Duration? autosaveInterval,
     bool useMockWhenEngineMissing = false,
   })  : _recentSymbols = recentSymbols ?? RecentSymbolsStore.instance,
         _sessionStore = sessionStore,
+        _tts = textToSpeech ?? createPlatformTextToSpeech(),
+        _printHost = printHost ?? createPlatformPrintHost(),
         _host = EngineHost(engine: engine ?? (useMockWhenEngineMissing ? MockDocumentEngine() : loadDocumentEngine())) {
     _view = ViewController();
     _selection = SelectionController(
@@ -90,6 +129,7 @@ class EditorController extends ChangeNotifier {
       sessionStore: sessionStore,
       enableAutosave: enableAutosave,
       autosaveInterval: autosaveInterval,
+      passwordPrompt: passwordPrompt,
     );
 
     _bootStatus = _host.isConnected
@@ -120,10 +160,14 @@ class EditorController extends ChangeNotifier {
   factory EditorController.forTest({
     MockDocumentEngine? engine,
     RecentSymbolsStore? recentSymbols,
+    TextToSpeechEngine? textToSpeech,
+    DocumentPrintHost? printHost,
   }) {
     return EditorController(
       engine: engine ?? MockDocumentEngine(),
       recentSymbols: recentSymbols ?? RecentSymbolsStore(),
+      textToSpeech: textToSpeech ?? RecordingTextToSpeech(),
+      printHost: printHost ?? RecordingPrintHost(),
       enableAutosave: false,
     );
   }
@@ -131,12 +175,18 @@ class EditorController extends ChangeNotifier {
   final EngineHost _host;
   final RecentSymbolsStore _recentSymbols;
   final DocumentSessionStore? _sessionStore;
+  final TextToSpeechEngine _tts;
+  final DocumentPrintHost _printHost;
   late final ViewController _view;
   late final SelectionController _selection;
   late final FormattingController _formatting;
   late final FindController _find;
   late final DocumentSessionController _session;
   String _documentThemeName = 'Office';
+  MailMergeDataSource? _mailMergeData;
+  int _mailMergeRowIndex = 0;
+  final PluginRegistry _pluginRegistry = PluginRegistry();
+  final AiClient _aiClient = AiClient.productionDesktop();
   DocumentEditZone _editZone = DocumentEditZone.body;
   String? _selectedImageId;
   int? _selectedImagePage;
@@ -150,6 +200,9 @@ class EditorController extends ChangeNotifier {
   Offset? _moveStartPoint;
   Rect? _moveStartRect;
   double _selectedImageRotation = 0;
+  List<AccessibilityIssue> _accessibilityIssues = const [];
+  bool _accessibilityChecked = false;
+  bool _readingAloud = false;
 
   String _bootStatus = '';
 
@@ -278,13 +331,51 @@ class EditorController extends ChangeNotifier {
   bool get showRuler => _view.showRuler;
   bool get showNavigationPane => _view.showNavigationPane;
   bool get showStyleInspector => _view.showStyleInspector;
+  bool get showAccessibilityChecker => _view.showAccessibilityChecker;
+  List<AccessibilityIssue> get accessibilityIssues => _accessibilityIssues;
+  bool get accessibilityChecked => _accessibilityChecked;
+
+  /// Status-bar summary for the last accessibility check (F21.S4).
+  String get accessibilityStatusLabel {
+    if (!_accessibilityChecked) return 'Accessibility: Not checked';
+    if (_accessibilityIssues.isEmpty) return 'Accessibility: Good to go';
+    final errors =
+        _accessibilityIssues.where((i) => i.isError).length;
+    final warnings =
+        _accessibilityIssues.where((i) => i.isWarning).length;
+    if (errors > 0 && warnings > 0) {
+      return 'Accessibility: $errors error(s), $warnings warning(s)';
+    }
+    if (errors > 0) return 'Accessibility: $errors error(s)';
+    return 'Accessibility: $warnings warning(s)';
+  }
   String get styleInspectorSummary => _formatting.styleInspectorSummary;
 
   void setCurrentPage(int page) {
-    _view.setCurrentPage(page, pageCount);
-    _host.engine?.setCurrentPageIndex(_view.currentPage);
+    _selectPage(page);
     _host.refreshFromEngine(dirtyPage: _view.currentPage);
     notifyListeners();
+  }
+
+  /// Select [page] without a full display-list refresh (F19.S1).
+  ///
+  /// Prefer this (or [jumpToPage]) from the navigation strip so mock/injected
+  /// multi-page state is not overwritten by a single-page engine snapshot.
+  void selectPage(int page) {
+    _selectPage(page);
+    notifyListeners();
+  }
+
+  /// Jump to [page] and request the document canvas to scroll there (F19.S1).
+  void jumpToPage(int page) {
+    _selectPage(page);
+    _view.requestScrollToPage(_view.currentPage);
+    notifyListeners();
+  }
+
+  void _selectPage(int page) {
+    _view.setCurrentPage(page, pageCount);
+    _host.engine?.setCurrentPageIndex(_view.currentPage);
   }
 
   void setVisiblePage(int page) => _view.setVisiblePage(page, pageCount);
@@ -298,7 +389,55 @@ class EditorController extends ChangeNotifier {
   void zoomOut() => _view.zoomOut();
   void toggleRuler() => _view.toggleRuler();
   void toggleNavigationPane() => _view.toggleNavigationPane();
+  void showNavigationOutline() {
+    _view.showNavigationOutline();
+    _session.setStatusText('Outline');
+  }
+
   void toggleStyleInspector() => _view.toggleStyleInspector();
+  void hideAccessibilityChecker() => _view.hideAccessibilityCheckerPane();
+
+  /// Run F21.S4 accessibility rules and show the results pane.
+  void checkAccessibility() {
+    final json = _host.engine?.fetchAccessibilityIssues();
+    if (json == null) {
+      _accessibilityIssues = const [];
+      _accessibilityChecked = true;
+      _session.setStatusText('Accessibility check failed');
+      _view.showAccessibilityCheckerPane();
+      notifyListeners();
+      return;
+    }
+    final decoded = jsonDecode(json);
+    if (decoded is! List) {
+      _accessibilityIssues = const [];
+    } else {
+      _accessibilityIssues = decoded
+          .whereType<Map>()
+          .map((e) => AccessibilityIssue.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+    }
+    _accessibilityChecked = true;
+    _session.setStatusText(accessibilityStatusLabel);
+    _view.showAccessibilityCheckerPane();
+    notifyListeners();
+  }
+
+  /// Jump to an accessibility finding (caret / image selection).
+  void focusAccessibilityIssue(AccessibilityIssue issue) {
+    if (issue.rule == 'missing_alt' && issue.nodeId.isNotEmpty) {
+      clearDiagramSelection();
+      _selectedImageId = issue.nodeId;
+      _selectedImagePage = _view.currentPage;
+      _selectedImageRect = null;
+      _previewImageRect = null;
+    } else if (issue.runId != null && issue.runId!.isNotEmpty) {
+      clearImageSelection();
+      _selection.setCaret(issue.runId!, 0);
+    }
+    _session.setStatusText(issue.message);
+    notifyListeners();
+  }
 
   List<DocumentOutlineEntry> get documentOutline {
     final json = _host.engine?.fetchDocumentOutline();
@@ -311,12 +450,66 @@ class EditorController extends ChangeNotifier {
         .toList();
   }
 
+  /// Jump to a heading / outline entry and scroll the canvas (F19.S2).
   void jumpToOutlineEntry(DocumentOutlineEntry entry) {
     _selection.setCaret(entry.runId, 0, page: entry.page);
-    _view.setCurrentPage(entry.page, pageCount);
+    _selectPage(entry.page);
     _view.requestScrollToPage(entry.page);
-    _host.engine?.setCurrentPageIndex(entry.page);
+    _session.setStatusText('Outline: ${entry.text}');
     notifyListeners();
+  }
+
+  List<DocumentBookmarkEntry> get documentBookmarks {
+    final json = _host.engine?.fetchBookmarks();
+    if (json == null || json.isEmpty) return const [];
+    final decoded = jsonDecode(json);
+    if (decoded is! List) return const [];
+    return decoded
+        .whereType<Map>()
+        .map((entry) => DocumentBookmarkEntry.fromJson(Map<String, dynamic>.from(entry)))
+        .toList();
+  }
+
+  /// Parallel accessibility tree from the engine (F21.S1).
+  List<SemanticDocumentNode> get semanticDocumentTree {
+    final json = _host.engine?.fetchSemanticTree();
+    if (json == null || json.isEmpty) return const [];
+    final decoded = jsonDecode(json);
+    if (decoded is! List) return const [];
+    return decoded
+        .whereType<Map>()
+        .map((entry) => SemanticDocumentNode.fromJson(Map<String, dynamic>.from(entry)))
+        .toList();
+  }
+
+  /// Jump to a bookmark and scroll the canvas (F19.S4).
+  void jumpToBookmark(DocumentBookmarkEntry entry) {
+    _selection.setCaret(entry.runId, 0, page: entry.page);
+    _selectPage(entry.page);
+    _view.requestScrollToPage(entry.page);
+    _session.setStatusText('Bookmark: ${entry.name}');
+    notifyListeners();
+  }
+
+  /// Open Go To (page / bookmark / heading) and navigate (F19.S4).
+  Future<void> openGoToDialog(BuildContext context) async {
+    final result = await GoToDialog.show(
+      context,
+      pageCount: pageCount,
+      currentPage: currentPage,
+      bookmarks: documentBookmarks,
+      headings: documentOutline,
+    );
+    if (result == null) return;
+    switch (result) {
+      case GoToPageResult(:final pageIndex):
+        jumpToPage(pageIndex);
+        _session.setStatusText('Go To page ${pageIndex + 1}');
+      case GoToBookmarkResult(:final entry):
+        jumpToBookmark(entry);
+      case GoToHeadingResult(:final entry):
+        jumpToOutlineEntry(entry);
+    }
   }
 
   bool isPageEditable(int pageIndex) {
@@ -425,10 +618,11 @@ class EditorController extends ChangeNotifier {
     }
 
     final nearBorder = hit.containsNearBorder(point);
+    final alreadySelected = _selectedDiagramId == hit.shapeId;
     final textHit = _host.engine?.hitTestPage(pageIndex, point.dx, point.dy);
-    // First click on editable text inside a table/shape selects text, not the
-    // object. Border clicks still select the object frame (Word-like).
-    if (textHit != null && !nearBorder) {
+    // Second click inside an already-selected text-containing object falls
+    // through for caret placement. Border clicks always keep object selection.
+    if (alreadySelected && textHit != null && !nearBorder) {
       clearDiagramSelection();
       return false;
     }
@@ -656,6 +850,24 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Current alt text for the selected image (empty when unset) — F21.S3.
+  String get selectedImageAltText {
+    final id = _selectedImageId;
+    if (id == null || !_host.isConnected || _host.engine == null) return '';
+    return _host.engine!.fetchImageAltText(id) ?? '';
+  }
+
+  Future<void> setSelectedImageAltText(String? altText) async {
+    final id = _selectedImageId;
+    if (id == null || !_host.isConnected) return;
+    await _session.applyEngineStyle(
+      () => _host.engine!.setImageAltTextAsync(id, altText),
+      'Alt text updated',
+      full: true,
+    );
+    notifyListeners();
+  }
+
   Future<void> compressSelectedImage({int quality = 75}) async {
     final id = _selectedImageId;
     if (id == null || !_host.isConnected) return;
@@ -823,6 +1035,54 @@ class EditorController extends ChangeNotifier {
 
   bool get canCutOrCopy => selectedText.isNotEmpty;
   bool get canDelete => canCutOrCopy || hasSelectedObject;
+
+  // ── Read aloud (F21.S5) ───────────────────────────────────────────────────
+  bool get isReadingAloud => _readingAloud || _tts.isSpeaking;
+
+  /// Speaks the current selection via platform TTS. Requires non-empty selection.
+  Future<void> readAloudSelection() async {
+    final text = selectedText.trim();
+    if (text.isEmpty) {
+      _session.setStatusText('Select text to read aloud');
+      notifyListeners();
+      return;
+    }
+    if (_readingAloud) {
+      await stopReadAloud();
+    }
+    _readingAloud = true;
+    _session.setStatusText('Reading aloud…');
+    notifyListeners();
+    try {
+      await _tts.speak(text);
+      if (_readingAloud) {
+        _session.setStatusText('Finished reading aloud');
+      }
+    } catch (_) {
+      _session.setStatusText('Read aloud unavailable');
+    } finally {
+      _readingAloud = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> stopReadAloud() async {
+    final wasReading = _readingAloud || _tts.isSpeaking;
+    await _tts.stop();
+    _readingAloud = false;
+    if (wasReading) {
+      _session.setStatusText('Read aloud stopped');
+    }
+    notifyListeners();
+  }
+
+  Future<void> toggleReadAloud() async {
+    if (isReadingAloud) {
+      await stopReadAloud();
+    } else {
+      await readAloudSelection();
+    }
+  }
 
   Future<void> copySelection() async {
     final text = selectedText;
@@ -1048,16 +1308,266 @@ class EditorController extends ChangeNotifier {
 
   // ── Document lifecycle (delegated) ────────────────────────────────────────
   Future<void> newDocument() => _session.newDocument();
+
+  /// Load a built-in starter `.docx` as an untitled document (F24.S1)
+  /// and apply its bound Design gallery theme (F24.S2).
+  Future<void> newFromTemplate(DocumentTemplateSpec template) async {
+    final data = await rootBundle.load(template.assetPath);
+    final bytes = data.buffer.asUint8List();
+    await _session.newFromTemplate(
+      bytes: bytes,
+      templateTitle: template.title,
+      assetPath: template.assetPath,
+    );
+    await _session.applyEngineStyle(
+      () => _host.engine!.applyDocumentThemeAsync(themeName: template.themeName),
+      'New from template: ${template.title} (${template.themeName})',
+    );
+    _documentThemeName = template.themeName;
+    notifyListeners();
+  }
+
+  /// Open a user-saved template as untitled and re-apply its theme (F24.S3).
+  Future<void> newFromUserTemplate(UserTemplateEntry entry) async {
+    final bytes = await _session.readUserTemplateBytes(entry.id);
+    if (bytes == null || bytes.isEmpty) {
+      _session.setStatusText('Template not found: ${entry.title}');
+      notifyListeners();
+      return;
+    }
+    await _session.newFromTemplate(
+      bytes: bytes,
+      templateTitle: entry.title,
+      assetPath: 'user-template://${entry.id}.docx',
+    );
+    await _session.applyEngineStyle(
+      () => _host.engine!.applyDocumentThemeAsync(themeName: entry.themeName),
+      'New from template: ${entry.title} (${entry.themeName})',
+    );
+    _documentThemeName = entry.themeName;
+    notifyListeners();
+  }
+
+  /// Show the New from Template chooser and open the selection (F24.S1 / F24.S3).
+  Future<void> openNewFromTemplateDialog(BuildContext context) async {
+    final selection = await NewFromTemplateDialog.show(
+      context,
+      userTemplates: _session.userTemplates,
+    );
+    if (selection == null) return;
+    if (selection.spec != null) {
+      await newFromTemplate(selection.spec!);
+    } else if (selection.user != null) {
+      await newFromUserTemplate(selection.user!);
+    }
+  }
+
+  /// Snapshot the open document into My Templates (F24.S3).
+  Future<void> openSaveAsTemplateDialog(BuildContext context) async {
+    final suggested = documentTitle.trim().isEmpty || documentTitle == 'Document1'
+        ? 'My Template'
+        : documentTitle;
+    final title = await SaveAsTemplateDialog.show(
+      context,
+      initialTitle: suggested,
+    );
+    if (title == null) return;
+    await _session.saveAsTemplate(
+      title: title,
+      themeName: _documentThemeName,
+    );
+    notifyListeners();
+  }
   Future<void> openDocument() => _session.openDocument();
   Future<void> openDocumentFromPath(String path) => _session.openDocumentFromPath(path);
   Future<void> openRecentDocument(String path) => _session.openRecentDocument(path);
+
+  /// Install UI password prompt for encrypted document opens (F22.S1).
+  void setPasswordPrompt(PasswordPromptCallback? prompt) =>
+      _session.setPasswordPrompt(prompt);
   Future<void> saveDocument() => _session.saveDocument();
   Future<void> saveDocumentAs({required String extension}) =>
       _session.saveDocumentAs(extension: extension);
   Future<bool> saveDocumentToPath(String path, {String? formatExtension}) =>
       _session.saveDocumentToPath(path, formatExtension: formatExtension);
+
+  bool get encryptionPasswordSet => _session.encryptionPasswordSet;
+
+  /// Show protect dialog and set encryption password for DOCX saves (F22.S2).
+  Future<void> protectWithPassword(BuildContext context) async {
+    final password = await ProtectPasswordDialog.show(context);
+    if (password == null) {
+      _session.setStatusText('Protect cancelled');
+      return;
+    }
+    _session.protectWithPassword(password);
+  }
+
+  Future<void> removePasswordProtection() async {
+    _session.removePasswordProtection();
+  }
+
+  /// Show Inspect Document dialog and remove selected categories (F22.S3).
+  Future<void> inspectDocument(BuildContext context) async {
+    final json = _session.fetchDocumentInspectJson() ?? '[]';
+    List<DocumentInspectFinding> findings = const [];
+    try {
+      final decoded = jsonDecode(json);
+      if (decoded is List) {
+        findings = decoded
+            .whereType<Map>()
+            .map((e) =>
+                DocumentInspectFinding.fromJson(Map<String, dynamic>.from(e)))
+            .toList();
+      }
+    } catch (_) {
+      findings = const [];
+    }
+    if (!context.mounted) return;
+    final removal = await DocumentInspectorDialog.show(context, findings);
+    if (removal == null || !removal.any) {
+      if (removal == null) {
+        _session.setStatusText('Inspect cancelled');
+      }
+      return;
+    }
+    _session.removeInspectFindings(
+      comments: removal.comments,
+      metadata: removal.metadata,
+      hiddenText: removal.hiddenText,
+    );
+  }
+
+  /// Show Digital Signatures dialog (sign / verify / clear) (F22.S4).
+  Future<void> manageDigitalSignatures(BuildContext context) async {
+    List<DigitalSignatureInfo> parseSignatures(String? json) {
+      try {
+        final decoded = jsonDecode(json ?? '[]');
+        if (decoded is! List) return const [];
+        return decoded
+            .whereType<Map>()
+            .map((e) =>
+                DigitalSignatureInfo.fromJson(Map<String, dynamic>.from(e)))
+            .toList();
+      } catch (_) {
+        return const [];
+      }
+    }
+
+    List<SignatureVerificationInfo> parseVerifications(String? json) {
+      try {
+        final decoded = jsonDecode(json ?? '[]');
+        if (decoded is! List) return const [];
+        return decoded
+            .whereType<Map>()
+            .map((e) => SignatureVerificationInfo.fromJson(
+                  Map<String, dynamic>.from(e),
+                ))
+            .toList();
+      } catch (_) {
+        return const [];
+      }
+    }
+
+    final signatures =
+        parseSignatures(_session.fetchDigitalSignaturesJson());
+    final verifications =
+        parseVerifications(_session.verifyDigitalSignaturesJson());
+    if (!context.mounted) return;
+    final result = await DigitalSignatureDialog.show(
+      context,
+      signatures: signatures,
+      verifications: verifications,
+    );
+    if (result == null) return;
+    if (result == 'clear') {
+      _session.clearDigitalSignatures();
+      return;
+    }
+    if (result is DigitalSignatureSignRequest) {
+      _session.signDocument(
+        name: result.name,
+        email: result.email,
+        organization: result.organization,
+      );
+    }
+  }
+
   Future<void> exportPdf() => _session.exportPdf();
   Future<bool> exportPdfToPath(String path) => _session.exportPdfToPath(path);
+
+  /// File→Print: scale/margins/scope settings, then OS print dialog (F25.S1–S3).
+  ///
+  /// When [layout] is omitted and [context] is mounted, shows [PrintSettingsDialog].
+  /// Pass [layout] (or omit [context]) to skip the settings UI — used by tests.
+  Future<PrintDialogResult> printDocument({
+    BuildContext? context,
+    PrintLayoutSettings? layout,
+  }) async {
+    var settings = layout;
+    if (settings == null && context != null && context.mounted) {
+      settings = await PrintSettingsDialog.show(
+        context,
+        selectionAvailable: hasGlyphSelection,
+      );
+      if (settings == null) {
+        _session.setStatusText('Print cancelled');
+        notifyListeners();
+        return const PrintDialogResult(
+          outcome: PrintDialogOutcome.cancelled,
+        );
+      }
+    }
+    settings ??= PrintLayoutSettings.defaults;
+
+    DocRange? selection;
+    if (settings.scope == PrintScope.selection) {
+      if (!hasGlyphSelection || _selection.selection == null) {
+        _session.setStatusText('Print failed: no selection');
+        notifyListeners();
+        return const PrintDialogResult(
+          outcome: PrintDialogOutcome.failed,
+          message: 'no selection',
+        );
+      }
+      selection = _selection.selection;
+    }
+
+    final bytes = _session.printPdfBytes(settings, selection);
+    if (bytes == null || bytes.isEmpty || !isPdfHeader(bytes)) {
+      _session.setStatusText('Print failed: could not build PDF');
+      notifyListeners();
+      return const PrintDialogResult(
+        outcome: PrintDialogOutcome.failed,
+        message: 'could not build PDF',
+      );
+    }
+    final result = await _printHost.presentPrintDialog(
+      pdfBytes: bytes,
+      jobName: documentTitle,
+      attributes: settings.toPlatformAttributes(),
+    );
+    switch (result.outcome) {
+      case PrintDialogOutcome.presented:
+        _session.setStatusText(
+          selection != null
+              ? 'Print dialog opened (selection)'
+              : 'Print dialog opened',
+        );
+      case PrintDialogOutcome.cancelled:
+        _session.setStatusText('Print cancelled');
+      case PrintDialogOutcome.fallbackSaved:
+        _session.setStatusText(
+          result.message ?? 'Print PDF saved for printing',
+        );
+      case PrintDialogOutcome.unsupported:
+        _session.setStatusText('Print not supported on this platform');
+      case PrintDialogOutcome.failed:
+        _session.setStatusText(result.message ?? 'Print failed');
+    }
+    notifyListeners();
+    return result;
+  }
   Future<void> undo() => _session.undo();
   Future<void> redo() => _session.redo();
   Future<void> setAutosaveInterval(Duration d) => _session.setAutosaveInterval(d);
@@ -1803,41 +2313,76 @@ class EditorController extends ChangeNotifier {
   Future<void> insertPageNumberField() async {
     if (!_host.isConnected) return;
     _selection.ensureGlyphCaret();
+
+    // Page numbers belong in a header/footer band — never insert into body text.
+    if (_editZone == DocumentEditZone.body) {
+      await openFooterEdit();
+    }
+
     final runId = _selection.defaultRunId();
     if (runId == null) return;
+    final offset = _runCharLength(runId);
+
     await _session.applyEngineStyle(
       () => _host.engine!.insertFieldAsync(
         runId: runId,
-        offset: _selection.caretOffset,
+        offset: offset,
         fieldType: 'page',
       ),
       'Page number inserted',
       full: true,
     );
-    final seed = _host.engine!.fetchHeaderFooterSeedRun(
-      caretRunId: runId,
-      isHeader: _editZone == DocumentEditZone.header,
-    );
-    final caret = seed ?? runId;
-    _selection.setCaret(caret, 1, page: _selection.caretPage);
-    _selection.syncCaretGeometry();
+
+    _moveCaretToHeaderFooterEnd();
     notifyListeners();
   }
 
   Future<void> insertDateField() async {
     if (!_host.isConnected) return;
     _selection.ensureGlyphCaret();
+
+    if (_editZone == DocumentEditZone.body) {
+      await openFooterEdit();
+    }
+
     final runId = _selection.defaultRunId();
     if (runId == null) return;
+    final offset = _runCharLength(runId);
+
     await _session.applyEngineStyle(
       () => _host.engine!.insertFieldAsync(
         runId: runId,
-        offset: _selection.caretOffset,
+        offset: offset,
         fieldType: 'date',
       ),
       'Date inserted',
+      full: true,
     );
+
+    _moveCaretToHeaderFooterEnd();
     notifyListeners();
+  }
+
+  int _runCharLength(String runId) {
+    final engine = _host.engine;
+    if (engine == null) return 0;
+    var len = 0;
+    while (true) {
+      final ch = engine.fetchTextRange(runId, len, runId, len + 1);
+      if (ch == null || ch.isEmpty) break;
+      len++;
+    }
+    return len;
+  }
+
+  void _moveCaretToHeaderFooterEnd() {
+    final page = _selection.caretPage;
+    final x = pageWidth - marginRight - 8;
+    final y = _editZone == DocumentEditZone.footer
+        ? pageHeight - (marginBottom * 0.5)
+        : marginTop * 0.5;
+    _selection.hitTestAt(page, x, y);
+    _selection.syncCaretGeometry();
   }
 
   /// Inserts a footnote reference at the caret (F16.S1).
@@ -1928,13 +2473,15 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Inserts a bookmark anchor at the caret (F16.S4).
+  /// Inserts a bookmark anchor at the caret (F16.S4 / F19.S3).
   Future<void> insertBookmark(BuildContext context) async {
     if (!_host.isConnected) return;
     _selection.ensureGlyphCaret();
     final runId = _selection.defaultRunId();
     if (runId == null) return;
-    const name = 'SectionRef';
+    final name = await BookmarkNameDialog.show(context);
+    if (name == null || name.isEmpty) return;
+    if (!context.mounted) return;
     await _session.applyEngineStyle(
       () => _host.engine!.insertBookmarkAsync(
         runId: runId,
@@ -1942,6 +2489,457 @@ class EditorController extends ChangeNotifier {
         name: name,
       ),
       'Bookmark inserted',
+      full: true,
+    );
+    notifyListeners();
+  }
+
+  /// Inserts or edits a hyperlink at the caret (F19.S3).
+  Future<void> insertHyperlink(BuildContext context) async {
+    if (!_host.isConnected) return;
+    _selection.ensureGlyphCaret();
+    final runId = _selection.defaultRunId();
+    if (runId == null) return;
+    final selected = selectedText.trim();
+    final result = await HyperlinkDialog.show(
+      context,
+      initialText: selected,
+      initialUrl: selected.startsWith('http') ? selected : 'https://',
+    );
+    if (result == null) return;
+    if (!context.mounted) return;
+    await _session.applyEngineStyle(
+      () => _host.engine!.insertHyperlinkAsync(
+        runId: runId,
+        offset: _selection.caretOffset,
+        url: result.url,
+        text: result.text,
+        tooltip: result.tooltip,
+      ),
+      'Hyperlink inserted',
+      full: true,
+    );
+    notifyListeners();
+  }
+
+  /// Inserts a plain-text or checkbox form field at the caret (F26.S1).
+  Future<void> insertFormField(BuildContext context) async {
+    if (!_host.isConnected) return;
+    _selection.ensureGlyphCaret();
+    final runId = _selection.defaultRunId();
+    if (runId == null) return;
+    final result = await FormFieldDialog.show(context);
+    if (result == null) return;
+    if (!context.mounted) return;
+    await _session.applyEngineStyle(
+      () => _host.engine!.insertFormFieldAsync(
+        runId: runId,
+        offset: _selection.caretOffset,
+        kind: result.kindWire,
+        name: result.name,
+        initialValue: result.initialValueWire,
+      ),
+      'Form field inserted',
+      full: true,
+    );
+    notifyListeners();
+  }
+
+  /// Updates / toggles an existing form field value (F26.S1).
+  Future<void> setFormFieldValue({
+    required String runId,
+    required String value,
+  }) async {
+    if (!_host.isConnected) return;
+    await _session.applyEngineStyle(
+      () => _host.engine!.setFormFieldValueAsync(runId: runId, value: value),
+      'Form field updated',
+      full: true,
+    );
+    notifyListeners();
+  }
+
+  /// Active mail-merge CSV data source (F26.S2).
+  MailMergeDataSource? get mailMergeData => _mailMergeData;
+
+  /// Whether a mail-merge data source is loaded (F26.S2).
+  bool get hasMailMergeData =>
+      _mailMergeData != null && _mailMergeData!.rows.isNotEmpty;
+
+  /// Opens Start Mail Merge and loads a CSV data source (F26.S2).
+  Future<void> startMailMerge(BuildContext context) async {
+    final data = await StartMailMergeDialog.show(context);
+    if (data == null) return;
+    _mailMergeData = data;
+    _mailMergeRowIndex = 0;
+    _session.setStatusText(
+      'Mail merge: ${data.rows.length} row(s), ${data.headers.length} field(s)',
+    );
+    notifyListeners();
+  }
+
+  /// Inserts a merge field at the caret (F26.S2).
+  Future<void> insertMergeField(BuildContext context) async {
+    if (!_host.isConnected) return;
+    _selection.ensureGlyphCaret();
+    final runId = _selection.defaultRunId();
+    if (runId == null) return;
+    final name = await InsertMergeFieldDialog.show(
+      context,
+      headers: _mailMergeData?.headers ?? const [],
+    );
+    if (name == null || name.trim().isEmpty) return;
+    if (!context.mounted) return;
+    await _session.applyEngineStyle(
+      () => _host.engine!.insertMergeFieldAsync(
+        runId: runId,
+        offset: _selection.caretOffset,
+        name: name.trim(),
+      ),
+      'Merge field inserted',
+      full: true,
+    );
+    notifyListeners();
+  }
+
+  /// In-app plugin registry (capability-gated host mirror of F26.S3).
+  PluginRegistry get pluginRegistry => _pluginRegistry;
+
+  /// Flutter AI facade (production providers + hybrid routing; F28.S1).
+  AiClient get aiClient => _aiClient;
+
+  /// Opens AI routing / provider settings (F28.S1).
+  Future<void> openAiSettings(BuildContext context) async {
+    await AiSettingsDialog.show(
+      context,
+      client: _aiClient,
+      onChanged: notifyListeners,
+    );
+    notifyListeners();
+  }
+
+  /// Opens document chat with RAG citations (F28.S3).
+  Future<void> openDocumentChat(BuildContext context) async {
+    await _host.ensureLayoutReady();
+    if (!context.mounted) return;
+    await AiChatDialog.show(
+      context,
+      client: _aiClient,
+      documentText: documentText,
+      onCitationTap: (paragraphId) {
+        _session.setStatusText('Citation: $paragraphId');
+        notifyListeners();
+      },
+    );
+    notifyListeners();
+  }
+
+  /// Generate outline/minutes/report into a new document (F28.S4).
+  Future<void> openContentGenerate(BuildContext context) async {
+    final generated = await AiGenerateDialog.show(
+      context,
+      client: _aiClient,
+    );
+    if (generated == null) return;
+    await openGeneratedDocument(generated);
+  }
+
+  /// Smart edit: suggest headings + TOC draft; apply only on Accept (F28.S6).
+  Future<void> openSmartEdit(BuildContext context) async {
+    await _host.ensureLayoutReady();
+    if (!context.mounted) return;
+    final plan = await AiSmartEditDialog.show(
+      context,
+      client: _aiClient,
+      documentText: documentText,
+    );
+    if (plan == null) return;
+    await applySmartEditPlan(plan);
+  }
+
+  final List<String> _smartEditAppliedStyles = [];
+
+  /// Styles applied by the last smart-edit accept (tests / status).
+  List<String> get smartEditAppliedStyles =>
+      List.unmodifiable(_smartEditAppliedStyles);
+
+  /// Apply an accepted smart-edit plan (headings then optional TOC).
+  Future<void> applySmartEditPlan(AiSmartEditPlan plan) async {
+    if (!_host.isConnected || _host.engine == null) return;
+    _smartEditAppliedStyles.clear();
+    for (final heading in plan.headings) {
+      await _session.applyEngineStyle(
+        () => _host.engine!.applyParagraphStyleAsync(
+          styleName: heading.styleName,
+          caretRunId: _selection.defaultRunId(),
+        ),
+        '${heading.styleName} applied',
+      );
+      _formatting.setActiveParagraphStyle(heading.styleName);
+      _smartEditAppliedStyles.add(heading.styleName);
+    }
+    if (plan.insertToc) {
+      final engine = _host.engine!;
+      if (engine is MockDocumentEngine) {
+        engine.setMockOutlineHeadingsForTest([
+          for (final h in plan.headings) (text: h.previewText, page: 1),
+        ]);
+      }
+      final runId = _selection.defaultRunId();
+      await _session.applyEngineStyle(
+        () => engine.insertTableOfContentsAsync(caretRunId: runId),
+        'Table of contents inserted',
+        full: true,
+      );
+    }
+    final notes = plan.autoFormatNotes.isEmpty
+        ? ''
+        : ' · ${plan.autoFormatNotes.length} format note(s)';
+    _session.setStatusText(
+      'Smart edit applied: ${_smartEditAppliedStyles.length} heading(s)'
+      '${plan.insertToc ? ' + TOC' : ''}$notes',
+    );
+    notifyListeners();
+  }
+
+  /// Suggest a table / diagram / timeline and insert on Accept (F28.S5).
+  Future<void> openVisualAssist(BuildContext context) async {
+    final topic = selectedText.trim().isNotEmpty
+        ? selectedText.trim()
+        : documentText.trim().isNotEmpty
+            ? documentText.trim().split('\n').first
+            : 'document overview';
+    final suggestion = await AiVisualDialog.show(
+      context,
+      client: _aiClient,
+      initialTopic: topic,
+    );
+    if (suggestion == null) return;
+    await applyVisualSuggestion(suggestion);
+  }
+
+  /// Insert the suggested visual as a document block (table / SmartArt / timeline table).
+  Future<void> applyVisualSuggestion(AiVisualSuggestion suggestion) async {
+    if (!_host.isConnected) return;
+    switch (suggestion.kind.type) {
+      case AiVisualKindType.table:
+        await insertTable(
+          rows: suggestion.kind.rows,
+          cols: suggestion.kind.cols,
+        );
+        _session.setStatusText(
+          'Inserted table: ${suggestion.title} '
+          '(${suggestion.kind.rows}×${suggestion.kind.cols})',
+        );
+      case AiVisualKindType.diagram:
+        await insertSmartArt(diagramType: suggestion.kind.diagramType);
+        _session.setStatusText('Inserted diagram: ${suggestion.title}');
+      case AiVisualKindType.timeline:
+        final cols = suggestion.kind.stages.length.clamp(2, 8);
+        await insertTable(rows: 1, cols: cols);
+        _session.setStatusText(
+          'Inserted timeline: ${suggestion.title} '
+          '(${suggestion.kind.stages.join(' → ')})',
+        );
+    }
+    notifyListeners();
+  }
+
+  /// Replace the session with [generated] content (new untitled document).
+  Future<void> openGeneratedDocument(AiGeneratedDocument generated) async {
+    if (!_host.isConnected || _host.engine == null) return;
+    await newDocument();
+    final text = generated.plainText;
+    if (text.isEmpty) {
+      _session.setStatusText('Generated empty ${generated.kind.label}');
+      notifyListeners();
+      return;
+    }
+    final runId = _selection.defaultRunId() ??
+        (_host.engine is MockDocumentEngine
+            ? (_host.engine as MockDocumentEngine).defaultRunId
+            : null);
+    if (runId == null) {
+      _session.setStatusText('Generate failed: no caret run');
+      notifyListeners();
+      return;
+    }
+    final ok = await applyAiTextSuggestion(
+      runId: runId,
+      start: 0,
+      end: 0,
+      text: text,
+    );
+    _session.setStatusText(
+      ok
+          ? 'New ${generated.kind.label.toLowerCase()}: ${generated.topic}'
+          : 'Generate apply failed',
+    );
+    notifyListeners();
+  }
+
+  /// Rewrite the current selection via AI and apply on Accept (F28.S2).
+  Future<void> rewriteSelection(
+    BuildContext context, {
+    AiRewriteTone tone = AiRewriteTone.formal,
+  }) async {
+    if (!_host.isConnected || _host.engine == null) return;
+    if (!_selection.hasGlyphSelection) {
+      _session.setStatusText('Select text to rewrite');
+      notifyListeners();
+      return;
+    }
+    final original = selectedText;
+    if (original.isEmpty) {
+      _session.setStatusText('Select text to rewrite');
+      notifyListeners();
+      return;
+    }
+    final range = _selection.selection;
+    if (range == null) return;
+    final (start, end) = range.normalized();
+    if (start.runId != end.runId) {
+      _session.setStatusText('Rewrite supports a single-run selection');
+      notifyListeners();
+      return;
+    }
+
+    _session.setStatusText('Rewriting…');
+    notifyListeners();
+    late final String suggestion;
+    try {
+      suggestion = await _aiClient.rewrite(
+        AiDocumentContext(
+          selectionText: original,
+          pageCount: 1,
+          totalTokenEstimate: original.length,
+        ),
+        tone,
+      );
+    } catch (e) {
+      _session.setStatusText('Rewrite failed: $e');
+      notifyListeners();
+      return;
+    }
+
+    if (!context.mounted) return;
+    final accepted = await AiRewriteDialog.show(
+      context,
+      original: original,
+      suggestion: suggestion,
+      tone: tone,
+    );
+    if (accepted == null) {
+      _session.setStatusText('Rewrite discarded');
+      notifyListeners();
+      return;
+    }
+
+    final lo = start.offset < end.offset ? start.offset : end.offset;
+    final hi = start.offset < end.offset ? end.offset : start.offset;
+    final ok = await applyAiTextSuggestion(
+      runId: start.runId,
+      start: lo,
+      end: hi,
+      text: accepted,
+    );
+    _session.setStatusText(ok ? 'Rewrite applied' : 'Rewrite apply failed');
+    notifyListeners();
+  }
+
+  /// Apply an AI suggestion as a single-run replace (DeleteRange + InsertText).
+  Future<bool> applyAiTextSuggestion({
+    required String runId,
+    required int start,
+    required int end,
+    required String text,
+  }) async {
+    if (_host.engine == null) return false;
+    final edit = _host.performNativeEdit(
+      () => _host.engine!.replaceRangeAsync(runId, start, end, text),
+      dirtyPage: _selection.caretPage,
+      full: true,
+    );
+    if (!await edit) return false;
+    await _host.ensureLayoutReady();
+    _selection.setCaret(runId, start + text.length, page: _selection.caretPage);
+    _selection.syncCaretGeometry();
+    _session.markDocumentDirty();
+    notifyListeners();
+    return true;
+  }
+
+  /// Opens the Plugins manager dialog (F26.S3).
+  Future<void> managePlugins(BuildContext context) async {
+    await PluginsDialog.show(
+      context,
+      registry: _pluginRegistry,
+      onChanged: notifyListeners,
+    );
+    notifyListeners();
+  }
+
+  /// Installs the sample edit plugin with optional document.edit grant (F26.S3).
+  void installSamplePlugin({bool grantEdit = true}) {
+    _pluginRegistry.installSampleEditPlugin(grantEdit: grantEdit);
+    _session.setStatusText(
+      grantEdit
+          ? 'Sample plugin installed (edit granted)'
+          : 'Sample plugin installed (read-only)',
+    );
+    notifyListeners();
+  }
+
+  /// Invokes an installed plugin; may insert text when document.edit is granted.
+  Future<void> invokePlugin(String pluginId) async {
+    if (!_host.isConnected) return;
+    final result = _pluginRegistry.invoke(
+      pluginId,
+      documentText: '',
+    );
+    if (result.startsWith('ERR:')) {
+      _session.setStatusText(result);
+      notifyListeners();
+      return;
+    }
+    _selection.ensureGlyphCaret();
+    final runId = _selection.defaultRunId();
+    if (runId == null) {
+      _session.setStatusText('Plugin ran but no caret run available');
+      notifyListeners();
+      return;
+    }
+    await _session.applyEngineStyle(
+      () => _host.engine!.tryInsertTextAsync(
+        runId,
+        _selection.caretOffset,
+        result,
+      ),
+      'Plugin inserted text',
+      full: true,
+    );
+    notifyListeners();
+  }
+
+  /// Applies the current (or [rowIndex]) mail-merge row to the document (F26.S2).
+  Future<void> finishMailMerge({int? rowIndex}) async {
+    if (!_host.isConnected) return;
+    final data = _mailMergeData;
+    if (data == null || data.rows.isEmpty) {
+      _session.setStatusText('Load a CSV via Start Mail Merge first');
+      notifyListeners();
+      return;
+    }
+    final index = rowIndex ?? _mailMergeRowIndex;
+    final row = data.rowAt(index);
+    if (row == null) {
+      _session.setStatusText('Mail merge row out of range');
+      notifyListeners();
+      return;
+    }
+    await _session.applyEngineStyle(
+      () => _host.engine!.applyMailMergeRowAsync(values: row),
+      'Mail merge applied (row ${index + 1}/${data.rows.length})',
       full: true,
     );
     notifyListeners();
@@ -2053,6 +3051,7 @@ class EditorController extends ChangeNotifier {
 
   @override
   void dispose() {
+    unawaited(_tts.stop());
     _session.disposeSession();
     if (kIsWeb) {
       webGlyphFocusNode.dispose();

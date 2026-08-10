@@ -35,12 +35,25 @@ impl WasmSession {
     }
 
     pub fn open_bytes_and_wait(&self, data: Vec<u8>) -> Result<(), OpenError> {
+        self.open_bytes_with_path_and_password_and_wait(data, None, None)
+    }
+
+    pub fn open_bytes_with_path_and_password_and_wait(
+        &self,
+        data: Vec<u8>,
+        path_hint: Option<String>,
+        password: Option<String>,
+    ) -> Result<(), OpenError> {
         let session = self.session().expect("WasmSession not initialized");
         let request_id = session
-            .open_bytes(data)
+            .open_bytes_with_path_and_password(data, path_hint, password)
             .ok_or(OpenError::EngineShutDown)?;
         match session.wait_for_response(request_id, Duration::from_secs(30)) {
-            WaitOutcome::Matched(_) => Ok(()),
+            WaitOutcome::Matched(event) => match event {
+                tw_core::BridgeEvent::DocumentOpened { .. } => Ok(()),
+                tw_core::BridgeEvent::Error { message, .. } => Err(OpenError::Failed(message)),
+                _ => Err(OpenError::Failed("unexpected open response".into())),
+            },
             WaitOutcome::Timeout => Err(OpenError::TimedOut),
         }
     }
@@ -84,6 +97,7 @@ impl Drop for WasmSession {
 pub enum OpenError {
     EngineShutDown,
     TimedOut,
+    Failed(String),
 }
 
 impl std::fmt::Display for OpenError {
@@ -91,6 +105,7 @@ impl std::fmt::Display for OpenError {
         match self {
             Self::EngineShutDown => f.write_str("engine shut down"),
             Self::TimedOut => f.write_str("open timed out"),
+            Self::Failed(message) => f.write_str(message),
         }
     }
 }

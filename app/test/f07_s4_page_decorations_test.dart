@@ -66,6 +66,11 @@ void main() {
         size: const Size(1400, 120),
       );
 
+      await tester.scrollUntilVisible(
+        find.byIcon(Icons.format_list_numbered),
+        120,
+        scrollable: find.byType(Scrollable).first,
+      );
       await tester.tap(find.byIcon(Icons.format_list_numbered));
       await settleEngineStyle(tester);
       expect(controller.lineNumbersEnabled, isTrue);

@@ -146,7 +146,33 @@ pub enum FieldType {
     CrossRef,
     /// Sum numeric cells above the current table cell (F09.S5).
     TableSumAbove,
+    /// Legacy Word form field — plain text (`FORMTEXT`) (F26.S1).
+    FormText,
+    /// Legacy Word form field — checkbox (`FORMCHECKBOX`) (F26.S1).
+    FormCheckbox,
+    /// Mail-merge field (`MERGEFIELD Name`) (F26.S2).
+    MergeField,
     Other(String),
+}
+
+/// Kind of interactive form field (F26.S1).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum FormFieldKind {
+    PlainText,
+    Checkbox,
+}
+
+/// Extra metadata for form fields (F26.S1).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct FormFieldMeta {
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Checkbox checked state (`None` for plain-text fields).
+    #[serde(default)]
+    pub checked: Option<bool>,
+    /// Default / current plain-text value.
+    #[serde(default)]
+    pub default_text: Option<String>,
 }
 
 /// Field run content with optional instruction and cached display text.
@@ -157,6 +183,35 @@ pub struct FieldData {
     pub instruction: Option<String>,
     #[serde(default)]
     pub display_text: Option<String>,
+    /// Present for [`FieldType::FormText`] / [`FieldType::FormCheckbox`] (F26.S1).
+    #[serde(default)]
+    pub form: Option<FormFieldMeta>,
+    /// Merge-field column name for [`FieldType::MergeField`] (F26.S2).
+    #[serde(default)]
+    pub merge_name: Option<String>,
+}
+
+/// Word-style unbound merge-field placeholder (F26.S2).
+pub fn merge_field_placeholder(name: &str) -> String {
+    format!("«{name}»")
+}
+
+/// Checkbox glyph used in layout / DOCX display text (F26.S1).
+pub fn form_checkbox_display(checked: bool) -> String {
+    if checked {
+        "☑".to_string()
+    } else {
+        "☐".to_string()
+    }
+}
+
+/// Parse checkbox display text into a checked flag (F26.S1).
+pub fn form_checkbox_checked_from_display(text: &str) -> bool {
+    let t = text.trim();
+    matches!(
+        t,
+        "☑" | "✓" | "✔" | "X" | "x" | "1" | "true" | "TRUE" | "■" | "●"
+    )
 }
 
 /// Inline image reference inside a run (`w:drawing` / `w:pict` in `w:r`).

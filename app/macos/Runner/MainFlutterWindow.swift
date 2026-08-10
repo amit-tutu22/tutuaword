@@ -1,5 +1,6 @@
 import Cocoa
 import FlutterMacOS
+import PDFKit
 
 class MainFlutterWindow: NSWindow {
   override func awakeFromNib() {
@@ -12,6 +13,12 @@ class MainFlutterWindow: NSWindow {
 
     MacosFileAccessPlugin.register(
       with: flutterViewController.registrar(forPlugin: "MacosFileAccessPlugin")
+    )
+    MacosTtsPlugin.register(
+      with: flutterViewController.registrar(forPlugin: "MacosTtsPlugin")
+    )
+    MacosPrintPlugin.register(
+      with: flutterViewController.registrar(forPlugin: "MacosPrintPlugin")
     )
 
     self.styleMask.insert(.fullSizeContentView)
@@ -133,5 +140,128 @@ class MacosFileAccessPlugin: NSObject, FlutterPlugin {
     }
     accessedUrls.removeAll()
     result(nil)
+  }
+}
+
+/// Platform TTS for Read Aloud (F21.S5) using NSSpeechSynthesizer.
+class MacosTtsPlugin: NSObject, FlutterPlugin, NSSpeechSynthesizerDelegate {
+  private let synthesizer = NSSpeechSynthesizer()
+  private var speakResult: FlutterResult?
+
+  static func register(with registrar: FlutterPluginRegistrar) {
+    let channel = FlutterMethodChannel(
+      name: "tutuaword/tts",
+      binaryMessenger: registrar.messenger
+    )
+    let instance = MacosTtsPlugin()
+    instance.synthesizer.delegate = instance
+    registrar.addMethodCallDelegate(instance, channel: channel)
+  }
+
+  func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    switch call.method {
+    case "speak":
+      guard let args = call.arguments as? [String: Any],
+            let text = args["text"] as? String else {
+        result(FlutterError(code: "bad_args", message: "text required", details: nil))
+        return
+      }
+      if synthesizer.isSpeaking {
+        synthesizer.stopSpeaking()
+      }
+      speakResult = result
+      if !synthesizer.startSpeaking(text) {
+        speakResult = nil
+        result(FlutterError(code: "speak_failed", message: "NSSpeechSynthesizer failed", details: nil))
+      }
+      // Result completed in speechSynthesizer(_:didFinishSpeaking:).
+    case "stop":
+      synthesizer.stopSpeaking()
+      if let pending = speakResult {
+        speakResult = nil
+        pending(nil)
+      }
+      result(nil)
+    case "isSpeaking":
+      result(synthesizer.isSpeaking)
+    default:
+      result(FlutterMethodNotImplemented)
+    }
+  }
+
+  func speechSynthesizer(_ sender: NSSpeechSynthesizer, didFinishSpeaking finishedSpeaking: Bool) {
+    if let pending = speakResult {
+      speakResult = nil
+      pending(nil)
+    }
+  }
+}
+
+/// OS print dialog for PDF bytes (F25.S1) via PDFKit + NSPrintOperation.
+class MacosPrintPlugin: NSObject, FlutterPlugin {
+  static func register(with registrar: FlutterPluginRegistrar) {
+    let channel = FlutterMethodChannel(
+      name: "tutuaword/print",
+      binaryMessenger: registrar.messenger
+    )
+    let instance = MacosPrintPlugin()
+    registrar.addMethodCallDelegate(instance, channel: channel)
+  }
+
+  func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    switch call.method {
+    case "presentPrintDialog":
+      presentPrintDialog(call, result: result)
+    default:
+      result(FlutterMethodNotImplemented)
+    }
+  }
+
+  private func presentPrintDialog(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    guard let args = call.arguments as? [String: Any],
+          let pdfBase64 = args["pdfBase64"] as? String,
+          let data = Data(base64Encoded: pdfBase64),
+          let document = PDFDocument(data: data) else {
+      result(FlutterError(code: "bad_args", message: "pdfBase64 required", details: nil))
+      return
+    }
+
+    let jobName = (args["jobName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let attributes = args["attributes"] as? [String: Any] ?? [:]
+    let printInfo = NSPrintInfo.shared.copy() as! NSPrintInfo
+    printInfo.horizontalPagination = .fit
+    printInfo.verticalPagination = .automatic
+    printInfo.isHorizontallyCentered = true
+    printInfo.isVerticallyCentered = true
+
+    // F25.S4 — platform duplex attribute when the OS print path supports it.
+    if let duplex = attributes["duplex"] as? String {
+      switch duplex {
+      case "longEdge":
+        printInfo.duplex = .longEdge
+      case "shortEdge":
+        printInfo.duplex = .shortEdge
+      default:
+        printInfo.duplex = .none
+      }
+    }
+
+    guard let operation = document.printOperation(
+      for: printInfo,
+      scalingMode: .pageSize,
+      autoRotate: true
+    ) else {
+      result("unsupported")
+      return
+    }
+    if let jobName, !jobName.isEmpty {
+      operation.jobTitle = jobName
+    }
+
+    // Run modal print panel on the main thread.
+    DispatchQueue.main.async {
+      let accepted = operation.run()
+      result(accepted ? "presented" : "cancelled")
+    }
   }
 }

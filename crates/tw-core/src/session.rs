@@ -17,6 +17,7 @@ use tw_edit::{
     insert_comment_command_for,
     insert_table_of_contents_command_for,
     insert_bibliography_command_for, insert_bookmark_command_for,
+    insert_hyperlink_command_for,
     insert_cross_reference_command_for, insert_index_command_for,
     insert_citation_command_for, add_bibliography_source_command,
     accept_revision_at_caret, reject_revision_at_caret,
@@ -259,7 +260,20 @@ impl Session {
     }
 
     pub fn open_bytes_with_path(&self, data: Vec<u8>, path_hint: Option<String>) -> Option<u64> {
-        self.send_command(BridgeCommand::OpenDocument { data, path_hint })
+        self.open_bytes_with_path_and_password(data, path_hint, None)
+    }
+
+    pub fn open_bytes_with_path_and_password(
+        &self,
+        data: Vec<u8>,
+        path_hint: Option<String>,
+        password: Option<String>,
+    ) -> Option<u64> {
+        self.send_command(BridgeCommand::OpenDocument {
+            data,
+            path_hint,
+            password,
+        })
     }
 
     pub fn save(&self) -> Option<u64> {
@@ -280,6 +294,11 @@ impl Session {
 
     pub fn set_read_only(&self, enabled: bool) -> Option<u64> {
         self.send_command(BridgeCommand::SetReadOnly { enabled })
+    }
+
+    /// Set or clear the password used when saving encrypted DOCX (F22.S2).
+    pub fn set_encryption_password(&self, password: Option<String>) -> Option<u64> {
+        self.send_command(BridgeCommand::SetEncryptionPassword { password })
     }
 
     pub fn compare_with_text(&self, other: &str) -> tw_model::DocumentCompareSummary {
@@ -323,6 +342,59 @@ impl Session {
 
     pub fn reject_all_revisions(&self) -> Option<u64> {
         self.apply(Command::RejectAllRevisions)
+    }
+
+    /// Document Inspector findings JSON (F22.S3).
+    pub fn document_inspect_json(&self) -> Option<String> {
+        let findings = tw_model::inspect_document(self.document().as_ref());
+        serde_json::to_string(&findings).ok()
+    }
+
+    /// Remove selected Document Inspector categories (F22.S3).
+    pub fn remove_inspect_findings(
+        &self,
+        comments: bool,
+        metadata: bool,
+        hidden_text: bool,
+    ) -> Option<u64> {
+        self.apply(Command::RemoveInspectFindings {
+            comments,
+            metadata,
+            hidden_text,
+        })
+    }
+
+    /// JSON list of digital signatures (F22.S4).
+    pub fn digital_signatures_json(&self) -> Option<String> {
+        serde_json::to_string(&self.document().signatures).ok()
+    }
+
+    /// JSON verification results for all signatures (F22.S4).
+    pub fn verify_signatures_json(&self) -> Option<String> {
+        let results = tw_model::verify_all_signatures(self.document().as_ref());
+        serde_json::to_string(&results).ok()
+    }
+
+    /// Sign the document with signer identity and attach the signature (F22.S4).
+    pub fn sign_document(
+        &self,
+        name: impl Into<String>,
+        email: impl Into<String>,
+        organization: Option<String>,
+    ) -> Result<u64, String> {
+        let signer = tw_model::SignerInfo {
+            name: name.into(),
+            email: email.into(),
+            organization,
+        };
+        let signature = tw_model::sign_document(self.document().as_ref(), signer)?;
+        self.apply(Command::AddDigitalSignature { signature })
+            .ok_or_else(|| "failed to apply signature".into())
+    }
+
+    /// Remove all digital signatures (F22.S4).
+    pub fn clear_digital_signatures(&self) -> Option<u64> {
+        self.apply(Command::ClearDigitalSignatures)
     }
 
     pub fn accept_revision_at(&self, caret_run_id: Option<NodeId>) -> Option<u64> {
@@ -897,6 +969,25 @@ impl Session {
         self.apply(Command::InsertImageCaption { image_id })
     }
 
+    pub fn set_image_alt_text(
+        &self,
+        image_id: tw_model::NodeId,
+        alt_text: Option<String>,
+    ) -> Option<u64> {
+        self.apply(Command::SetImageAltText {
+            image_id,
+            alt_text,
+        })
+    }
+
+    /// Alternative text for [image_id], or empty string when unset (F21.S3).
+    pub fn image_alt_text(&self, image_id: tw_model::NodeId) -> Option<String> {
+        let doc = self.document();
+        let (si, bi) = doc.find_block_location(image_id)?;
+        let image = doc.sections.get(si)?.blocks.get(bi)?.image()?;
+        Some(image.alt_text.clone().unwrap_or_default())
+    }
+
     pub fn compress_image(&self, image_id: tw_model::NodeId, quality: u8) -> Option<u64> {
         self.apply(Command::CompressImage { image_id, quality })
     }
@@ -995,6 +1086,54 @@ impl Session {
         self.apply(insert_field_command_for(run_id, offset, field_type))
     }
 
+    pub fn insert_form_field_at(
+        &self,
+        run_id: NodeId,
+        offset: usize,
+        kind: tw_model::FormFieldKind,
+        name: Option<String>,
+        initial_value: Option<String>,
+    ) -> Option<u64> {
+        self.apply(Command::InsertFormField {
+            run_id,
+            offset,
+            kind,
+            name,
+            initial_value,
+        })
+    }
+
+    pub fn set_form_field_value_at(
+        &self,
+        run_id: NodeId,
+        value: impl Into<String>,
+    ) -> Option<u64> {
+        self.apply(Command::SetFormFieldValue {
+            run_id,
+            value: value.into(),
+        })
+    }
+
+    pub fn insert_merge_field_at(
+        &self,
+        run_id: NodeId,
+        offset: usize,
+        name: impl Into<String>,
+    ) -> Option<u64> {
+        self.apply(Command::InsertMergeField {
+            run_id,
+            offset,
+            name: name.into(),
+        })
+    }
+
+    pub fn apply_mail_merge_row_at(
+        &self,
+        values: std::collections::BTreeMap<String, String>,
+    ) -> Option<u64> {
+        self.apply(Command::ApplyMailMergeRow { values })
+    }
+
     pub fn insert_footnote_at(&self, run_id: NodeId, offset: usize) -> Option<u64> {
         self.apply(insert_footnote_command_for(run_id, offset))
     }
@@ -1055,6 +1194,23 @@ impl Session {
         self.apply(insert_bookmark_command_for(run_id, offset, name.to_string()))
     }
 
+    pub fn insert_hyperlink_at(
+        &self,
+        run_id: NodeId,
+        offset: usize,
+        url: &str,
+        text: &str,
+        tooltip: Option<&str>,
+    ) -> Option<u64> {
+        self.apply(insert_hyperlink_command_for(
+            run_id,
+            offset,
+            url.to_string(),
+            text.to_string(),
+            tooltip.map(str::to_string),
+        ))
+    }
+
     pub fn insert_cross_reference_at(
         &self,
         run_id: NodeId,
@@ -1090,6 +1246,17 @@ impl Session {
 
     pub fn export_pdf(&self) -> Option<u64> {
         self.send_command(BridgeCommand::ExportPdf)
+    }
+
+    /// Export a print-ready (VisualMatch with structural fallback) PDF (F25.S1–S3).
+    ///
+    /// Pass `selection` to print only that body range (F25.S3).
+    pub fn export_pdf_for_print(
+        &self,
+        layout: tw_pdf::PrintLayoutOptions,
+        selection: Option<tw_edit::DocRange>,
+    ) -> Option<u64> {
+        self.send_command(BridgeCommand::ExportPdfForPrint { layout, selection })
     }
 
     pub fn page_count(&self) -> u32 {
@@ -1173,6 +1340,43 @@ impl Session {
             })
             .collect::<Vec<_>>();
         serde_json::to_string(&entries).ok()
+    }
+
+    /// JSON array of bookmarks: `{ name, run_id, paragraph_id, page }` (F19.S4).
+    pub fn bookmarks_json(&self) -> Option<String> {
+        #[derive(serde::Serialize)]
+        struct BookmarkEntryResponse {
+            name: String,
+            run_id: tw_model::NodeId,
+            paragraph_id: tw_model::NodeId,
+            page: u32,
+        }
+
+        let entries = self
+            .layout_cache
+            .read()
+            .bookmarks_with_pages()
+            .into_iter()
+            .map(|(entry, page)| BookmarkEntryResponse {
+                name: entry.name,
+                run_id: entry.run_id,
+                paragraph_id: entry.paragraph_id,
+                page,
+            })
+            .collect::<Vec<_>>();
+        serde_json::to_string(&entries).ok()
+    }
+
+    /// JSON semantic accessibility tree (F21.S1).
+    pub fn semantic_tree_json(&self) -> Option<String> {
+        let tree = tw_model::semantic_document_tree(self.document().as_ref());
+        serde_json::to_string(&tree).ok()
+    }
+
+    /// JSON accessibility checker issues (F21.S4).
+    pub fn accessibility_issues_json(&self) -> Option<String> {
+        let issues = tw_model::check_accessibility(self.document().as_ref());
+        serde_json::to_string(&issues).ok()
     }
 
     pub fn layout_page_count(&self) -> u32 {

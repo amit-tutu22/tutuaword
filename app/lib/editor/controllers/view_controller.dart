@@ -8,6 +8,8 @@ class ViewController extends ChangeNotifier {
   bool _showRuler = false;
   bool _showNavigationPane = false;
   bool _showStyleInspector = false;
+  bool _showAccessibilityChecker = false;
+  bool _preferOutlineTab = false;
   String _statusSuffix = '';
   int? _scrollRequestPage;
 
@@ -17,6 +19,7 @@ class ViewController extends ChangeNotifier {
   bool get showRuler => _showRuler;
   bool get showNavigationPane => _showNavigationPane;
   bool get showStyleInspector => _showStyleInspector;
+  bool get showAccessibilityChecker => _showAccessibilityChecker;
   String get statusSuffix => _statusSuffix;
   int? get scrollRequestPage => _scrollRequestPage;
 
@@ -59,8 +62,32 @@ class ViewController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Open the navigation pane on the Outline tab (F19.S2).
+  void showNavigationOutline() {
+    _showNavigationPane = true;
+    _preferOutlineTab = true;
+    notifyListeners();
+  }
+
+  bool takePreferOutlineTab() {
+    final prefer = _preferOutlineTab;
+    _preferOutlineTab = false;
+    return prefer;
+  }
+
   void toggleStyleInspector() {
     _showStyleInspector = !_showStyleInspector;
+    notifyListeners();
+  }
+
+  void showAccessibilityCheckerPane() {
+    _showAccessibilityChecker = true;
+    notifyListeners();
+  }
+
+  void hideAccessibilityCheckerPane() {
+    if (!_showAccessibilityChecker) return;
+    _showAccessibilityChecker = false;
     notifyListeners();
   }
 

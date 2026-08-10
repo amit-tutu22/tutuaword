@@ -11,23 +11,39 @@ class EditorMenuBar extends StatelessWidget {
     super.key,
     required this.controller,
     required this.onNew,
+    required this.onNewFromTemplate,
     required this.onOpen,
     required this.onOpenRecent,
     required this.onSave,
     required this.onSaveAs,
+    required this.onSaveAsTemplate,
+    required this.onPrint,
     required this.onShowProperties,
     required this.onShowPasteSpecial,
+    required this.onShowGoTo,
+    required this.onProtectWithPassword,
+    required this.onRemovePassword,
+    required this.onInspectDocument,
+    required this.onDigitalSignatures,
     required this.child,
   });
 
   final EditorController controller;
   final VoidCallback onNew;
+  final VoidCallback onNewFromTemplate;
   final VoidCallback onOpen;
   final void Function(String path) onOpenRecent;
   final VoidCallback onSave;
   final void Function(String extension) onSaveAs;
+  final VoidCallback onSaveAsTemplate;
+  final VoidCallback onPrint;
   final VoidCallback onShowProperties;
   final VoidCallback onShowPasteSpecial;
+  final VoidCallback onShowGoTo;
+  final VoidCallback onProtectWithPassword;
+  final VoidCallback onRemovePassword;
+  final VoidCallback onInspectDocument;
+  final VoidCallback onDigitalSignatures;
   final Widget child;
 
   static const _appName = 'tutuaword';
@@ -114,6 +130,10 @@ class EditorMenuBar extends StatelessWidget {
           onSelected: onNew,
         ),
         PlatformMenuItem(
+          label: 'New from Template…',
+          onSelected: onNewFromTemplate,
+        ),
+        PlatformMenuItem(
           label: 'Open…',
           shortcut: const SingleActivator(LogicalKeyboardKey.keyO, meta: true),
           onSelected: onOpen,
@@ -134,8 +154,38 @@ class EditorMenuBar extends StatelessWidget {
           onSelected: onSave,
         ),
         PlatformMenuItem(
+          label: 'Save as Template…',
+          onSelected: onSaveAsTemplate,
+        ),
+        PlatformMenuItem(
+          label: 'Print…',
+          shortcut: const SingleActivator(LogicalKeyboardKey.keyP, meta: true),
+          onSelected: onPrint,
+        ),
+        PlatformMenuItem(
           label: 'Properties…',
           onSelected: onShowProperties,
+        ),
+        PlatformMenuItem(
+          label: 'Inspect Document…',
+          onSelected: onInspectDocument,
+        ),
+        PlatformMenuItem(
+          label: 'Digital Signatures…',
+          onSelected: onDigitalSignatures,
+        ),
+        PlatformMenuItemGroup(
+          members: [
+            PlatformMenuItem(
+              label: 'Protect with Password…',
+              onSelected: onProtectWithPassword,
+            ),
+            if (controller.encryptionPasswordSet)
+              PlatformMenuItem(
+                label: 'Remove Password',
+                onSelected: onRemovePassword,
+              ),
+          ],
         ),
         PlatformMenuItemGroup(
           members: [
@@ -247,6 +297,11 @@ class EditorMenuBar extends StatelessWidget {
               label: 'Find…',
               shortcut: const SingleActivator(LogicalKeyboardKey.keyF, meta: true),
               onSelected: controller.openFindPane,
+            ),
+            PlatformMenuItem(
+              label: 'Go To…',
+              shortcut: const SingleActivator(LogicalKeyboardKey.keyG, meta: true),
+              onSelected: onShowGoTo,
             ),
           ],
         ),

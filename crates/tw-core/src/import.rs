@@ -38,6 +38,10 @@ pub enum ImportError {
     Markdown(#[from] tw_markdown::MarkdownError),
     #[error("document is password-protected")]
     PasswordProtected,
+    #[error("incorrect password")]
+    IncorrectPassword,
+    #[error("document decryption is unsupported: {0}")]
+    DecryptUnsupported(String),
 }
 
 /// File extensions supported for import (Microsoft Word-compatible set).
@@ -74,6 +78,10 @@ pub fn detect_format(data: &[u8], path_hint: Option<&str>) -> DetectedFormat {
         return DetectedFormat::Rtf;
     }
     if data.starts_with(b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1") {
+        // Encrypted OOXML shares the OLE magic with legacy .doc — check first.
+        if tw_docx::is_password_protected(data).unwrap_or(false) {
+            return DetectedFormat::Docx;
+        }
         return DetectedFormat::LegacyDoc;
     }
 
@@ -159,6 +167,13 @@ mod tests {
     fn detects_legacy_doc() {
         let ole = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
         assert_eq!(detect_format(&ole, None), DetectedFormat::LegacyDoc);
+    }
+
+    #[test]
+    fn detects_encrypted_ole_ooxml_as_docx() {
+        let mut ole = b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1".to_vec();
+        ole.extend_from_slice(b"....EncryptionInfo....EncryptedPackage....");
+        assert_eq!(detect_format(&ole, Some("locked.docx")), DetectedFormat::Docx);
     }
 
     #[test]

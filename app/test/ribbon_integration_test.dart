@@ -279,7 +279,8 @@ void main() {
       final tooltip = find.byTooltip(kComingSoonTooltip);
       expect(tooltip, findsWidgets);
 
-      await tester.longPress(find.text('Office'));
+      // Theme gallery cards are wired; Page Borders remains a stub.
+      await tester.longPress(find.text('Page\nBorders'));
       await tester.pumpAndSettle();
       expect(find.text(kComingSoonTooltip), findsOneWidget);
     });

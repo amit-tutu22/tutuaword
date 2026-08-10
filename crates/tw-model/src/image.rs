@@ -257,6 +257,9 @@ pub struct ImageBlock {
     /// Caption paragraph linked to this image (F10.S4).
     #[serde(default)]
     pub caption_paragraph_id: Option<NodeId>,
+    /// Accessibility alternative text (`wp:docPr/@descr`) — F21.S3.
+    #[serde(default)]
+    pub alt_text: Option<String>,
 }
 
 impl ImageBlock {
@@ -278,6 +281,7 @@ impl ImageBlock {
             anchor: None,
             transform: ImageTransform::default(),
             caption_paragraph_id: None,
+            alt_text: None,
         }
     }
 
@@ -292,6 +296,7 @@ impl ImageBlock {
             anchor: None,
             transform: ImageTransform::default(),
             caption_paragraph_id: None,
+            alt_text: None,
         }
     }
 }

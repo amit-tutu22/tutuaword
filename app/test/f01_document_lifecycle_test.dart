@@ -475,7 +475,7 @@ void main() {
 
       await controller.openDocumentFromPath(path);
 
-      expect(controller.statusText, contains('Password-protected'));
+      expect(controller.statusText, contains('Password required'));
     });
   });
 }

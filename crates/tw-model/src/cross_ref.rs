@@ -1,10 +1,47 @@
-//! Bookmark targets and REF cross-reference helpers (F16.S4).
+//! Bookmark targets and REF cross-reference helpers (F16.S4 / F19.S4).
 
 use crate::nodes::{Block, RunContent};
 use crate::vocabulary::{BookmarkAnchor, FieldData, FieldType};
-use crate::Document;
+use crate::{Document, NodeId};
 
 pub const INDEX_TITLE: &str = "Index";
+
+/// One navigable bookmark for Go To (F19.S4).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct BookmarkNavEntry {
+    pub name: String,
+    pub run_id: NodeId,
+    pub paragraph_id: NodeId,
+}
+
+/// Walk the document and collect bookmarks in block order (deduplicated by name).
+pub fn document_bookmarks(doc: &Document) -> Vec<BookmarkNavEntry> {
+    let mut entries = Vec::new();
+    for section in &doc.sections {
+        for block in &section.blocks {
+            let Some(para) = block.paragraph() else {
+                continue;
+            };
+            for run in &para.runs {
+                let RunContent::Bookmark(anchor) = &run.content else {
+                    continue;
+                };
+                if entries
+                    .iter()
+                    .any(|e: &BookmarkNavEntry| e.name.eq_ignore_ascii_case(&anchor.name))
+                {
+                    continue;
+                }
+                entries.push(BookmarkNavEntry {
+                    name: anchor.name.clone(),
+                    run_id: run.id,
+                    paragraph_id: para.id,
+                });
+            }
+        }
+    }
+    entries
+}
 
 /// Visible text anchored by a bookmark (runs after the bookmark in the same paragraph).
 pub fn bookmark_anchor_text(doc: &Document, name: &str) -> Option<String> {
@@ -64,6 +101,8 @@ pub fn cross_ref_field_data(doc: &Document, bookmark_name: &str) -> Option<Field
         field_type: FieldType::CrossRef,
         instruction: Some(cross_ref_instruction(bookmark_name)),
         display_text: Some(display),
+        form: None,
+        merge_name: None,
     })
 }
 
@@ -135,6 +174,44 @@ pub fn bookmark_run(name: impl Into<String>, bookmark_id: i32) -> crate::Run {
             name: name.into(),
             bookmark_id: Some(bookmark_id),
         }),
+        revision: None,
+    }
+}
+
+/// Hyperlink run with Word-like blue underline styling (F19.S3).
+pub fn hyperlink_run(
+    url: impl Into<String>,
+    text: impl Into<String>,
+    tooltip: Option<String>,
+) -> crate::Run {
+    use crate::format::{CharFormat, Color, UnderlineStyle};
+    use crate::vocabulary::HyperlinkTarget;
+
+    let url = url.into();
+    let anchor = url
+        .strip_prefix('#')
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    crate::Run {
+        id: crate::NodeId::new(),
+        format: CharFormat {
+            color: Some(Color {
+                r: 0x05,
+                g: 0x63,
+                b: 0xC1,
+                a: 255,
+            }),
+            underline: Some(UnderlineStyle::Single),
+            ..Default::default()
+        },
+        content: RunContent::Hyperlink {
+            target: HyperlinkTarget {
+                url,
+                anchor,
+                tooltip,
+            },
+            text: text.into(),
+        },
         revision: None,
     }
 }

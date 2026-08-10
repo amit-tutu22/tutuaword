@@ -21,6 +21,7 @@ fn inline_image() -> ImageBlock {
         anchor: None,
         transform: ImageTransform::default(),
         caption_paragraph_id: None,
+        alt_text: None,
     }
 }
 

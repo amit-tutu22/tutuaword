@@ -572,6 +572,29 @@ pub fn insert_comment_command_for(
     }
 }
 
+/// Document Inspector remove selected categories (F22.S3).
+pub fn remove_inspect_findings_command(
+    comments: bool,
+    metadata: bool,
+    hidden_text: bool,
+) -> Command {
+    Command::RemoveInspectFindings {
+        comments,
+        metadata,
+        hidden_text,
+    }
+}
+
+/// Attach a digital signature (F22.S4).
+pub fn add_digital_signature_command(signature: tw_model::DigitalSignature) -> Command {
+    Command::AddDigitalSignature { signature }
+}
+
+/// Remove all digital signatures (F22.S4).
+pub fn clear_digital_signatures_command() -> Command {
+    Command::ClearDigitalSignatures
+}
+
 pub fn insert_table_of_contents_command_for(
     doc: &Document,
     caret_run_id: Option<NodeId>,
@@ -617,6 +640,22 @@ pub fn insert_bookmark_command_for(
         run_id,
         offset,
         name: name.into(),
+    }
+}
+
+pub fn insert_hyperlink_command_for(
+    run_id: NodeId,
+    offset: usize,
+    url: impl Into<String>,
+    text: impl Into<String>,
+    tooltip: Option<String>,
+) -> Command {
+    Command::InsertHyperlink {
+        run_id,
+        offset,
+        url: url.into(),
+        text: text.into(),
+        tooltip,
     }
 }
 

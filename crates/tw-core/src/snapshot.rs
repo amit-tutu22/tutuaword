@@ -276,13 +276,41 @@ pub fn snapshot_from_display_list(
 }
 
 pub fn document_plain_text(doc: &tw_model::Document) -> String {
-    doc.sections
-        .iter()
-        .flat_map(|s| s.blocks.iter())
-        .filter_map(|b| b.paragraph())
-        .map(|p| p.visible_text())
-        .collect::<Vec<_>>()
-        .join("\n")
+    let mut lines = Vec::new();
+    for section in &doc.sections {
+        for block in &section.blocks {
+            push_block_plain_text(block, &mut lines);
+        }
+        for hf in section
+            .headers
+            .values()
+            .chain(section.footers.values())
+        {
+            for block in &hf.blocks {
+                push_block_plain_text(block, &mut lines);
+            }
+            if let Some(text) = &hf.plain_text {
+                lines.push(text.clone());
+            }
+        }
+    }
+    lines.join("\n")
+}
+
+fn push_block_plain_text(block: &tw_model::Block, lines: &mut Vec<String>) {
+    match block {
+        tw_model::Block::Paragraph(p) => lines.push(p.visible_text()),
+        tw_model::Block::Table(table) => {
+            for row in &table.rows {
+                for cell in &row.cells {
+                    for cell_block in &cell.blocks {
+                        push_block_plain_text(cell_block, lines);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 pub fn document_properties_json(doc: &tw_model::Document, layout_page_count: u32) -> String {

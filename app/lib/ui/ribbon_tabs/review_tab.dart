@@ -26,6 +26,23 @@ class ReviewTab extends StatelessWidget {
                   label: 'Spelling &\nGrammar',
                   onPressed: () => controller.proofDocument(),
                 ),
+                RibbonLargeButton(
+                  key: const Key('check_accessibility'),
+                  icon: Icons.accessibility_new,
+                  label: 'Check\nAccessibility',
+                  onPressed: () => controller.checkAccessibility(),
+                ),
+                RibbonLargeButton(
+                  key: const Key('read_aloud'),
+                  icon: controller.isReadingAloud
+                      ? Icons.stop_circle_outlined
+                      : Icons.record_voice_over_outlined,
+                  label: controller.isReadingAloud ? 'Stop\nReading' : 'Read\nAloud',
+                  tooltip: controller.isReadingAloud
+                      ? 'Stop reading aloud'
+                      : 'Read selection aloud',
+                  onPressed: () => controller.toggleReadAloud(),
+                ),
                 RibbonLargeButton(icon: Icons.translate, label: 'Translate', onPressed: null),
                 RibbonLargeButton(icon: Icons.book_outlined, label: 'Thesaurus', onPressed: null),
               ],
@@ -83,6 +100,79 @@ class ReviewTab extends StatelessWidget {
                   onPressed: controller.gotoPreviousRevision,
                 ),
               ],
+            ),
+          ),
+          RibbonGroup(
+            label: 'AI',
+            child: Row(
+              children: [
+                Builder(
+                  builder: (context) => RibbonLargeButton(
+                    key: const Key('ai_rewrite'),
+                    icon: Icons.auto_fix_high_outlined,
+                    label: 'Rewrite',
+                    tooltip: 'Rewrite selection with AI',
+                    onPressed: () => controller.rewriteSelection(context),
+                  ),
+                ),
+                Builder(
+                  builder: (context) => RibbonLargeButton(
+                    key: const Key('ai_chat'),
+                    icon: Icons.chat_outlined,
+                    label: 'Ask AI',
+                    tooltip: 'Chat about this document',
+                    onPressed: () => controller.openDocumentChat(context),
+                  ),
+                ),
+                Builder(
+                  builder: (context) => RibbonLargeButton(
+                    key: const Key('ai_generate'),
+                    icon: Icons.note_add_outlined,
+                    label: 'Generate',
+                    tooltip: 'Generate outline, minutes, or report',
+                    onPressed: () => controller.openContentGenerate(context),
+                  ),
+                ),
+                Builder(
+                  builder: (context) => RibbonLargeButton(
+                    key: const Key('ai_visual'),
+                    icon: Icons.schema_outlined,
+                    label: 'Visual',
+                    tooltip: 'Suggest table, diagram, or timeline',
+                    onPressed: () => controller.openVisualAssist(context),
+                  ),
+                ),
+                Builder(
+                  builder: (context) => RibbonLargeButton(
+                    key: const Key('ai_smart_edit'),
+                    icon: Icons.tips_and_updates_outlined,
+                    label: 'Smart\nEdit',
+                    tooltip: 'Suggest headings and TOC draft',
+                    onPressed: () => controller.openSmartEdit(context),
+                  ),
+                ),
+                Builder(
+                  builder: (context) => RibbonLargeButton(
+                    key: const Key('ai_settings'),
+                    icon: Icons.auto_awesome_outlined,
+                    label: 'AI\nSettings',
+                    tooltip: 'AI routing mode and providers',
+                    onPressed: () => controller.openAiSettings(context),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          RibbonGroup(
+            label: 'Add-ins',
+            child: Builder(
+              builder: (context) => RibbonLargeButton(
+                key: const Key('manage_plugins'),
+                icon: Icons.extension_outlined,
+                label: 'Plugins',
+                tooltip: 'Manage WASM plugins',
+                onPressed: () => controller.managePlugins(context),
+              ),
             ),
           ),
           RibbonGroup(

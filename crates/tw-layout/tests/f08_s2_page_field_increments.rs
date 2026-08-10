@@ -19,6 +19,8 @@ fn u_f08_s2_page_field_increments() {
             field_type: FieldType::Page,
             instruction: Some(" PAGE ".into()),
             display_text: None,
+            form: None,
+            merge_name: None,
         }),
         revision: None,
     };
@@ -49,6 +51,8 @@ fn u_f08_s2_page_field_increments() {
         field_type: FieldType::Page,
         instruction: Some(" PAGE ".into()),
         display_text: None,
+        form: None,
+            merge_name: None,
     };
 
     for (index, page) in document_layout.pages.iter().enumerate().take(2) {

@@ -242,11 +242,45 @@ class InsertTab extends StatelessWidget {
             ),
           ),
           RibbonGroup(
+            label: 'Links',
+            child: Row(
+              children: [
+                Builder(
+                  builder: (context) => RibbonLargeButton(
+                    key: const Key('insert_hyperlink'),
+                    icon: Icons.link,
+                    label: 'Link',
+                    tooltip: 'Insert Hyperlink',
+                    onPressed: () => controller.insertHyperlink(context),
+                  ),
+                ),
+                Builder(
+                  builder: (context) => RibbonLargeButton(
+                    key: const Key('insert_bookmark_insert_tab'),
+                    icon: Icons.bookmark_border,
+                    label: 'Bookmark',
+                    tooltip: 'Insert Bookmark',
+                    onPressed: () => controller.insertBookmark(context),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          RibbonGroup(
             label: 'Text',
             showDivider: false,
             child: Row(
               children: [
                 RibbonLargeButton(icon: Icons.text_fields, label: 'Text\nBox', onPressed: null),
+                Builder(
+                  builder: (context) => RibbonLargeButton(
+                    key: const Key('insert_form_field'),
+                    icon: Icons.check_box_outlined,
+                    label: 'Form\nField',
+                    tooltip: 'Insert Form Field',
+                    onPressed: () => controller.insertFormField(context),
+                  ),
+                ),
                 Builder(
                   builder: (context) => RibbonLargeButton(
                     key: const Key('insert_equation'),

@@ -225,6 +225,22 @@ pub fn extract_body_xml(document_xml: &str) -> &str {
     document_xml
 }
 
+pub fn extract_embedded_sect_pr(paragraph_xml: &str) -> Option<&str> {
+    let ppr_start = paragraph_xml.find("<w:pPr")?;
+    let ppr_end = paragraph_xml[ppr_start..]
+        .find("</w:pPr>")
+        .map(|i| i + ppr_start)
+        .unwrap_or(paragraph_xml.len());
+    let ppr = &paragraph_xml[ppr_start..ppr_end];
+    if !ppr.contains("<w:sectPr") {
+        return None;
+    }
+    let sect_start = ppr.find("<w:sectPr")?;
+    let sect_rest = &ppr[sect_start..];
+    let sect_end = sect_rest.find("</w:sectPr>")? + "</w:sectPr>".len();
+    Some(&sect_rest[..sect_end])
+}
+
 /// Iterate top-level block tags (`w:p`, `w:tbl`, `w:sectPr`) in document order.
 pub fn iter_body_blocks(body_xml: &str) -> Vec<(&str, BlockKind)> {
     let mut blocks = Vec::new();

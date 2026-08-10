@@ -28,6 +28,7 @@ fn u_f10_s1_import_png_bytes() {
         anchor: None,
         transform: ImageTransform::default(),
         caption_paragraph_id: None,
+        alt_text: None,
     };
     doc.sections[0].blocks = vec![Block::ImageBlock(image)];
 

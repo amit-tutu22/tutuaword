@@ -19,6 +19,8 @@ fn bridge_event_type(event: &BridgeEvent) -> u32 {
         BridgeEvent::DocumentOpened { .. } => TW_EVENT_DOCUMENT_OPENED,
         BridgeEvent::DocumentSaved { .. } => TW_EVENT_DOCUMENT_SAVED,
         BridgeEvent::SpellCheckResult { .. } => TW_EVENT_SPELL_CHECK_RESULT,
+        // Same wire type as spell check — payload is newline-joined issues.
+        BridgeEvent::GrammarCheckResult { .. } => TW_EVENT_SPELL_CHECK_RESULT,
         BridgeEvent::Error { .. } => TW_EVENT_ERROR,
     }
 }
@@ -56,7 +58,18 @@ fn parse_field_type_name(name: &str) -> Result<tw_model::FieldType, String> {
         "date" => Ok(tw_model::FieldType::Date),
         "time" => Ok(tw_model::FieldType::Time),
         "tablesum" | "sum" => Ok(tw_model::FieldType::TableSumAbove),
+        "formtext" | "form_text" => Ok(tw_model::FieldType::FormText),
+        "formcheckbox" | "form_checkbox" | "checkbox" => Ok(tw_model::FieldType::FormCheckbox),
+        "mergefield" | "merge_field" | "merge" => Ok(tw_model::FieldType::MergeField),
         _ => Err(format!("unknown field type: {name}")),
+    }
+}
+
+fn parse_form_field_kind(kind: &str) -> Result<tw_model::FormFieldKind, String> {
+    match kind.to_ascii_lowercase().as_str() {
+        "text" | "formtext" | "plain" | "plaintext" => Ok(tw_model::FormFieldKind::PlainText),
+        "checkbox" | "formcheckbox" | "check" => Ok(tw_model::FormFieldKind::Checkbox),
+        _ => Err(format!("unknown form field kind: {kind}")),
     }
 }
 
@@ -97,14 +110,7 @@ impl WasmSession {
         data: Vec<u8>,
         path_hint: Option<String>,
     ) -> Result<(), OpenError> {
-        let session = self.session().expect("WasmSession not initialized");
-        let request_id = session
-            .open_bytes_with_path(data, path_hint)
-            .ok_or(OpenError::EngineShutDown)?;
-        match session.wait_for_response(request_id, Duration::from_secs(30)) {
-            WaitOutcome::Matched(_) => Ok(()),
-            WaitOutcome::Timeout => Err(OpenError::TimedOut),
-        }
+        self.open_bytes_with_path_and_password_and_wait(data, path_hint, None)
     }
 
     pub fn save_and_wait(&self) -> Result<Vec<u8>, String> {
@@ -125,6 +131,18 @@ impl WasmSession {
         let session = self.session().expect("WasmSession not initialized");
         let request_id = session
             .export_pdf()
+            .ok_or_else(|| "engine shut down".to_string())?;
+        wait_for_bytes(session, request_id)
+    }
+
+    pub fn export_pdf_for_print_and_wait(
+        &self,
+        layout: tw_pdf::PrintLayoutOptions,
+        selection: Option<tw_edit::DocRange>,
+    ) -> Result<Vec<u8>, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let request_id = session
+            .export_pdf_for_print(layout, selection)
             .ok_or_else(|| "engine shut down".to_string())?;
         wait_for_bytes(session, request_id)
     }
@@ -373,6 +391,61 @@ impl WasmSession {
         self.enqueue_edit(session.insert_field_at(run, offset, field))
     }
 
+    pub fn insert_form_field_enqueue(
+        &self,
+        run_id: &str,
+        offset: usize,
+        kind: &str,
+        name: &str,
+        initial_value: &str,
+    ) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let run = parse_run_id(Some(run_id)).ok_or_else(|| "run id required".to_string())?;
+        let kind = parse_form_field_kind(kind)?;
+        let name = if name.trim().is_empty() {
+            None
+        } else {
+            Some(name.to_string())
+        };
+        let initial_value = if initial_value.is_empty() {
+            None
+        } else {
+            Some(initial_value.to_string())
+        };
+        self.enqueue_edit(session.insert_form_field_at(run, offset, kind, name, initial_value))
+    }
+
+    pub fn set_form_field_value_enqueue(
+        &self,
+        run_id: &str,
+        value: &str,
+    ) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let run = parse_run_id(Some(run_id)).ok_or_else(|| "run id required".to_string())?;
+        self.enqueue_edit(session.set_form_field_value_at(run, value))
+    }
+
+    pub fn insert_merge_field_enqueue(
+        &self,
+        run_id: &str,
+        offset: usize,
+        name: &str,
+    ) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let run = parse_run_id(Some(run_id)).ok_or_else(|| "run id required".to_string())?;
+        if name.trim().is_empty() {
+            return Err("merge field name required".into());
+        }
+        self.enqueue_edit(session.insert_merge_field_at(run, offset, name))
+    }
+
+    pub fn apply_mail_merge_row_enqueue(&self, values_json: &str) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let map: std::collections::BTreeMap<String, String> = serde_json::from_str(values_json)
+            .map_err(|e| format!("invalid mail merge JSON: {e}"))?;
+        self.enqueue_edit(session.apply_mail_merge_row_at(map))
+    }
+
     pub fn insert_footnote_enqueue(&self, run_id: &str, offset: usize) -> Result<u64, String> {
         let session = self.session().expect("WasmSession not initialized");
         let run = parse_run_id(Some(run_id)).ok_or_else(|| "run id required".to_string())?;
@@ -435,6 +508,19 @@ impl WasmSession {
         let session = self.session().expect("WasmSession not initialized");
         let run = parse_run_id(Some(run_id)).ok_or_else(|| "run id required".to_string())?;
         self.enqueue_edit(session.insert_bookmark_at(run, offset, name))
+    }
+
+    pub fn insert_hyperlink_enqueue(
+        &self,
+        run_id: &str,
+        offset: usize,
+        url: &str,
+        text: &str,
+        tooltip: Option<&str>,
+    ) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let run = parse_run_id(Some(run_id)).ok_or_else(|| "run id required".to_string())?;
+        self.enqueue_edit(session.insert_hyperlink_at(run, offset, url, text, tooltip))
     }
 
     pub fn insert_cross_reference_enqueue(
@@ -824,6 +910,24 @@ impl WasmSession {
         self.enqueue_edit(session.insert_image_caption(id))
     }
 
+    pub fn set_image_alt_text_enqueue(
+        &self,
+        image_id: &str,
+        alt_text: Option<String>,
+    ) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let id = parse_run_id(Some(image_id)).ok_or_else(|| "invalid image id".to_string())?;
+        self.enqueue_edit(session.set_image_alt_text(id, alt_text))
+    }
+
+    pub fn image_alt_text(&self, image_id: &str) -> Result<String, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let id = parse_run_id(Some(image_id)).ok_or_else(|| "invalid image id".to_string())?;
+        session
+            .image_alt_text(id)
+            .ok_or_else(|| "image not found".to_string())
+    }
+
     pub fn compress_image_enqueue(&self, image_id: &str, quality: u8) -> Result<u64, String> {
         let session = self.session().expect("WasmSession not initialized");
         let id = parse_run_id(Some(image_id)).ok_or_else(|| "invalid image id".to_string())?;
@@ -838,6 +942,14 @@ impl WasmSession {
     pub fn set_read_only_enqueue(&self, enabled: bool) -> Result<u64, String> {
         let session = self.session().expect("WasmSession not initialized");
         self.enqueue_edit(session.set_read_only(enabled))
+    }
+
+    pub fn set_encryption_password_enqueue(
+        &self,
+        password: Option<String>,
+    ) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        self.enqueue_edit(session.set_encryption_password(password))
     }
 
     pub fn accept_all_revisions_enqueue(&self) -> Result<u64, String> {
@@ -966,6 +1078,74 @@ impl WasmSession {
         self.session()
             .map(|s| s.get_display_list_bytes().document_properties_json.clone())
             .unwrap_or_else(|| "{}".to_string())
+    }
+
+    pub fn document_outline_json(&self) -> String {
+        self.session()
+            .and_then(|s| s.document_outline_json())
+            .unwrap_or_else(|| "[]".to_string())
+    }
+
+    pub fn bookmarks_json(&self) -> String {
+        self.session()
+            .and_then(|s| s.bookmarks_json())
+            .unwrap_or_else(|| "[]".to_string())
+    }
+
+    pub fn semantic_tree_json(&self) -> String {
+        self.session()
+            .and_then(|s| s.semantic_tree_json())
+            .unwrap_or_else(|| "[]".to_string())
+    }
+
+    pub fn accessibility_issues_json(&self) -> String {
+        self.session()
+            .and_then(|s| s.accessibility_issues_json())
+            .unwrap_or_else(|| "[]".to_string())
+    }
+
+    pub fn document_inspect_json(&self) -> String {
+        self.session()
+            .and_then(|s| s.document_inspect_json())
+            .unwrap_or_else(|| "[]".to_string())
+    }
+
+    pub fn remove_inspect_findings_enqueue(
+        &self,
+        comments: bool,
+        metadata: bool,
+        hidden_text: bool,
+    ) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        self.enqueue_edit(session.remove_inspect_findings(comments, metadata, hidden_text))
+    }
+
+    pub fn digital_signatures_json(&self) -> String {
+        self.session()
+            .and_then(|s| s.digital_signatures_json())
+            .unwrap_or_else(|| "[]".to_string())
+    }
+
+    pub fn verify_signatures_json(&self) -> String {
+        self.session()
+            .and_then(|s| s.verify_signatures_json())
+            .unwrap_or_else(|| "[]".to_string())
+    }
+
+    pub fn sign_document_enqueue(
+        &self,
+        name: &str,
+        email: &str,
+        organization: Option<String>,
+    ) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let request_id = session.sign_document(name, email, organization)?;
+        Ok(request_id)
+    }
+
+    pub fn clear_digital_signatures_enqueue(&self) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        self.enqueue_edit(session.clear_digital_signatures())
     }
 
     pub fn is_read_only(&self) -> bool {
@@ -1111,20 +1291,52 @@ pub mod bindgen_exports {
         }
 
         pub fn open_document(&mut self, data: &[u8]) -> Result<(), JsValue> {
-            self.session
-                .open_bytes_and_wait(data.to_vec())
-                .map_err(|e| JsValue::from_str(&e.to_string()))
+            match self.session.open_bytes_and_wait(data.to_vec()) {
+                Ok(()) => {
+                    self.last_error.clear();
+                    Ok(())
+                }
+                Err(e) => {
+                    self.record_error(e.to_string());
+                    Err(JsValue::from_str(&e.to_string()))
+                }
+            }
         }
 
         pub fn open_document_with_path(&mut self, data: &[u8], path: &str) -> Result<(), JsValue> {
+            self.open_document_with_password(data, path, "")
+        }
+
+        /// Open document bytes; [password] decrypts encrypted DOCX when non-empty (F22.S1).
+        pub fn open_document_with_password(
+            &mut self,
+            data: &[u8],
+            path: &str,
+            password: &str,
+        ) -> Result<(), JsValue> {
             let hint = if path.is_empty() {
                 None
             } else {
                 Some(path.to_string())
             };
-            self.session
-                .open_bytes_with_path_and_wait(data.to_vec(), hint)
-                .map_err(|e| JsValue::from_str(&e.to_string()))
+            let pw = if password.is_empty() {
+                None
+            } else {
+                Some(password.to_string())
+            };
+            match self
+                .session
+                .open_bytes_with_path_and_password_and_wait(data.to_vec(), hint, pw)
+            {
+                Ok(()) => {
+                    self.last_error.clear();
+                    Ok(())
+                }
+                Err(e) => {
+                    self.record_error(e.to_string());
+                    Err(JsValue::from_str(&e.to_string()))
+                }
+            }
         }
 
         pub fn save_document(&mut self) -> Result<Vec<u8>, JsValue> {
@@ -1148,6 +1360,99 @@ pub mod bindgen_exports {
                 }
                 Err(e) => {
                     self.record_error(e.clone());
+                    Err(JsValue::from_str(&e))
+                }
+            }
+        }
+
+        pub fn export_pdf_for_print(
+            &mut self,
+            scale_mode: i32,
+            scale_percent: f32,
+            margin_left: f32,
+            margin_right: f32,
+            margin_top: f32,
+            margin_bottom: f32,
+            duplex: i32,
+            pages_per_sheet: i32,
+            booklet: i32,
+        ) -> Result<Vec<u8>, JsValue> {
+            let layout = tw_pdf::print_layout_from_codes(
+                scale_mode,
+                scale_percent,
+                margin_left,
+                margin_right,
+                margin_top,
+                margin_bottom,
+                duplex,
+                pages_per_sheet,
+                booklet,
+            );
+            match self.session.export_pdf_for_print_and_wait(layout, None) {
+                Ok(bytes) => {
+                    self.last_error.clear();
+                    Ok(bytes)
+                }
+                Err(e) => {
+                    self.last_error = e.clone();
+                    Err(JsValue::from_str(&e))
+                }
+            }
+        }
+
+        pub fn export_pdf_for_print_selection(
+            &mut self,
+            start_run_id: &str,
+            start_offset: u32,
+            end_run_id: &str,
+            end_offset: u32,
+            scale_mode: i32,
+            scale_percent: f32,
+            margin_left: f32,
+            margin_right: f32,
+            margin_top: f32,
+            margin_bottom: f32,
+            duplex: i32,
+            pages_per_sheet: i32,
+            booklet: i32,
+        ) -> Result<Vec<u8>, JsValue> {
+            let Ok(start_uuid) = uuid::Uuid::parse_str(start_run_id) else {
+                return Err(JsValue::from_str("invalid start_run_id"));
+            };
+            let Ok(end_uuid) = uuid::Uuid::parse_str(end_run_id) else {
+                return Err(JsValue::from_str("invalid end_run_id"));
+            };
+            let layout = tw_pdf::print_layout_from_codes(
+                scale_mode,
+                scale_percent,
+                margin_left,
+                margin_right,
+                margin_top,
+                margin_bottom,
+                duplex,
+                pages_per_sheet,
+                booklet,
+            );
+            let range = tw_edit::DocRange {
+                start: tw_edit::DocPosition {
+                    run_id: tw_model::NodeId::from_uuid(start_uuid),
+                    char_offset: start_offset as usize,
+                },
+                end: tw_edit::DocPosition {
+                    run_id: tw_model::NodeId::from_uuid(end_uuid),
+                    char_offset: end_offset as usize,
+                },
+            };
+            match self
+                .session
+                .export_pdf_for_print_and_wait(layout, Some(range))
+            {
+                Ok(bytes) => {
+                    self.last_error.clear();
+                    Ok(bytes)
+                }
+                Err(e) => {
+                    self.last_error = e.clone();
                     Err(JsValue::from_str(&e))
                 }
             }
@@ -1406,6 +1711,47 @@ pub mod bindgen_exports {
             self.enqueue_op(self.session.insert_field_enqueue(run_id, offset as usize, field_type))
         }
 
+        pub fn insert_form_field(
+            &mut self,
+            run_id: &str,
+            offset: u32,
+            kind: &str,
+            name: &str,
+            initial_value: &str,
+        ) -> Result<f64, JsValue> {
+            self.enqueue_op(self.session.insert_form_field_enqueue(
+                run_id,
+                offset as usize,
+                kind,
+                name,
+                initial_value,
+            ))
+        }
+
+        pub fn set_form_field_value(
+            &mut self,
+            run_id: &str,
+            value: &str,
+        ) -> Result<f64, JsValue> {
+            self.enqueue_op(self.session.set_form_field_value_enqueue(run_id, value))
+        }
+
+        pub fn insert_merge_field(
+            &mut self,
+            run_id: &str,
+            offset: u32,
+            name: &str,
+        ) -> Result<f64, JsValue> {
+            self.enqueue_op(
+                self.session
+                    .insert_merge_field_enqueue(run_id, offset as usize, name),
+            )
+        }
+
+        pub fn apply_mail_merge_row(&mut self, values_json: &str) -> Result<f64, JsValue> {
+            self.enqueue_op(self.session.apply_mail_merge_row_enqueue(values_json))
+        }
+
         pub fn insert_footnote(&mut self, run_id: &str, offset: u32) -> Result<f64, JsValue> {
             self.enqueue_op(self.session.insert_footnote_enqueue(run_id, offset as usize))
         }
@@ -1472,6 +1818,28 @@ pub mod bindgen_exports {
                 self.session
                     .insert_bookmark_enqueue(run_id, offset as usize, name),
             )
+        }
+
+        pub fn insert_hyperlink(
+            &mut self,
+            run_id: &str,
+            offset: u32,
+            url: &str,
+            text: &str,
+            tooltip: &str,
+        ) -> Result<f64, JsValue> {
+            let tip = if tooltip.is_empty() {
+                None
+            } else {
+                Some(tooltip)
+            };
+            self.enqueue_op(self.session.insert_hyperlink_enqueue(
+                run_id,
+                offset as usize,
+                url,
+                text,
+                tip,
+            ))
         }
 
         pub fn insert_cross_reference(
@@ -1827,6 +2195,23 @@ pub mod bindgen_exports {
             self.enqueue_op(self.session.insert_image_caption_enqueue(image_id))
         }
 
+        pub fn set_image_alt_text(
+            &mut self,
+            image_id: &str,
+            alt_text: Option<String>,
+        ) -> Result<f64, JsValue> {
+            self.enqueue_op(
+                self.session
+                    .set_image_alt_text_enqueue(image_id, alt_text),
+            )
+        }
+
+        pub fn image_alt_text(&self, image_id: &str) -> Result<String, JsValue> {
+            self.session
+                .image_alt_text(image_id)
+                .map_err(|e| JsValue::from_str(&e))
+        }
+
         pub fn compress_image(&mut self, image_id: &str, quality: u8) -> Result<f64, JsValue> {
             self.enqueue_op(self.session.compress_image_enqueue(image_id, quality))
         }
@@ -1858,6 +2243,17 @@ pub mod bindgen_exports {
 
         pub fn set_read_only(&mut self, enabled: bool) -> Result<f64, JsValue> {
             self.enqueue_op(self.session.set_read_only_enqueue(enabled))
+        }
+
+        /// Set or clear DOCX encryption password for subsequent saves (F22.S2).
+        /// Empty string clears the password.
+        pub fn set_encryption_password(&mut self, password: &str) -> Result<f64, JsValue> {
+            let value = if password.is_empty() {
+                None
+            } else {
+                Some(password.to_string())
+            };
+            self.enqueue_op(self.session.set_encryption_password_enqueue(value))
         }
 
         pub fn accept_all_revisions(&mut self) -> Result<f64, JsValue> {
@@ -1960,6 +2356,63 @@ pub mod bindgen_exports {
 
         pub fn document_properties_json(&self) -> String {
             self.session.document_properties_json()
+        }
+
+        pub fn document_outline_json(&self) -> String {
+            self.session.document_outline_json()
+        }
+
+        pub fn bookmarks_json(&self) -> String {
+            self.session.bookmarks_json()
+        }
+
+        pub fn semantic_tree_json(&self) -> String {
+            self.session.semantic_tree_json()
+        }
+
+        pub fn accessibility_issues_json(&self) -> String {
+            self.session.accessibility_issues_json()
+        }
+
+        pub fn document_inspect_json(&self) -> String {
+            self.session.document_inspect_json()
+        }
+
+        pub fn remove_inspect_findings(
+            &mut self,
+            comments: bool,
+            metadata: bool,
+            hidden_text: bool,
+        ) -> Result<f64, JsValue> {
+            self.enqueue_op(self.session.remove_inspect_findings_enqueue(
+                comments,
+                metadata,
+                hidden_text,
+            ))
+        }
+
+        pub fn digital_signatures_json(&self) -> String {
+            self.session.digital_signatures_json()
+        }
+
+        pub fn verify_signatures_json(&self) -> String {
+            self.session.verify_signatures_json()
+        }
+
+        pub fn sign_document(
+            &mut self,
+            name: &str,
+            email: &str,
+            organization: Option<String>,
+        ) -> Result<f64, JsValue> {
+            self.enqueue_op(
+                self.session
+                    .sign_document_enqueue(name, email, organization),
+            )
+        }
+
+        pub fn clear_digital_signatures(&mut self) -> Result<f64, JsValue> {
+            self.enqueue_op(self.session.clear_digital_signatures_enqueue())
         }
 
         pub fn is_read_only(&self) -> bool {

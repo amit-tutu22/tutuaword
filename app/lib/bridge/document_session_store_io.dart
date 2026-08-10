@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
+import 'package:tutuaword/editor/document_templates.dart';
 
 /// Persists autosave drafts, recent file paths, and session settings on disk.
 class DocumentSessionStore {
@@ -41,6 +42,11 @@ class DocumentSessionStore {
   File get _recentSymbolsFile => File(p.join(_root.path, 'recent_symbols.json'));
 
   File get _settingsFile => File(p.join(_root.path, 'settings.json'));
+
+  Directory get templatesDir => Directory(p.join(_root.path, 'templates'));
+
+  File get _templatesIndexFile =>
+      File(p.join(templatesDir.path, 'index.json'));
 
   Future<void> writeAutosave({
     required Uint8List bytes,
@@ -189,6 +195,73 @@ class DocumentSessionStore {
       '${jsonEncode({'autosaveIntervalSeconds': interval.inSeconds})}\n',
       flush: true,
     );
+  }
+
+  /// Load user templates from `templates/index.json` (F24.S3).
+  List<UserTemplateEntry> loadUserTemplates() {
+    if (!_templatesIndexFile.existsSync()) return const [];
+    try {
+      final decoded =
+          jsonDecode(_templatesIndexFile.readAsStringSync()) as List<dynamic>;
+      return decoded
+          .whereType<Map<String, dynamic>>()
+          .map(UserTemplateEntry.fromJson)
+          .where((e) =>
+              e.id.isNotEmpty &&
+              File(p.join(templatesDir.path, e.fileName)).existsSync())
+          .toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// Persist a DOCX snapshot as a user template with a unique slug id.
+  Future<UserTemplateEntry> saveUserTemplate({
+    required String title,
+    required String themeName,
+    required Uint8List bytes,
+    DateTime? createdAt,
+  }) async {
+    await templatesDir.create(recursive: true);
+    final existing = loadUserTemplates();
+    final base = DocumentTemplateSpec.slugifyTitle(title);
+    final id = _uniqueTemplateId(base, existing.map((e) => e.id).toSet());
+    final fileName = '$id.docx';
+    final file = File(p.join(templatesDir.path, fileName));
+    await file.writeAsBytes(bytes, flush: true);
+    final entry = UserTemplateEntry(
+      id: id,
+      title: title.trim().isEmpty ? id : title.trim(),
+      themeName: themeName,
+      fileName: fileName,
+      createdAt: createdAt ?? DateTime.now(),
+    );
+    final next = [entry, ...existing.where((e) => e.id != id)];
+    await _templatesIndexFile.writeAsString(
+      '${jsonEncode(next.map((e) => e.toJson()).toList())}\n',
+      flush: true,
+    );
+    return entry;
+  }
+
+  Future<Uint8List?> readUserTemplateBytes(String id) async {
+    for (final entry in loadUserTemplates()) {
+      if (entry.id != id) continue;
+      final file = File(p.join(templatesDir.path, entry.fileName));
+      if (!file.existsSync()) return null;
+      final bytes = await file.readAsBytes();
+      return bytes.isEmpty ? null : bytes;
+    }
+    return null;
+  }
+
+  static String _uniqueTemplateId(String base, Set<String> used) {
+    if (!used.contains(base)) return base;
+    var n = 2;
+    while (used.contains('$base-$n')) {
+      n++;
+    }
+    return '$base-$n';
   }
 }
 

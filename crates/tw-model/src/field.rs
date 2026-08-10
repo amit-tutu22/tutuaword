@@ -1,7 +1,9 @@
 use chrono::{DateTime, Datelike, Timelike, Utc};
 
 use crate::nodes::{Run, RunContent};
-use crate::vocabulary::{FieldData, FieldType};
+use crate::vocabulary::{
+    form_checkbox_display, merge_field_placeholder, FieldData, FieldType, FormFieldMeta,
+};
 
 /// Layout-time context for evaluating dynamic field runs.
 #[derive(Debug, Clone, Copy)]
@@ -48,7 +50,53 @@ pub fn field_instruction(field_type: &FieldType) -> String {
         FieldType::Title => " TITLE ".to_string(),
         FieldType::CrossRef => " REF ".to_string(),
         FieldType::TableSumAbove => " =SUM(ABOVE) ".to_string(),
+        FieldType::FormText => " FORMTEXT ".to_string(),
+        FieldType::FormCheckbox => " FORMCHECKBOX ".to_string(),
+        FieldType::MergeField => " MERGEFIELD ".to_string(),
         FieldType::Other(instr) => instr.clone(),
+    }
+}
+
+/// Build a plain-text form field (F26.S1).
+pub fn form_text_field_data(name: Option<String>, default_text: impl Into<String>) -> FieldData {
+    let text = default_text.into();
+    FieldData {
+        field_type: FieldType::FormText,
+        instruction: Some(field_instruction(&FieldType::FormText)),
+        display_text: Some(text.clone()),
+        form: Some(FormFieldMeta {
+            name,
+            checked: None,
+            default_text: Some(text),
+        }),
+        merge_name: None,
+    }
+}
+
+/// Build a checkbox form field (F26.S1).
+pub fn form_checkbox_field_data(name: Option<String>, checked: bool) -> FieldData {
+    FieldData {
+        field_type: FieldType::FormCheckbox,
+        instruction: Some(field_instruction(&FieldType::FormCheckbox)),
+        display_text: Some(form_checkbox_display(checked)),
+        form: Some(FormFieldMeta {
+            name,
+            checked: Some(checked),
+            default_text: None,
+        }),
+        merge_name: None,
+    }
+}
+
+/// Build a mail-merge field (`«Name»` unbound display) (F26.S2).
+pub fn merge_field_data(name: impl Into<String>) -> FieldData {
+    let name = name.into();
+    FieldData {
+        field_type: FieldType::MergeField,
+        instruction: Some(format!(" MERGEFIELD {name} ")),
+        display_text: Some(merge_field_placeholder(&name)),
+        form: None,
+        merge_name: Some(name),
     }
 }
 
@@ -58,7 +106,7 @@ pub fn evaluate_field(field: &FieldData, ctx: &FieldEvalContext) -> String {
         FieldType::NumPages => ctx.num_pages.to_string(),
         FieldType::Date => format_date(ctx),
         FieldType::Time => format_time(ctx),
-        FieldType::Filename | FieldType::Author | FieldType::Title |         FieldType::CrossRef => field
+        FieldType::Filename | FieldType::Author | FieldType::Title | FieldType::CrossRef => field
             .display_text
             .clone()
             .unwrap_or_else(|| "[field]".to_string()),
@@ -66,6 +114,27 @@ pub fn evaluate_field(field: &FieldData, ctx: &FieldEvalContext) -> String {
             .table_sum_above
             .map(format_sum)
             .unwrap_or_else(|| "0".to_string()),
+        FieldType::FormText => field
+            .form
+            .as_ref()
+            .and_then(|f| f.default_text.clone())
+            .or_else(|| field.display_text.clone())
+            .unwrap_or_default(),
+        FieldType::FormCheckbox => {
+            let checked = field
+                .form
+                .as_ref()
+                .and_then(|f| f.checked)
+                .unwrap_or(false);
+            form_checkbox_display(checked)
+        }
+        FieldType::MergeField => field.display_text.clone().unwrap_or_else(|| {
+            field
+                .merge_name
+                .as_deref()
+                .map(merge_field_placeholder)
+                .unwrap_or_else(|| "«»".to_string())
+        }),
         FieldType::Other(_) => field
             .display_text
             .clone()

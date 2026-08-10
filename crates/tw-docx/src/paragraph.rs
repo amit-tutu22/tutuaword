@@ -266,15 +266,7 @@ fn parse_paragraph_runs(
                 runs.push(Run {
                     id: tw_model::NodeId::new(),
                     format: tw_model::CharFormat::default(),
-                    content: RunContent::Field(FieldData {
-                        field_type,
-                        instruction: instr,
-                        display_text: if display.is_empty() {
-                            None
-                        } else {
-                            Some(display)
-                        },
-                    }),
+                    content: RunContent::Field(field_data_from_import(field_type, instr, display)),
                     revision: None,
                 });
                 rest = after;
@@ -343,7 +335,14 @@ fn parse_hyperlink_target(element: &str) -> HyperlinkTarget {
 
 fn parse_field_type(instr: &str) -> FieldType {
     let upper = instr.trim().to_ascii_uppercase();
-    if upper.contains("PAGE") && !upper.contains("NUMPAGES") {
+    // Form fields before PAGE — FORMTEXT does not contain PAGE, but keep order explicit (F26.S1).
+    if upper.contains("FORMCHECKBOX") {
+        FieldType::FormCheckbox
+    } else if upper.contains("FORMTEXT") {
+        FieldType::FormText
+    } else if upper.contains("MERGEFIELD") {
+        FieldType::MergeField
+    } else if upper.contains("PAGE") && !upper.contains("NUMPAGES") {
         FieldType::Page
     } else if upper.contains("NUMPAGES") {
         FieldType::NumPages
@@ -361,6 +360,85 @@ fn parse_field_type(instr: &str) -> FieldType {
         FieldType::CrossRef
     } else {
         FieldType::Other(instr.trim().to_string())
+    }
+}
+
+fn field_data_from_import(
+    field_type: FieldType,
+    instr: Option<String>,
+    display: String,
+) -> FieldData {
+    use tw_model::{
+        form_checkbox_checked_from_display, form_checkbox_display, merge_field_placeholder,
+        FormFieldMeta,
+    };
+    let display_text = if display.is_empty() {
+        None
+    } else {
+        Some(display.clone())
+    };
+    match field_type {
+        FieldType::FormText => FieldData {
+            field_type,
+            instruction: instr.or_else(|| Some(" FORMTEXT ".into())),
+            display_text: display_text.clone(),
+            form: Some(FormFieldMeta {
+                name: None,
+                checked: None,
+                default_text: display_text,
+            }),
+            merge_name: None,
+        },
+        FieldType::FormCheckbox => {
+            let checked = form_checkbox_checked_from_display(&display);
+            FieldData {
+                field_type,
+                instruction: instr.or_else(|| Some(" FORMCHECKBOX ".into())),
+                display_text: Some(form_checkbox_display(checked)),
+                form: Some(FormFieldMeta {
+                    name: None,
+                    checked: Some(checked),
+                    default_text: None,
+                }),
+                merge_name: None,
+            }
+        }
+        FieldType::MergeField => {
+            let name = instr
+                .as_deref()
+                .and_then(|s| {
+                    let upper = s.to_ascii_uppercase();
+                    let idx = upper.find("MERGEFIELD")?;
+                    let rest = s[idx + "MERGEFIELD".len()..].trim();
+                    let n = rest
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or("")
+                        .trim_matches('"')
+                        .trim();
+                    if n.is_empty() {
+                        None
+                    } else {
+                        Some(n.to_string())
+                    }
+                })
+                .unwrap_or_else(|| "Name".into());
+            let placeholder = merge_field_placeholder(&name);
+            FieldData {
+                field_type,
+                instruction: instr.or_else(|| Some(format!(" MERGEFIELD {name} "))),
+                display_text: display_text.or(Some(placeholder)),
+                form: None,
+                merge_name: Some(name),
+            }
+        }
+        _ => FieldData {
+            field_type,
+            instruction: instr,
+            display_text,
+            form: None,
+            merge_name: None,
+        },
     }
 }
 

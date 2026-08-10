@@ -24,6 +24,7 @@ fn display_list_carries_inserted_png_payload() {
         anchor: None,
         transform: ImageTransform::default(),
         caption_paragraph_id: None,
+        alt_text: None,
     }));
 
     let mut engine = LayoutEngine::new();

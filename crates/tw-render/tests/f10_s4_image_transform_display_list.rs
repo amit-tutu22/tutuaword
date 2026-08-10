@@ -28,6 +28,7 @@ fn u_f10_s4_display_list_carries_transform_metadata() {
             ..Default::default()
         },
         caption_paragraph_id: None,
+        alt_text: None,
     };
     image.data.bytes = PNG_1X1.to_vec();
 

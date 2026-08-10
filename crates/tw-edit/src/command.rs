@@ -135,6 +135,11 @@ pub enum Command {
     InsertImageCaption {
         image_id: NodeId,
     },
+    /// Set accessibility alternative text on an image (F21.S3).
+    SetImageAltText {
+        image_id: NodeId,
+        alt_text: Option<String>,
+    },
     /// Undo helper removing a linked caption paragraph (F10.S4).
     RemoveImageCaption {
         image_id: NodeId,
@@ -273,6 +278,32 @@ pub enum Command {
         offset: usize,
         field_type: tw_model::FieldType,
     },
+    /// Insert a plain-text or checkbox form field (F26.S1).
+    InsertFormField {
+        run_id: NodeId,
+        offset: usize,
+        kind: tw_model::FormFieldKind,
+        name: Option<String>,
+        /// Plain-text default, or `"true"` / `"false"` for checkbox.
+        initial_value: Option<String>,
+    },
+    /// Update the value of an existing form field run (F26.S1).
+    SetFormFieldValue {
+        run_id: NodeId,
+        /// Plain-text value, or `"true"` / `"false"` / `"toggle"` for checkbox.
+        value: String,
+    },
+    /// Insert a mail-merge field (`MERGEFIELD Name`) at the caret (F26.S2).
+    InsertMergeField {
+        run_id: NodeId,
+        offset: usize,
+        name: String,
+    },
+    /// Replace merge fields in the document with one CSV row's values (F26.S2).
+    ApplyMailMergeRow {
+        /// Column name → value map for a single data row.
+        values: std::collections::BTreeMap<String, String>,
+    },
     /// Insert a footnote reference at the caret — F16.S1.
     InsertFootnote {
         run_id: NodeId,
@@ -309,6 +340,14 @@ pub enum Command {
         run_id: NodeId,
         offset: usize,
         name: String,
+    },
+    /// Insert or update a hyperlink at the caret — F19.S3.
+    InsertHyperlink {
+        run_id: NodeId,
+        offset: usize,
+        url: String,
+        text: String,
+        tooltip: Option<String>,
     },
     /// Insert a REF field pointing at a bookmark — F16.S4.
     InsertCrossReference {
@@ -485,6 +524,18 @@ pub enum Command {
     RestoreRevisionRuns {
         snapshots: Vec<RevisionRunSnapshot>,
     },
+    /// Document Inspector remove selected categories (F22.S3).
+    RemoveInspectFindings {
+        comments: bool,
+        metadata: bool,
+        hidden_text: bool,
+    },
+    /// Attach a digital signature (F22.S4).
+    AddDigitalSignature {
+        signature: tw_model::DigitalSignature,
+    },
+    /// Remove all digital signatures (F22.S4).
+    ClearDigitalSignatures,
 }
 
 /// Snapshot of a run before accept/reject so undo can restore text + revision.
@@ -919,6 +970,18 @@ impl Command {
                     caption_paragraph_id: caption_id,
                 })
             }
+            Command::SetImageAltText { image_id, .. } => {
+                let alt_text = result
+                    .old_image_alt_text
+                    .clone()
+                    .ok_or(EditError::InverseNotSupported {
+                        command: "SetImageAltText",
+                    })?;
+                Ok(Command::SetImageAltText {
+                    image_id: *image_id,
+                    alt_text,
+                })
+            }
             Command::RemoveImageCaption { image_id, .. } => Ok(Command::InsertImageCaption {
                 image_id: *image_id,
             }),
@@ -1218,6 +1281,15 @@ impl Command {
             Command::RestoreRevisionRuns { .. } => Err(EditError::InverseNotSupported {
                 command: "RestoreRevisionRuns",
             }),
+            Command::RemoveInspectFindings { .. } => Err(EditError::InverseNotSupported {
+                command: "RemoveInspectFindings",
+            }),
+            Command::AddDigitalSignature { .. } => Err(EditError::InverseNotSupported {
+                command: "AddDigitalSignature",
+            }),
+            Command::ClearDigitalSignatures => Err(EditError::InverseNotSupported {
+                command: "ClearDigitalSignatures",
+            }),
             Command::EnsureHeaderFooter { .. } => Err(EditError::InverseNotSupported {
                 command: "EnsureHeaderFooter",
             }),
@@ -1247,6 +1319,18 @@ impl Command {
             Command::InsertField { .. } => Err(EditError::InverseNotSupported {
                 command: "InsertField",
             }),
+            Command::InsertFormField { .. } => Err(EditError::InverseNotSupported {
+                command: "InsertFormField",
+            }),
+            Command::SetFormFieldValue { .. } => Err(EditError::InverseNotSupported {
+                command: "SetFormFieldValue",
+            }),
+            Command::InsertMergeField { .. } => Err(EditError::InverseNotSupported {
+                command: "InsertMergeField",
+            }),
+            Command::ApplyMailMergeRow { .. } => Err(EditError::InverseNotSupported {
+                command: "ApplyMailMergeRow",
+            }),
             Command::InsertFootnote { .. } => Err(EditError::InverseNotSupported {
                 command: "InsertFootnote",
             }),
@@ -1267,6 +1351,9 @@ impl Command {
             }),
             Command::InsertBookmark { .. } => Err(EditError::InverseNotSupported {
                 command: "InsertBookmark",
+            }),
+            Command::InsertHyperlink { .. } => Err(EditError::InverseNotSupported {
+                command: "InsertHyperlink",
             }),
             Command::InsertCrossReference { .. } => Err(EditError::InverseNotSupported {
                 command: "InsertCrossReference",
@@ -1316,6 +1403,8 @@ pub struct EditResult {
     pub old_image_anchor: Option<Option<tw_model::ImageAnchor>>,
     pub old_image_transform: Option<tw_model::ImageTransform>,
     pub old_image_caption_id: Option<Option<NodeId>>,
+    /// Previous alt text for undo of [`Command::SetImageAltText`] (F21.S3).
+    pub old_image_alt_text: Option<Option<String>>,
     pub find_replace_undo: Option<Vec<(NodeId, usize, String, String)>>,
     /// Number of substitutions performed by the last [`Command::FindReplace`].
     pub replacement_count: usize,

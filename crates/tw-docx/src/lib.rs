@@ -11,6 +11,7 @@ pub mod diagram;
 mod export;
 mod encryption;
 pub mod fingerprint;
+mod hyperlink;
 mod import;
 mod media;
 mod numbering;
@@ -19,15 +20,20 @@ mod paragraph;
 mod preserve;
 mod properties;
 pub mod retention;
+mod signatures;
 mod styles;
 mod table;
 mod xml_util;
 
+pub use encryption::{
+    decrypt_with_password, encrypt_with_password, is_password_protected,
+};
 pub use export::export_docx;
-pub use import::import_docx;
+pub use import::{import_docx, import_docx_with_password};
 pub use bibliography::BIBLIOGRAPHY_PART;
 pub use comments::COMMENTS_PART;
 pub use retention::ImportRetentionReport;
+pub use signatures::SIGNATURES_PART;
 
 /// Original OPC package retained for passthrough export (ADR-0008).
 #[derive(Debug, Clone, Default)]
@@ -100,6 +106,12 @@ pub enum DocxError {
     MissingDocumentPart,
     #[error("document is password-protected")]
     PasswordProtected,
+    #[error("incorrect password")]
+    IncorrectPassword,
+    #[error("document decryption is unsupported: {0}")]
+    DecryptUnsupported(String),
+    #[error("document encryption failed: {0}")]
+    EncryptFailed(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("zip error: {0}")]

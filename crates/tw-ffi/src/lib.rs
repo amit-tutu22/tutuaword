@@ -882,6 +882,16 @@ fn enqueue_open(
     len: usize,
     path_ptr: *const c_char,
 ) -> Option<u64> {
+    enqueue_open_with_password(session, data, len, path_ptr, std::ptr::null())
+}
+
+fn enqueue_open_with_password(
+    session: &Session,
+    data: *const u8,
+    len: usize,
+    path_ptr: *const c_char,
+    password_ptr: *const c_char,
+) -> Option<u64> {
     let bytes = unsafe { slice::from_raw_parts(data, len) }.to_vec();
     let path_hint = if path_ptr.is_null() {
         None
@@ -892,11 +902,43 @@ fn enqueue_open(
                 .into_owned(),
         )
     };
-    let request_id = session.open_bytes_with_path(bytes, path_hint)?;
+    let password = if password_ptr.is_null() {
+        None
+    } else {
+        let value = unsafe { CStr::from_ptr(password_ptr) }
+            .to_string_lossy()
+            .into_owned();
+        if value.is_empty() {
+            None
+        } else {
+            Some(value)
+        }
+    };
+    let request_id = session.open_bytes_with_path_and_password(bytes, path_hint, password)?;
     if let Ok(mut guard) = LAST_ERROR.lock() {
         *guard = None;
     }
     Some(request_id)
+}
+
+/// Blocking open with optional password for encrypted DOCX (F22.S1).
+#[no_mangle]
+pub extern "C" fn tw_open_document_with_password(
+    data: *const u8,
+    len: usize,
+    path_ptr: *const c_char,
+    password_ptr: *const c_char,
+) -> i32 {
+    guard_ffi(|| {
+        with_session_then_flush(|session| {
+            let Some(request_id) =
+                enqueue_open_with_password(session, data, len, path_ptr, password_ptr)
+            else {
+                return -4;
+            };
+            wait_for_open(session, request_id)
+        })
+    })
 }
 
 #[no_mangle]
@@ -1189,6 +1231,115 @@ pub extern "C" fn tw_insert_field(
     })
 }
 
+/// Insert a form field (plain text or checkbox) — F26.S1.
+///
+/// `kind`: `"text"` / `"formtext"` or `"checkbox"` / `"formcheckbox"`.
+#[no_mangle]
+pub extern "C" fn tw_insert_form_field(
+    run_id_ptr: *const c_char,
+    offset: i32,
+    kind_ptr: *const c_char,
+    name_ptr: *const c_char,
+    initial_value_ptr: *const c_char,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(run_id) = parse_node_id(run_id_ptr) else {
+                return -3;
+            };
+            let Some(kind_str) = parse_cstr(kind_ptr) else {
+                return -3;
+            };
+            let kind = match kind_str.to_ascii_lowercase().as_str() {
+                "text" | "formtext" | "plain" | "plaintext" => {
+                    tw_model::FormFieldKind::PlainText
+                }
+                "checkbox" | "formcheckbox" | "check" => tw_model::FormFieldKind::Checkbox,
+                _ => return -3,
+            };
+            let name = parse_cstr(name_ptr).filter(|s| !s.is_empty());
+            let initial_value = parse_cstr(initial_value_ptr);
+            let Some(request_id) = session.insert_form_field_at(
+                run_id,
+                offset.max(0) as usize,
+                kind,
+                name,
+                initial_value,
+            ) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+/// Set / toggle a form field value — F26.S1.
+#[no_mangle]
+pub extern "C" fn tw_set_form_field_value(
+    run_id_ptr: *const c_char,
+    value_ptr: *const c_char,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(run_id) = parse_node_id(run_id_ptr) else {
+                return -3;
+            };
+            let Some(value) = parse_cstr(value_ptr) else {
+                return -3;
+            };
+            let Some(request_id) = session.set_form_field_value_at(run_id, value) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+/// Insert a mail-merge field (`MERGEFIELD Name`) — F26.S2.
+#[no_mangle]
+pub extern "C" fn tw_insert_merge_field(
+    run_id_ptr: *const c_char,
+    offset: i32,
+    name_ptr: *const c_char,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(run_id) = parse_node_id(run_id_ptr) else {
+                return -3;
+            };
+            let Some(name) = parse_cstr(name_ptr).filter(|s| !s.is_empty()) else {
+                return -3;
+            };
+            let Some(request_id) =
+                session.insert_merge_field_at(run_id, offset.max(0) as usize, name)
+            else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+/// Apply one mail-merge data row (JSON object of string→string) — F26.S2.
+#[no_mangle]
+pub extern "C" fn tw_apply_mail_merge_row(values_json_ptr: *const c_char) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(json) = parse_cstr(values_json_ptr) else {
+                return -3;
+            };
+            let Ok(map) = serde_json::from_str::<std::collections::BTreeMap<String, String>>(json)
+            else {
+                return -3;
+            };
+            let Some(request_id) = session.apply_mail_merge_row_at(map) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
 #[no_mangle]
 pub extern "C" fn tw_insert_footnote(run_id_ptr: *const c_char, offset: i32) -> i32 {
     guard_ffi(|| {
@@ -1330,6 +1481,40 @@ pub extern "C" fn tw_insert_bookmark(
             let Some(request_id) =
                 session.insert_bookmark_at(run_id, offset.max(0) as usize, &name)
             else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_insert_hyperlink(
+    run_id_ptr: *const c_char,
+    offset: i32,
+    url_ptr: *const c_char,
+    text_ptr: *const c_char,
+    tooltip_ptr: *const c_char,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(run_id) = parse_node_id(run_id_ptr) else {
+                return -3;
+            };
+            let Some(url) = parse_cstr(url_ptr) else {
+                return -3;
+            };
+            let Some(text) = parse_cstr(text_ptr) else {
+                return -3;
+            };
+            let tooltip = parse_cstr(tooltip_ptr).filter(|s| !s.is_empty());
+            let Some(request_id) = session.insert_hyperlink_at(
+                run_id,
+                offset.max(0) as usize,
+                &url,
+                &text,
+                tooltip.as_deref(),
+            ) else {
                 return -4;
             };
             finish_edit_enqueue(request_id)
@@ -1486,6 +1671,9 @@ fn parse_field_type(ptr: *const c_char) -> Option<FieldType> {
         "date" => Some(FieldType::Date),
         "time" => Some(FieldType::Time),
         "tablesum" | "sum" => Some(FieldType::TableSumAbove),
+        "formtext" | "form_text" => Some(FieldType::FormText),
+        "formcheckbox" | "form_checkbox" | "checkbox" => Some(FieldType::FormCheckbox),
+        "mergefield" | "merge_field" | "merge" => Some(FieldType::MergeField),
         _ => None,
     }
 }
@@ -1685,6 +1873,177 @@ pub extern "C" fn tw_get_document_outline(
         };
         transfer_bytes_to_caller(json.into_bytes(), out_ptr, out_len);
         0
+    })
+}
+
+/// JSON array of bookmarks: `{ name, run_id, paragraph_id, page }` (F19.S4).
+#[no_mangle]
+pub extern "C" fn tw_get_bookmarks(
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    guard_ffi(|| {
+        let guard = SESSION.lock();
+        let Some(session) = guard.as_ref() else {
+            return -1;
+        };
+        let Some(json) = session.bookmarks_json() else {
+            return -3;
+        };
+        transfer_bytes_to_caller(json.into_bytes(), out_ptr, out_len);
+        0
+    })
+}
+
+/// JSON semantic accessibility tree (F21.S1).
+#[no_mangle]
+pub extern "C" fn tw_get_semantic_tree(
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    guard_ffi(|| {
+        let guard = SESSION.lock();
+        let Some(session) = guard.as_ref() else {
+            return -1;
+        };
+        let Some(json) = session.semantic_tree_json() else {
+            return -3;
+        };
+        transfer_bytes_to_caller(json.into_bytes(), out_ptr, out_len);
+        0
+    })
+}
+
+/// JSON accessibility checker issues (F21.S4).
+#[no_mangle]
+pub extern "C" fn tw_get_accessibility_issues(
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    guard_ffi(|| {
+        let guard = SESSION.lock();
+        let Some(session) = guard.as_ref() else {
+            return -1;
+        };
+        let Some(json) = session.accessibility_issues_json() else {
+            return -3;
+        };
+        transfer_bytes_to_caller(json.into_bytes(), out_ptr, out_len);
+        0
+    })
+}
+
+/// JSON Document Inspector findings (F22.S3).
+#[no_mangle]
+pub extern "C" fn tw_get_document_inspect(
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    guard_ffi(|| {
+        let guard = SESSION.lock();
+        let Some(session) = guard.as_ref() else {
+            return -1;
+        };
+        let Some(json) = session.document_inspect_json() else {
+            return -3;
+        };
+        transfer_bytes_to_caller(json.into_bytes(), out_ptr, out_len);
+        0
+    })
+}
+
+/// Remove Document Inspector categories (F22.S3). Non-zero flags enable removal.
+#[no_mangle]
+pub extern "C" fn tw_remove_inspect_findings(
+    comments: i32,
+    metadata: i32,
+    hidden_text: i32,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            if session
+                .remove_inspect_findings(comments != 0, metadata != 0, hidden_text != 0)
+                .is_some()
+            {
+                0
+            } else {
+                -2
+            }
+        })
+    })
+}
+
+/// JSON digital signatures list (F22.S4).
+#[no_mangle]
+pub extern "C" fn tw_get_digital_signatures(
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    guard_ffi(|| {
+        let guard = SESSION.lock();
+        let Some(session) = guard.as_ref() else {
+            return -1;
+        };
+        let Some(json) = session.digital_signatures_json() else {
+            return -3;
+        };
+        transfer_bytes_to_caller(json.into_bytes(), out_ptr, out_len);
+        0
+    })
+}
+
+/// JSON signature verification results (F22.S4).
+#[no_mangle]
+pub extern "C" fn tw_verify_digital_signatures(
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    guard_ffi(|| {
+        let guard = SESSION.lock();
+        let Some(session) = guard.as_ref() else {
+            return -1;
+        };
+        let Some(json) = session.verify_signatures_json() else {
+            return -3;
+        };
+        transfer_bytes_to_caller(json.into_bytes(), out_ptr, out_len);
+        0
+    })
+}
+
+/// Sign the document (F22.S4). `organization_ptr` may be null.
+#[no_mangle]
+pub extern "C" fn tw_sign_document(
+    name_ptr: *const c_char,
+    email_ptr: *const c_char,
+    organization_ptr: *const c_char,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(name) = parse_cstr(name_ptr) else {
+                return -2;
+            };
+            let email = parse_cstr(email_ptr).unwrap_or_default();
+            let organization = parse_cstr(organization_ptr).filter(|s| !s.is_empty());
+            match session.sign_document(name, email, organization) {
+                Ok(_) => 0,
+                Err(_) => -3,
+            }
+        })
+    })
+}
+
+/// Clear all digital signatures (F22.S4).
+#[no_mangle]
+pub extern "C" fn tw_clear_digital_signatures() -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            if session.clear_digital_signatures().is_some() {
+                0
+            } else {
+                -2
+            }
+        })
     })
 }
 
@@ -2431,6 +2790,61 @@ pub extern "C" fn tw_set_image_size(
     })
 }
 
+/// Set image alternative text (F21.S3). Pass null/empty [alt_text_ptr] to clear.
+#[no_mangle]
+pub extern "C" fn tw_set_image_alt_text(
+    image_id_ptr: *const c_char,
+    alt_text_ptr: *const c_char,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(image_id) = parse_node_id(image_id_ptr) else {
+                return -2;
+            };
+            let alt_text = if alt_text_ptr.is_null() {
+                None
+            } else {
+                let s = unsafe { CStr::from_ptr(alt_text_ptr) }
+                    .to_string_lossy()
+                    .into_owned();
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            };
+            let Some(request_id) = session.set_image_alt_text(image_id, alt_text) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+/// Read image alternative text (empty string when unset) — F21.S3.
+#[no_mangle]
+pub extern "C" fn tw_get_image_alt_text(
+    image_id_ptr: *const c_char,
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    guard_ffi(|| {
+        let guard = SESSION.lock();
+        let Some(session) = guard.as_ref() else {
+            return -1;
+        };
+        let Some(image_id) = parse_node_id(image_id_ptr) else {
+            return -2;
+        };
+        let Some(alt) = session.image_alt_text(image_id) else {
+            return -3;
+        };
+        transfer_bytes_to_caller(alt.into_bytes(), out_ptr, out_len);
+        0
+    })
+}
+
 #[no_mangle]
 pub extern "C" fn tw_replace_image_bytes(
     image_id_ptr: *const c_char,
@@ -2635,6 +3049,102 @@ pub extern "C" fn tw_export_pdf(out_ptr: *mut *const u8, out_len: *mut usize) ->
     })
 }
 
+/// Export a print-ready PDF for the OS print dialog (F25.S1–S4).
+///
+/// `scale_mode`: 0 = actual size, 1 = fit to margins, 2 = custom percent.
+/// `duplex`: 0 = simplex, 1 = long edge, 2 = short edge.
+/// `pages_per_sheet`: 1/2/4/6/9/16 (N-up). `booklet`: non-zero enables booklet.
+#[no_mangle]
+pub extern "C" fn tw_export_pdf_for_print(
+    scale_mode: i32,
+    scale_percent: f32,
+    margin_left: f32,
+    margin_right: f32,
+    margin_top: f32,
+    margin_bottom: f32,
+    duplex: i32,
+    pages_per_sheet: i32,
+    booklet: i32,
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    guard_ffi(|| {
+        with_session_then_flush(|session| {
+            let layout = tw_pdf::print_layout_from_codes(
+                scale_mode,
+                scale_percent,
+                margin_left,
+                margin_right,
+                margin_top,
+                margin_bottom,
+                duplex,
+                pages_per_sheet,
+                booklet,
+            );
+            let Some(request_id) = session.export_pdf_for_print(layout, None) else {
+                return -4;
+            };
+            wait_for_document_saved(session, request_id, out_ptr, out_len)
+        })
+    })
+}
+
+/// Export a print-ready PDF for the current selection only (F25.S3/S4).
+#[no_mangle]
+pub extern "C" fn tw_export_pdf_for_print_selection(
+    start_run_id_ptr: *const c_char,
+    start_offset: u32,
+    end_run_id_ptr: *const c_char,
+    end_offset: u32,
+    scale_mode: i32,
+    scale_percent: f32,
+    margin_left: f32,
+    margin_right: f32,
+    margin_top: f32,
+    margin_bottom: f32,
+    duplex: i32,
+    pages_per_sheet: i32,
+    booklet: i32,
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    guard_ffi(|| {
+        with_session_then_flush(|session| {
+            let Some(start_run) = parse_node_id(start_run_id_ptr) else {
+                return -2;
+            };
+            let Some(end_run) = parse_node_id(end_run_id_ptr) else {
+                return -2;
+            };
+            let layout = tw_pdf::print_layout_from_codes(
+                scale_mode,
+                scale_percent,
+                margin_left,
+                margin_right,
+                margin_top,
+                margin_bottom,
+                duplex,
+                pages_per_sheet,
+                booklet,
+            );
+            let range = DocRange {
+                start: DocPosition {
+                    run_id: start_run,
+                    char_offset: start_offset as usize,
+                },
+                end: DocPosition {
+                    run_id: end_run,
+                    char_offset: end_offset as usize,
+                },
+            };
+            let Some(request_id) = session.export_pdf_for_print(layout, Some(range)) else {
+                return -4;
+            };
+            wait_for_document_saved(session, request_id, out_ptr, out_len)
+        })
+    })
+}
+
 fn format_from_extension_str(ext: &str) -> tw_core::DetectedFormat {
     tw_core::format_from_extension(ext).unwrap_or(tw_core::DetectedFormat::Unknown)
 }
@@ -2721,6 +3231,36 @@ pub extern "C" fn tw_set_read_only(enabled: i32) -> i32 {
     guard_ffi(|| {
         with_session(|session| {
             let Some(request_id) = session.set_read_only(enabled != 0) else {
+                return -4;
+            };
+            wait_for_request(session, request_id, BLOCKING_WAIT, |event| match event {
+                BridgeEvent::DisplayListReady { .. } => Some(0),
+                BridgeEvent::Error { .. } => Some(-2),
+                _ => None,
+            })
+        })
+    })
+}
+
+/// Set or clear the password used to encrypt DOCX on save (F22.S2).
+/// Pass null or empty to clear encryption.
+#[no_mangle]
+pub extern "C" fn tw_set_encryption_password(password_ptr: *const c_char) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let password = if password_ptr.is_null() {
+                None
+            } else {
+                let value = unsafe { CStr::from_ptr(password_ptr) }
+                    .to_string_lossy()
+                    .into_owned();
+                if value.is_empty() {
+                    None
+                } else {
+                    Some(value)
+                }
+            };
+            let Some(request_id) = session.set_encryption_password(password) else {
                 return -4;
             };
             wait_for_request(session, request_id, BLOCKING_WAIT, |event| match event {

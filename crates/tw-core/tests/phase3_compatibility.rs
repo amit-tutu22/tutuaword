@@ -119,7 +119,7 @@ fn markdown_import_export_docx_preserves_structure() {
 #[test]
 fn spell_check_flags_ten_known_misspellings() {
     let checker = SpellChecker::english();
-    let text = "Teh quikc brown fox recieved an invitaion to teh party with mispelled wrds and erors galore.";
+    let text = "Teh quikc brown fox recieved an invitaion to teh party with mispelled wrds and erors galore plus seperate definately.";
     let issues = checker.check_text(text);
     assert!(
         issues.len() >= 10,

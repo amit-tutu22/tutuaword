@@ -7,6 +7,7 @@ use crate::table::Table;
 use crate::theme::DocumentTheme;
 use crate::bibliography::BibliographySource;
 use crate::comments::CommentThread;
+use crate::digital_signature::DigitalSignature;
 use crate::vocabulary::{BlockZone, Footnote, HeaderFooter, HeaderFooterType, RunLocation};
 use serde::{Deserialize, Serialize};
 
@@ -58,6 +59,9 @@ pub struct Document {
     /// Comment threads keyed by OOXML `w:id` (F17.S3).
     #[serde(default)]
     pub comments: Vec<CommentThread>,
+    /// Digital signatures over document content (F22.S4).
+    #[serde(default)]
+    pub signatures: Vec<DigitalSignature>,
 }
 
 impl Document {
@@ -71,6 +75,7 @@ impl Document {
             footnotes: Vec::new(),
             bibliography_sources: Vec::new(),
             comments: Vec::new(),
+            signatures: Vec::new(),
         }
     }
 

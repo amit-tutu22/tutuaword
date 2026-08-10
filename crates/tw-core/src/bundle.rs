@@ -20,6 +20,8 @@ pub struct FormatContext {
     pub odt_package: Option<OdtPackage>,
     pub save_format: DetectedFormat,
     pub path_hint: Option<String>,
+    /// When set, DOCX saves are encrypted with this password (F22.S2).
+    pub encryption_password: Option<String>,
 }
 
 impl FormatContext {
@@ -35,6 +37,7 @@ impl FormatContext {
             odt_package: bundle.odt_package,
             save_format,
             path_hint,
+            encryption_password: None,
         }
     }
 
@@ -98,14 +101,24 @@ pub enum ExportError {
 
 pub fn export_document(doc: &Document, ctx: &FormatContext) -> Result<Vec<u8>, ExportError> {
     match ctx.save_format {
-        DetectedFormat::Twdoc | DetectedFormat::PlainText => Ok(tw_native::NativeFormat::export(doc)?),
+        DetectedFormat::Twdoc => Ok(tw_native::NativeFormat::export(doc)?),
+        DetectedFormat::PlainText => Ok(crate::snapshot::document_plain_text(doc).into_bytes()),
         DetectedFormat::Docx => {
             let package = ctx
                 .docx_package
                 .as_ref()
                 .cloned()
                 .unwrap_or_else(tw_docx::DocxPackage::minimal);
-            Ok(tw_docx::export(doc, &package)?)
+            let bytes = tw_docx::export(doc, &package)?;
+            if let Some(password) = ctx
+                .encryption_password
+                .as_deref()
+                .filter(|password| !password.is_empty())
+            {
+                Ok(tw_docx::encrypt_with_password(&bytes, password)?)
+            } else {
+                Ok(bytes)
+            }
         }
         DetectedFormat::Odt => {
             let package = ctx
@@ -127,6 +140,15 @@ pub fn import_document_bundle(
     data: &[u8],
     path_hint: Option<&str>,
 ) -> Result<ImportBundle, ImportError> {
+    import_document_bundle_with_password(data, path_hint, None)
+}
+
+/// Import a document, decrypting password-protected DOCX when [password] is provided (F22.S1).
+pub fn import_document_bundle_with_password(
+    data: &[u8],
+    path_hint: Option<&str>,
+    password: Option<&str>,
+) -> Result<ImportBundle, ImportError> {
     let format = detect_format(data, path_hint);
     match format {
         DetectedFormat::Twdoc => Ok(ImportBundle {
@@ -136,8 +158,12 @@ pub fn import_document_bundle(
             odt_package: None,
         }),
         DetectedFormat::Docx => {
-            let result = tw_docx::import(data).map_err(|e| match e {
+            let result = tw_docx::import_docx_with_password(data, password).map_err(|e| match e {
                 tw_docx::DocxError::PasswordProtected => ImportError::PasswordProtected,
+                tw_docx::DocxError::IncorrectPassword => ImportError::IncorrectPassword,
+                tw_docx::DocxError::DecryptUnsupported(msg) => {
+                    ImportError::DecryptUnsupported(msg)
+                }
                 other => ImportError::Docx(other),
             })?;
             let mut document = result.document;

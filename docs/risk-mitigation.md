@@ -132,8 +132,8 @@ When changing this file, update these to match (or link here):
 
 ## Top actions (living)
 
-1. **Word baselines + DOCX corpus on the critical path** (S1) — synthetic corpus + CI gate landed; Word PNG baselines still open.  
-2. **Honest exits:** PDF `VisualMatch` / `embed_fonts` errors until embedding; structural PDF is the shipped path. Numbering `lvlText`/`start`/level `rPr` Tier A round-trip gated.  
+1. **Word baselines + DOCX corpus on the critical path** (S1) — F23.S1: ≥50 gate fixtures, ≥95% open, Tier A category + roundtrip-50 CI gates landed; Word PNG baselines still open (S2).  
+2. **Honest exits:** PDF `VisualMatch` / `embed_fonts` embed layout faces (`/FontFile2`); structural Helvetica remains the default ship path. Numbering `lvlText`/`start`/level `rPr` Tier A round-trip gated.  
 3. **TC ladder (c):** Accept/Reject all commands + Review ribbon wired; per-change nav still open.  
 4. **Keep this matrix owned** — one staging story (S0–S5) for product and engineering.
 

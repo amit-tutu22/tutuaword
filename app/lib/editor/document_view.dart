@@ -7,6 +7,8 @@ import 'package:tutuaword/editor/document_painter.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
 import 'package:tutuaword/editor/glyph_editor_surface.dart';
 import 'package:tutuaword/editor/navigation_pane.dart';
+import 'package:tutuaword/editor/accessibility_checker_pane.dart';
+import 'package:tutuaword/editor/picture_inspector_pane.dart';
 import 'package:tutuaword/editor/style_inspector_pane.dart';
 import 'package:tutuaword/editor/rulers.dart';
 import 'package:tutuaword/editor/web_glyph_text_input.dart';
@@ -119,6 +121,7 @@ class _DocumentViewState extends State<DocumentView> {
       // frame (otherwise pumpAndSettle never completes in widget tests).
       setState(() {
         _snapshots[index] = DisplayListSnapshot.empty();
+        _loadedPageVersions[index] = pageVersion;
         _pending.remove(index);
       });
       return;
@@ -203,10 +206,13 @@ class _DocumentViewState extends State<DocumentView> {
   }
 
   void _scrollToPage(int page) {
-    widget.controller.setCurrentPage(page);
+    // Avoid [EditorController.setCurrentPage] here — it refreshes from the
+    // engine and can collapse an injected multi-page pageCount back to 1.
+    widget.controller.selectPage(page);
     if (_scrollController.hasClients) {
+      final target = page.clamp(0, widget.controller.pageCount - 1) * _pageExtent;
       _scrollController.animateTo(
-        page * _pageExtent,
+        target,
         duration: const Duration(milliseconds: 250),
         curve: Curves.easeOut,
       );
@@ -223,7 +229,7 @@ class _DocumentViewState extends State<DocumentView> {
           NavigationPane(
             controller: controller,
             currentPage: controller.currentPage,
-            onPageSelected: _scrollToPage,
+            onPageSelected: controller.jumpToPage,
             onOutlineSelected: controller.jumpToOutlineEntry,
           ),
         Expanded(
@@ -237,6 +243,10 @@ class _DocumentViewState extends State<DocumentView> {
                 : _buildCanvas(context, controller),
           ),
         ),
+        if (controller.hasSelectedImage)
+          PictureInspectorPane(controller: controller),
+        if (controller.showAccessibilityChecker)
+          AccessibilityCheckerPane(controller: controller),
         if (controller.showStyleInspector)
           StyleInspectorPane(controller: controller),
       ],
@@ -247,6 +257,7 @@ class _DocumentViewState extends State<DocumentView> {
     return Stack(
       children: [
         ListView.builder(
+          key: const ValueKey('document-page-list'),
           controller: _scrollController,
           padding: const EdgeInsets.symmetric(vertical: _pageGap),
           itemCount: controller.pageCount,

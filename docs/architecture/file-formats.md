@@ -152,10 +152,10 @@ pub fn migrate(content: &serde_json::Value, from_version: &str) -> Result<Docume
 
 ## Plain Text (`.txt`)
 
-Plain text import/export is built into `tw-native` (no separate crate):
+Plain text import is built into `tw-native`; export goes through `tw-core` (`document_plain_text`):
 
 - **Import:** Each line becomes a paragraph. Empty lines become empty paragraphs. No formatting.
-- **Export:** Each paragraph becomes a line. Runs concatenated without formatting. Line breaks within paragraphs become spaces.
+- **Export:** UTF-8 lines from body paragraphs (and table cell text); not a `.twdoc` ZIP. F23.S4.
 
 ## PDF Export (Phase 2)
 
@@ -233,11 +233,12 @@ OpenDocument Text format. Similar structure to DOCX (ZIP + XML) but using ODF sc
 
 ## RTF (Phase 3)
 
-Rich Text Format — import only (legacy interchange).
+Rich Text Format — import only (legacy interchange). F23.S4:
 
-- Parse RTF control words into document model
+- Text + `\par`; bullet/numbered lists via `{\*\pn\pnlvlblt|pnlvlbody}` / `\ls`+`\listtable` heuristics → `NumberingRef`
+- Simple tables via `\trowd` / `\cell` / `\row` → `Block::Table`
 - No export (RTF is a legacy format; export to DOCX instead)
-- Uses a custom RTF parser (no mature Rust RTF library exists)
+- Custom parser in `tw-rtf` (no mature Rust RTF library)
 
 ## Format Detection
 

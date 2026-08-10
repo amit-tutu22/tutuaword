@@ -94,20 +94,53 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 | F27 Cloud | W5 | P5–P6 | S4 | sync service |
 | F28 AI | W5 | P4 | — | `tw-ai`, ADR-0010 |
 
+### Phase completion rollup (2026-08-10)
+
+| Phase | Baseline | Notes |
+|-------|----------|-------|
+| F01 Document Management | **Complete** | Lifecycle, export, protection |
+| F02 Text Editing | **Complete** | S1–S4 |
+| F03 Character Formatting | **Complete** | S1–S4 |
+| F04 Paragraph Formatting | **Complete** | S1–S4 |
+| F05 Lists | **Complete** | S1–S4 (custom bullet glyphs limited) |
+| F06 Styles | **Complete** | S1–S4 |
+| F07 Page Layout | **Complete** | S1–S4 |
+| F08 Headers & Footers | **Complete** | S1–S4 |
+| F09 Tables | **Complete** | S1–S5 |
+| F10 Images | **Complete** | S1–S4 |
+| F11 Shapes | **Complete** | S1–S3 (freeform pen deferred) |
+| F12 SmartArt | **Complete** | S1–S3 preserve/insert; edit out of scope |
+| F13 Charts | **Complete** | S1–S3 |
+| F14 Equations | **Complete** | S1–S4 |
+| F15 Symbols | **Complete** | S1–S3 |
+| F16 References | **Complete** | S1–S4 |
+| F17 Review | **Complete** | S1–S4 |
+| F18 Search | **Complete** | S1–S4 |
+| F19 Navigation | **Complete** | S1–S4 |
+| F20 Collaboration | **Stub** | `tw-crdt` not implemented |
+| F21 Accessibility | **Complete** | S1–S5 |
+| F22 Security | **Complete** | S1–S4; S5 IRM deferred |
+| F23 File Formats | **Complete** | S1–S4; binary `.doc` / EPUB deferred |
+| F24 Templates | **Complete** | S1–S4 |
+| F25 Printing | **Complete** | S1–S4 |
+| F26 Macros & Automation | **Complete** | S1–S3 |
+| F27 Cloud | **Missing** | S1–S4 not started |
+| F28 AI | **Complete** | S1–S6 |
+
 ---
 
 ## F01 — Document Management
 
 **Scope:** New, Open, Save, Save As, Auto Save, Recent documents, Password protection, Read-only mode, Print, Print Preview, Export PDF/HTML/ODT, Document properties.
 
-### Baseline status
+### Baseline status: **Complete** (F01.S1–S4).
 
 | Capability | Status | Evidence |
 |------------|--------|----------|
 | New | Implemented | File→New + `tw_new_document` FFI |
 | Open / Save / Save As | Implemented | File menu; `.twdoc` + `.docx` Save As |
 | Auto Save / Recent | Implemented | Timer autosave + File menu recent (max 10) |
-| Password / Read-only | Implemented | Encrypted DOCX rejected; DOCX protection flag |
+| Password / Read-only | Implemented | Encrypted DOCX open/save (F22); DOCX protection flag |
 | Print / Preview | Implemented | View toggle; paginated read-only preview |
 | Export PDF | Implemented | structural PDF from File/Review menu |
 | Export HTML / ODT | Implemented | Save As |
@@ -170,7 +203,7 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Scope:** Typing, Delete, Backspace, Insert, Select, Copy, Cut, Paste, Paste Special, Undo, Redo, Drag and Drop; Multi-cursor (future).
 
-### Baseline status
+### Baseline status: **Complete** (F02.S1–S4).
 
 | Capability | Status |
 |------------|--------|
@@ -233,13 +266,13 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Scope:** Font family/size, bold, italic, underline, strikethrough, double underline, super/subscript, font color, highlight, character spacing, small caps, all caps, hidden text, text effects, typography (ligatures).
 
-### Baseline status
+### Baseline status: **Complete** (F03.S1–S4).
 
 | Capability | Status |
 |------------|--------|
 | Font, B/I/U, strike, super/sub | Implemented |
 | Color, highlight | Implemented (ribbon pickers; DOCX round-trip) |
-| Double underline, spacing, caps, hidden, ligatures | Partial (double underline + char spacing + caps/hidden/liga) |
+| Double underline, spacing, caps, hidden, ligatures | Implemented |
 
 **Dependencies:** F06 (character styles), `tw-shape` for OpenType.
 
@@ -299,12 +332,12 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Scope:** Alignment, line/paragraph spacing, indentation, hanging indent, tabs, borders, shading, keep with next, widow/orphan control.
 
-### Baseline status
+### Baseline status: **Complete** (F04.S1–S4).
 
 | Capability | Status |
 |------------|--------|
 | Align L/C/R/J, indent | Implemented |
-| Line/para spacing, tabs | Partial (spacing + tab-stop UI done) |
+| Line/para spacing, tabs | Implemented |
 | Borders, shading | Implemented |
 | keepNext, widow/orphan | Implemented (layout + UI) |
 
@@ -360,15 +393,15 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Scope:** Bullets, numbering, multi-level, custom bullets, restart/continue, outline numbering.
 
-### Baseline status
+### Baseline status: **Complete** (F05.S1–S4).
 
 | Capability | Status |
 |------------|--------|
 | Bullet / numbered | Implemented |
 | Multi-level, restart | Implemented |
 | Outline numbering | Implemented |
-| Custom | Partial |
-| Outline (F19 nav) | Partial |
+| Custom | Implemented (level format; custom glyph pickers limited) |
+| Outline (F19 nav) | Pass (F19.S2) |
 
 **Exit:** List level indents use ±0.01 pt position and ±2 pt hanging tolerances; restart markers reset counters with double-restart controls; numbered lists sync `outline_level` while bullets stay out of the outline; DOCX round-trips `numRestart` and `outlineLvl`; Flutter tests assert engine para format, non-list Tab fallback, max-level no-op, and outline navigation.
 
@@ -414,7 +447,7 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Scope:** Heading 1–9, Normal, Quote, Caption, custom styles, inheritance, themes, style inspector.
 
-### Baseline status
+### Baseline status: **Complete** (F06.S1–S4).
 
 | Capability | Status |
 |------------|--------|
@@ -474,7 +507,7 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Scope:** Margins, orientation, page size, columns, section breaks, page breaks, line numbering, watermark, page color, borders.
 
-### Baseline status
+### Baseline status: **Complete** (F07.S1–S4).
 
 | Capability | Status |
 |------------|--------|
@@ -537,11 +570,11 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Scope:** Header, footer, page numbers, date/time, different first page, odd/even, section-specific.
 
-### Baseline status
+### Baseline status: **Complete** (F08.S1–S4).
 
 | Capability | Status |
 |------------|--------|
-| Import/layout HF blocks | Partial |
+| Import/layout HF blocks | Implemented |
 | Edit header/footer body | Done (F08.S1) |
 | Insert UI, page fields | Done (F08.S2) |
 | First page / odd-even | Done (F08.S3) |
@@ -607,7 +640,7 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Scope:** Insert, delete rows/columns, merge/split cells, AutoFit, borders, shading, sorting, formulas, nested tables.
 
-### Baseline status
+### Baseline status: **Complete** (F09.S1–S5).
 
 | Capability | Status |
 |------------|--------|
@@ -698,7 +731,7 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Scope:** Insert, crop, rotate, resize, compression, wrap, position, caption, transparency, replace.
 
-### Baseline status
+### Baseline status: **Complete** (F10.S1–S4).
 
 | Capability | Status |
 |------------|--------|
@@ -759,7 +792,7 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Scope:** Rectangle, circle, arrow, lines, callouts, freeform, text boxes, icons, WordArt.
 
-### Baseline status: **Partial** (`ShapeBlock` import + placeholder render; insert disabled).
+### Baseline status: **Complete** (F11.S1–S3 — preserve, insert basic shapes, text boxes/WordArt; freeform pen deferred).
 
 **Dependencies:** F10 (drawing layer), `tw-render` paths.
 
@@ -782,7 +815,7 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 | `U-F11-S2-insert-shape` | Unit | Insert rect/line/ellipse + undo | ✅ `f11_s2_insert_shape.rs` |
 | `I-F11-S2-insert-rectangle` | Integration | Insert tab → rectangle | ✅ `f11_s2_insert_shape_test.dart` |
 
-### F11.S3 — Text boxes and WordArt
+### F11.S3 — Text boxes and WordArt ✅
 
 **Deliverables:** Shapes with embedded paragraph; simple WordArt text path.
 
@@ -800,7 +833,7 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Scope:** SmartArt, flowcharts, process diagrams, hierarchy, org charts.
 
-### Baseline status: **Partial** (Tier C passthrough, preview raster, insert placeholder).
+### Baseline status: **Complete** (F12.S1–S3 — preserve, static preview, insert placeholder; SmartArt editing out of scope).
 
 ### F12.S1 — Preserve and placeholder ✅
 
@@ -838,7 +871,7 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Scope:** Bar, line, pie, area, scatter, radar, bubble, editable datasets.
 
-### Baseline status: **Partial** (F13.S1–S3 preserve + static preview + editable data).
+### Baseline status: **Complete** (F13.S1–S3 — preserve, static preview, editable chart data).
 
 ### F13.S1 — Preserve chart parts ✅
 
@@ -891,7 +924,7 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Scope:** Equation editor, math symbols, fractions, integrals, matrices, Greek, LaTeX.
 
-### Baseline status: **Partial** (F14.S1 OMML preserve, F14.S2 read-only preview).
+### Baseline status: **Complete** (F14.S1–S4 — OMML preserve, preview, equation editor, LaTeX import).
 
 ### F14.S1 — OMML preserve ✅
 
@@ -1021,7 +1054,7 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Scope:** Footnotes, endnotes, TOC, bibliography, citations, index, cross references.
 
-### Baseline status: **Partial** (F16.S1 Footnotes ✅; F16.S2 TOC ✅; F16.S3 Citations ✅; index/cross-ref stub).
+### Baseline status: **Complete** (F16.S1–S4 — footnotes, TOC, citations/bibliography, index/cross-references).
 
 ### F16.S1 — Footnotes and endnotes ✅
 
@@ -1103,13 +1136,14 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Scope:** Spell check, grammar, comments, track changes, compare, restrict editing, accept/reject.
 
-### Baseline status
+### Baseline status: **Complete** (F17.S1–S4).
 
 | Capability | Status |
 |------------|--------|
-| Spell | Stub (`tw-spell` wordlist) |
-| Track changes | Partial (accept/reject all) |
-| Comments, grammar, compare | Missing / Stub |
+| Spell | Implemented (Hunspell-compatible `suggest`) |
+| Track changes | Implemented (caret accept/reject + next/previous) |
+| Comments | Implemented (threads, margin markers, DOCX) |
+| Grammar, compare, restrict | Implemented (rule-based grammar, line diff, read-only) |
 
 ### F17.S1 — Spell check upgrade ✅
 
@@ -1127,7 +1161,7 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 | `S-F17-S1-spell-check-churn` | Stress | 50 long typo paragraphs × check | ✅ `stress/f17_s1_spell_churn.rs` |
 | `S-F17-S1-suggest-hot-path` | Stress | 5000 × suggest for `recieved` | ✅ `stress/f17_s1_spell_churn.rs` |
 
-### F17.S2 — Track changes at caret
+### F17.S2 — Track changes at caret ✅
 
 **Deliverables:** Accept/Reject single revision; next/previous change.
 
@@ -1140,7 +1174,7 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Status:** ✅ Delivered (caret accept/reject, next/previous navigation, FFI/WASM/Flutter wiring).
 
-### F17.S3 — Comments
+### F17.S3 — Comments ✅
 
 **Deliverables:** `CommentThread` model; margin markers; DOCX `comments.xml`.
 
@@ -1155,7 +1189,7 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Status:** ✅ Delivered (CommentThread model, margin markers, DOCX round-trip, FFI/WASM/Flutter wiring).
 
-### F17.S4 — Grammar, compare, restrict
+### F17.S4 — Grammar, compare, restrict ✅
 
 **Deliverables:** Grammar via AI or LanguageTool; compare two docs; restrict editing flag.
 
@@ -1177,14 +1211,16 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Scope:** Find, replace, regex, wildcards, navigation pane, search formatting.
 
-### Baseline status
+### Baseline status: **Complete** (F18.S1–S4).
 
 | Capability | Status |
 |------------|--------|
-| FindReplace command | Partial |
-| UI, regex, format search | Missing |
+| FindReplace command | Implemented |
+| Find / Replace UI | Implemented |
+| Regex / wildcards | Implemented |
+| Format search | Implemented |
 
-### F18.S1 — Find UI
+### F18.S1 — Find UI ✅
 
 **Deliverables:** Find pane; highlight matches; next/previous.
 
@@ -1197,7 +1233,7 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Status:** ✅ Delivered (find matches API, find pane, match highlighting via selection, next/previous, Ctrl+F).
 
-### F18.S2 — Replace
+### F18.S2 — Replace ✅
 
 | Test ID | Type | Spec |
 |---------|------|------|
@@ -1208,7 +1244,7 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Status:** ✅ Delivered (FindReplace replacement count, Replace All in find pane, FFI/command bridge).
 
-### F18.S3 — Regex and wildcards
+### F18.S3 — Regex and wildcards ✅
 
 | Test ID | Type | Spec |
 |---------|------|------|
@@ -1220,7 +1256,7 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Status:** ✅ Delivered (regex/wildcard find and replace, find pane toggles, FFI/command bridge).
 
-### F18.S4 — Format search
+### F18.S4 — Format search ✅
 
 | Test ID | Type | Spec |
 |---------|------|------|
@@ -1238,34 +1274,52 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Scope:** Outline view, page thumbnails, bookmarks, hyperlinks, Go To, document map.
 
-### Baseline status
+### Baseline status: **Complete** (F19.S1–S4).
 
 | Capability | Status |
 |------------|--------|
-| Page thumbnails / nav pane | Partial |
-| Outline, bookmarks, hyperlinks | Missing |
+| Page thumbnails / nav pane | Implemented (F19.S1) |
+| Outline view | Implemented (F19.S2) |
+| Bookmarks, hyperlinks | Implemented (F19.S3) |
+| Go To dialog | Implemented (F19.S4) |
 
 ### F19.S1 — Thumbnails and page strip (complete)
+
+**Deliverables:** Navigation pane Pages tab with aspect-ratio thumbnails (display-list preview when available); click page N → scroll canvas (`jumpToPage`).
 
 | Test ID | Type | Spec |
 |---------|------|------|
 | `I-F19-S1-page-nav-jump` | Integration | Click page N → scroll |
 
-### F19.S2 — Outline view
+### F19.S2 — Outline view (complete)
 
-**Deliverables:** Headings tree from `outline_level` / styles; click → scroll.
+**Deliverables:** Collapsible headings tree from `outline_level` / heading styles / numbered outline; click → caret + scroll (`jumpToOutlineEntry`); View → Document Outline opens the Outline tab.
 
-### F19.S3 — Bookmarks and hyperlinks
+| Test ID | Type | Spec |
+|---------|------|------|
+| `I-F19-S2-outline-tree` | Integration | Nested headings + collapse |
+| `I-F19-S2-outline-jump` | Integration | Click heading → scroll |
 
-**Deliverables:** `Bookmark`, `HyperlinkTarget` on model; insert/edit link.
+### F19.S3 — Bookmarks and hyperlinks (complete)
+
+**Deliverables:** `BookmarkAnchor` / `HyperlinkTarget` on model; `InsertHyperlink` (+ in-place edit); Insert → Link/Bookmark dialogs; `w:hyperlink` export with external relationships and `w:anchor` for internal targets; import resolves `r:id` to URL.
 
 | Test ID | Type | Spec |
 |---------|------|------|
 | `U-F19-S3-hyperlink-roundtrip-docx` | Unit | `w:hyperlink` import/export |
+| `U-F19-S3-insert-hyperlink-creates-run` | Unit | InsertHyperlink → Hyperlink run |
+| `I-F19-S3-insert-hyperlink-from-insert-ribbon` | Integration | Insert → Link dialog → insert |
 
-### F19.S4 — Go To dialog
+### F19.S4 — Go To dialog (complete)
 
-**Deliverables:** Go to page, bookmark, heading.
+**Deliverables:** Go To dialog for page / bookmark / heading; `document_bookmarks` + `bookmarks_json` bridge; `jumpToBookmark` / reuse `jumpToPage` + `jumpToOutlineEntry`; entry points: Ctrl/Cmd+G, Edit → Go To…, View → Go To.
+
+| Test ID | Type | Spec |
+|---------|------|------|
+| `U-F19-S4-document-bookmarks-lists-anchors` | Unit | Bookmark nav entries from model |
+| `I-F19-S4-goto-page` | Integration | Go To page N → scroll |
+| `I-F19-S4-goto-bookmark` | Integration | Go To bookmark → caret + scroll |
+| `I-F19-S4-goto-heading` | Integration | Go To heading → caret + scroll |
 
 ---
 
@@ -1299,31 +1353,74 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Scope:** Checker, alt text, read aloud, keyboard navigation, screen reader support.
 
-### Baseline status: **Missing** (custom glyph paint; no semantic tree).
+### Baseline status: **Complete** (F21.S1–S5).
 
-### F21.S1 — Semantic document tree
+| Capability | Status |
+|------------|--------|
+| Semantic document tree | Implemented (F21.S1) |
+| Keyboard / ribbon Tab order | Implemented (F21.S2) |
+| Alt text / checker | Implemented (F21.S3–S4) |
+| Read aloud | Implemented (F21.S5) |
 
-**Deliverables:** Parallel tree: headings, paragraphs, tables for a11y API.
+### F21.S1 — Semantic document tree (complete)
+
+**Deliverables:** Parallel model tree (`semantic_document_tree`): nested headings by outline level, body paragraphs, tables (+ cell children); JSON a11y API via `semantic_tree_json` / `tw_get_semantic_tree` / `fetchSemanticTree`.
 
 | Test ID | Type | Spec |
 |---------|------|------|
 | `U-F21-S1-heading-structure` | Unit | H1→H2 order in tree |
 
-### F21.S2 — Keyboard navigation audit
+### F21.S2 — Keyboard navigation audit (complete)
 
-**Deliverables:** Tab order through ribbon; documented shortcuts.
+**Deliverables:** Ribbon `FocusTraversalGroup` + focusable controls (`RibbonFocusable`); Space/Enter activate; disabled controls skipped; wired shortcuts catalog in [`docs/keyboard.md`](keyboard.md) + `kWiredShortcuts`.
+
+| Test ID | Type | Spec |
+|---------|------|------|
+| `I-F21-S2-ribbon-tab-order` | Integration | Tab visits ribbon tabs then enabled Home controls |
+| `I-F21-S2-ribbon-activate` | Integration | Space/Enter on focused control invokes `onPressed` |
+| `I-F21-S2-disabled-skip` | Integration | Disabled ribbon control not in traversal |
+| `D-F21-S2-shortcuts-doc` | Docs | `docs/keyboard.md` matches `kWiredShortcuts` |
 
 ### F21.S3 — Alt text on images
 
 **Deliverables:** `ImageBlock.alt_text`; inspector field.
 
+**Status:** Complete.
+
+| Test ID | Type | Spec |
+|---------|------|------|
+| `U-F21-S3-set-alt-text` | Unit | `SetImageAltText` trims, clears, and undoes |
+| `U-F21-S3-docx-descr-roundtrip` | Unit | Export/import preserves `wp:docPr/@descr` |
+| `I-F21-S3-alt-text-field` | Integration | Picture inspector field applies alt text via engine |
+
 ### F21.S4 — Accessibility checker
 
 **Deliverables:** Rules: missing alt, empty heading, low contrast warning.
 
+**Status:** Complete.
+
+| Test ID | Type | Spec |
+|---------|------|------|
+| `U-F21-S4-missing-alt` | Unit | Flags images without alt; skips when set |
+| `U-F21-S4-missing-alt-in-table` | Unit | Image in table cell is flagged |
+| `U-F21-S4-empty-heading` | Unit | Heading style + whitespace-only text |
+| `U-F21-S4-low-contrast` | Unit | Light gray on white → warning; black clean |
+| `I-F21-S4-checker-review-button` | Integration | Review Check Accessibility runs check + status |
+| `I-F21-S4-checker-pane-jump` | Integration | Results list jumps to heading / image |
+
 ### F21.S5 — Read aloud (optional)
 
 **Deliverables:** Platform TTS reads selection.
+
+**Status:** Complete.
+
+| Test ID | Type | Spec |
+|---------|------|------|
+| `I-F21-S5-read-aloud-speaks-selection` | Integration | Review Read Aloud speaks selected text via TTS |
+| `I-F21-S5-read-aloud-requires-selection` | Integration | Empty selection shows status prompt; no speech |
+| `I-F21-S5-read-aloud-stop` | Integration | Stop cancels in-progress read aloud |
+
+Platform backends: web `speechSynthesis`, macOS `NSSpeechSynthesizer` (`tutuaword/tts`).
 
 ---
 
@@ -1331,19 +1428,54 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Scope:** Password protection, encryption, digital signatures, IRM, document inspection, remove metadata.
 
-### Baseline status: **Missing** (spec in `architecture/security.md`).
+### Baseline status: **Complete** — F22.S1–S4 shipped (spec in `architecture/security.md`); S5 IRM deferred.
 
-### F22.S1 — Password-protected open
+### F22.S1 — Password-protected open ✅
 
-**Deliverables:** Detect encryption; prompt for password (decrypt library TBD).
+**Deliverables:** Detect encryption; prompt for password; decrypt via `office-crypto` (ECMA-376 Standard/Agile).
 
-### F22.S2 — Encrypt on save
+| ID | Type | Criteria |
+|----|------|----------|
+| `U-F22-S1-detects-encrypted` | Unit | ZIP/OLE encryption markers → password required |
+| `U-F22-S1-decrypt-import` | Unit | Correct password decrypts fixture and imports DOCX |
+| `I-F22-S1-prompt-open` | Integration | Password dialog / prompt callback opens encrypted doc |
+| `I-F22-S1-wrong-password-retry` | Integration | Wrong password re-prompts; cancel aborts |
 
-### F22.S3 — Document inspector
+### F22.S2 — Encrypt on save ✅
 
-**Deliverables:** Remove comments, metadata, hidden text.
+**Deliverables:** Protect with Password sets a session encryption password; DOCX save encrypts via ECMA-376 Agile (`ms-offcrypto-writer`); F22.S1 open round-trips; Remove Password restores plaintext DOCX saves.
 
-### F22.S4 — Digital signatures
+| ID | Type | Criteria |
+|----|------|----------|
+| `U-F22-S2-encrypt-produces-protected` | Unit | Plain DOCX + password → OLE encryption markers |
+| `U-F22-S2-encrypt-decrypt-roundtrip` | Unit | Encrypt → decrypt/import restores content |
+| `U-F22-S2-export-with-password` | Unit | `export_document` with `encryption_password` yields protected DOCX |
+| `I-F22-S2-protect-dialog` | Integration | Protect dialog sets password; Save as DOCX writes encrypted file |
+| `I-F22-S2-remove-password` | Integration | Remove password; subsequent save is plaintext |
+
+### F22.S3 — Document inspector ✅
+
+**Deliverables:** Inspect Document dialog lists comments, document properties, and hidden text; Remove clears selected categories in-model; DOCX export drops `word/comments.xml` when empty and rewrites `docProps/core.xml` from cleared properties.
+
+| ID | Type | Criteria |
+|----|------|----------|
+| `U-F22-S3-inspect-findings` | Unit | `inspect_document` reports comments / metadata / hidden runs |
+| `U-F22-S3-remove-categories` | Unit | `RemoveInspectFindings` clears selected categories |
+| `U-F22-S3-export-strip-comments` | Unit | Empty comments → no `word/comments.xml` on export |
+| `U-F22-S3-export-clear-core-props` | Unit | Cleared title/author round-trip via `docProps/core.xml` |
+| `I-F22-S3-inspect-dialog` | Integration | Dialog shows findings; Remove clears mock engine state |
+
+### F22.S4 — Digital signatures ✅
+
+**Deliverables:** Sign document content (SHA-256 + Ed25519); embed signatures in DOCX `customXml/digitalSignatures.xml` and twdoc `signatures.json`; verify reports valid / tampered / invalid; File → Digital Signatures… dialog to sign, review, or remove.
+
+| ID | Type | Criteria |
+|----|------|----------|
+| `U-F22-S4-sign-verify` | Unit | Sign → verify valid; content edit → tampered |
+| `U-F22-S4-hash-ignores-sigs` | Unit | Content hash unchanged when only signatures list changes |
+| `U-F22-S4-docx-roundtrip` | Unit | Export/import preserves signatures and validity |
+| `U-F22-S4-twdoc-roundtrip` | Unit | twdoc `signatures.json` round-trips |
+| `I-F22-S4-sign-dialog` | Integration | Dialog signs / clears via mock engine |
 
 ### F22.S5 — IRM (enterprise)
 
@@ -1355,48 +1487,60 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Scope:** Import DOCX, DOC, RTF, TXT, ODT, HTML, Markdown; Export DOCX, PDF, ODT, HTML, EPUB, TXT.
 
-### Baseline status
+### Baseline status: **Complete** — F23.S1–S4 shipped; binary `.doc` / EPUB remain deferred non-goals.
 
 | Format | Import | Export |
 |--------|--------|--------|
-| DOCX | Partial | Partial |
-| ODT, MD, HTML, RTF, TXT | Partial | Partial |
-| PDF | — | Partial (structural) |
-| DOC, EPUB | Missing | Missing |
+| DOCX | Implemented (F23.S1 hardened) | Implemented |
+| ODT, MD, HTML, RTF, TXT | Implemented (F23.S3–S4 lists/tables/headings) | Implemented (TXT yes; RTF export limited) |
+| PDF | — | Implemented (structural + VisualMatch F23.S2) |
+| DOC | Missing (non-goal) | Missing |
+| EPUB | Missing | Future |
 
-### F23.S1 — DOCX hardening (critical path)
+### F23.S1 — DOCX hardening (critical path) ✅
 
-**Deliverables:** Corpus gate ≥95% open; Tier A round-trip tests per category.
+**Deliverables:** ≥50 gate-eligible corpus fixtures; ≥95% open/layout; Tier A round-trip per category (numbering, styles, tables, char formats, images); 50-file import→export→re-import gate in CI. Encrypted/`_` benchmark fixtures excluded from the open gate.
 
 | Test ID | Type | Spec |
 |---------|------|------|
-| `U-F23-S1-tier-a-numbering` | Unit | `tier_a_numbering_styles.rs` |
-| `I-F23-S1-corpus-render` | Integration | `corpus_render.rs` gate |
-| `I-F23-S1-roundtrip-50` | Integration | 50 DOCX round-trip |
+| `U-F23-S1-tier-a-numbering` | Unit | `tier_a_numbering_styles.rs` (numbering + styles + table/char/image) |
+| `I-F23-S1-corpus-render` | Integration | `corpus_render_gate_passes_95_percent` |
+| `I-F23-S1-roundtrip-50` | Integration | `i_f23_s1_roundtrip_50` |
 
 **Exit:** Continuous CI corpus + Tier A gates ([risk-mitigation](risk-mitigation.md) S1).
 
-### F23.S2 — PDF VisualMatch
+### F23.S2 — PDF VisualMatch ✅
 
-**Deliverables:** Font embedding in `tw-pdf`; images in PDF.
-
-| Test ID | Type | Spec |
-|---------|------|------|
-| `U-F23-S2-visual-match-rejects-until-ready` | Unit | `PdfFidelity::VisualMatch` errors |
-| `U-F23-S2-embed-fonts` | Unit | `/FontFile2` in PDF when enabled |
-
-### F23.S3 — ODT / HTML / MD fidelity
+**Deliverables:** Font embedding in `tw-pdf` (`/FontFile2` TrueType, `/FontFile3` CFF; TTC faces extracted); images as PDF XObjects; `PdfFidelity::VisualMatch` / `embed_fonts` export path.
 
 | Test ID | Type | Spec |
 |---------|------|------|
-| `U-F23-S3-odt-roundtrip` | Unit | `tw-odt` tests |
-| `U-F23-S3-html-export-headings` | Unit | H1→`<h1>` |
+| `U-F23-S2-visual-match-ready` | Unit | `PdfFidelity::VisualMatch` exports with `/FontFile2` |
+| `U-F23-S2-embed-fonts` | Unit | `/FontFile2` in PDF when `embed_fonts` |
 
-### F23.S4 — RTF polish and TXT/EPUB
+**Exit:** Structural PDF remains default; VisualMatch embeds layout faces.
 
-**Deliverables:** RTF import lists/tables; EPUB export (future).
+### F23.S3 — ODT / HTML / MD fidelity ✅
 
-**Out of scope:** Binary `.doc` — document as non-goal.
+**Deliverables:** ODT edit→export→reimport preserves text + bold (forced `content.xml` rewrite); HTML/MD map Heading 1–6 by style name (not “any `style_id`”); Quote/Normal stay `<p>` / non-ATX.
+
+| Test ID | Type | Spec |
+|---------|------|------|
+| `U-F23-S3-odt-roundtrip` | Unit | `u_f23_s3_odt_roundtrip` |
+| `U-F23-S3-html-export-headings` | Unit | `u_f23_s3_html_export_headings` (H1→`<h1>`) |
+
+### F23.S4 — RTF polish and TXT/EPUB ✅
+
+**Deliverables:** RTF import for bullet/numbered lists (`NumberingRef` catalog ids 1/2) and simple `\trowd`/`\cell`/`\row` tables; TXT export writes UTF-8 lines (not TWDOC ZIP). EPUB export remains **future**.
+
+| Test ID | Type | Spec |
+|---------|------|------|
+| `U-F23-S4-rtf-list-bullet` | Unit | `u_f23_s4_rtf_list_bullet` |
+| `U-F23-S4-rtf-list-numbered` | Unit | `u_f23_s4_rtf_list_numbered` |
+| `U-F23-S4-rtf-table` | Unit | `u_f23_s4_rtf_table` |
+| `U-F23-S4-txt-export` | Unit | `u_f23_s4_txt_export_roundtrip` |
+
+**Out of scope:** Binary `.doc` — document as non-goal. EPUB implementation deferred.
 
 ---
 
@@ -1404,23 +1548,50 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Scope:** Resume, letter, invoice, brochure, newsletter, business proposal, research paper templates.
 
-### Baseline status: **Stub** (`template_name` field only).
+### Baseline status: **Complete** (F24.S1–S4).
 
-### F24.S1 — Built-in template pack
+### F24.S1 — Built-in template pack ✅
 
-**Deliverables:** 7 starter `.docx` templates in `assets/templates/`; New from template.
+**Deliverables:** 7 starter `.docx` templates in `app/assets/templates/`; File → **New from Template…** opens untitled styled docs (`newFromTemplate`).
 
 | Test ID | Type | Spec |
 |---------|------|------|
-| `I-F24-S1-new-from-resume` | Integration | New→Resume opens styled doc |
+| `I-F24-S1-new-from-resume` | Integration | New from Template → Resume opens styled doc untitled |
 
-### F24.S2 — Theme binding
+### F24.S2 — Theme binding ✅
 
-**Deliverables:** Template applies `DocumentTheme`.
+**Deliverables:** Each starter template binds a Design gallery `DocumentTheme` (Office / Facet / Ion); `newFromTemplate` applies it so `documentThemeName` and the Design tab match.
 
-### F24.S3 — Save as template
+| Test ID | Type | Spec |
+|---------|------|------|
+| `U-F24-S2-template-theme-map` | Unit | All 7 templates map to gallery themes |
+| `I-F24-S2-new-from-resume-theme` | Integration | Resume → Facet |
+| `I-F24-S2-design-tab-reflects-template` | Integration | Design tab reflects template theme |
 
-### F24.S4 — Template gallery UI
+### F24.S3 — Save as template ✅
+
+**Deliverables:** File → **Save as Template…** persists a `.docx` snapshot under `~/.tutuaword/templates/` with `index.json`; New from Template lists **My Templates**; opens untitled and re-applies the saved `documentThemeName`. Working path / dirty state unchanged.
+
+| Test ID | Type | Spec |
+|---------|------|------|
+| `U-F24-S3-template-store-roundtrip` | Unit | Save → list → read bytes round-trip |
+| `U-F24-S3-slug-unique` | Unit | Duplicate titles get unique slug ids |
+| `I-F24-S3-save-as-template-menu` | Integration | Dialog saves into My Templates |
+| `I-F24-S3-new-from-user-template` | Integration | User template opens untitled with theme |
+
+### F24.S4 — Template gallery UI ✅
+
+**Deliverables:** New from Template is a Word-style card gallery — search, All / Built-in / My Templates chips, theme-accented page preview cards, selection summary, Create (or second click on selected card) to open untitled.
+
+| Test ID | Type | Spec |
+|---------|------|------|
+| `U-F24-S4-filter-query` | Unit | Search filters builtin titles |
+| `U-F24-S4-filter-category` | Unit | Category chips hide other groups |
+| `U-F24-S4-preview-kinds` | Unit | Each builtin maps to a preview kind + theme accent |
+| `I-F24-S4-gallery-shows-cards` | Integration | Gallery shows all 7 builtin cards |
+| `I-F24-S4-gallery-filter` | Integration | Search hides non-matches |
+| `I-F24-S4-gallery-create` | Integration | Select + Create opens letter untitled |
+| `I-F24-S4-gallery-my-templates-category` | Integration | My Templates chip shows only user cards |
 
 ---
 
@@ -1428,53 +1599,159 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Scope:** Duplex, multiple pages per sheet, booklet, margins, scaling, print selection.
 
-### Baseline status: **Partial** (preview only).
+### Baseline status: **Complete** (F25.S1–S4 print pipeline).
 
 **Dependencies:** F23.S2 (font-embedded PDF for WYSIWYG).
 
-### F25.S1 — OS print dialog
+### F25.S1 — OS print dialog ✅
 
-**Deliverables:** Print via PDF/XPS or platform API on macOS/Windows/Linux.
+**Deliverables:** File → **Print…** / ⌘P / title-bar Print builds a print-ready PDF (`prepare_print_pdf`: VisualMatch with structural fallback) and presents the OS print dialog (macOS PDFKit `NSPrintOperation`; other hosts fall back to a temp PDF). Injectable `DocumentPrintHost` for tests.
 
 | Test ID | Type | Spec |
 |---------|------|------|
-| `I-F25-S1-print-dialog-opens` | Integration | File→Print |
+| `U-F25-S1-for-print-options` | Unit (Rust) | `PdfExportOptions::for_print` is VisualMatch |
+| `U-F25-S1-prepare-print-pdf-header` | Unit (Rust) | `prepare_print_pdf` → `%PDF` |
+| `U-F25-S1-pdf-header-gate` | Unit (Flutter) | `isPdfHeader` |
+| `U-F25-S1-recording-print-host` | Unit (Flutter) | Recording host captures job |
+| `I-F25-S1-export-pdf-for-print` | Integration (Rust) | Session `export_pdf_for_print` → `%PDF` |
+| `I-F25-S1-print-dialog-opens` | Integration (Flutter) | `printDocument` presents dialog |
+| `I-F25-S1-title-bar-print` | Integration (Flutter) | Title-bar Print invokes host |
+| `S-F25-S1-print-pdf-churn` | Stress (Rust, `#[ignore]`) | 25× multi-para print PDF |
+| `S-F25-S1-print-pdf-large-document` | Stress (Rust, `#[ignore]`) | 200-para multi-page PDF |
+| `S-F25-S1-print-churn` | Stress (Flutter) | 100× `printDocument` |
 
-### F25.S2 — Scaling and margins
+### F25.S2 — Scaling and margins ✅
 
-### F25.S3 — Print selection
+**Deliverables:** Print settings dialog (scale: 100% / Fit / Custom percent; margin presets) before the OS dialog. Engine applies `PrintLayoutOptions` as a content CTM in the print PDF (`prepare_print_pdf` / FFI / WASM). Flutter `PrintLayoutSettings` mirrors the Rust resolve math.
 
-### F25.S4 — Duplex, booklet, N-up
+| Test ID | Type | Spec |
+|---------|------|------|
+| `U-F25-S2-resolve-actual-size` | Unit (Rust/Flutter) | Identity transform at 100% |
+| `U-F25-S2-resolve-custom-scale` | Unit (Rust/Flutter) | 50% centered |
+| `U-F25-S2-resolve-fit-to-margins` | Unit (Rust/Flutter) | Fit shrinks into margin box |
+| `U-F25-S2-prepare-print-pdf-embeds-scale-cm` | Unit (Rust) | PDF content includes scale CTM |
+| `U-F25-S2-scale-mode-codes` | Unit (Flutter) | FFI discriminant 0/1/2 |
+| `I-F25-S2-export-pdf-for-print-scaled` | Integration (Rust) | Session export with scale |
+| `I-F25-S2-print-passes-layout` | Integration (Flutter) | Engine receives layout |
+| `I-F25-S2-print-settings-dialog` | Integration (Flutter) | Settings UI → Custom |
+| `I-F25-S2-title-bar-shows-settings` | Integration (Flutter) | Title-bar Print → settings |
+| `S-F25-S2-print-scale-margin-churn` | Stress (Rust, `#[ignore]`) | Scale×margin matrix |
+| `S-F25-S2-print-layout-churn` | Stress (Flutter) | 100× layout variants |
 
-**Deliverables:** Platform print attributes where supported.
+### F25.S3 — Print selection ✅
+
+**Deliverables:** Print settings **Pages** scope (Document / Selection). When Selection is chosen, the engine clones the body `DocRange` via `document_from_range` and builds a print PDF (`prepare_print_pdf_selection` / FFI `tw_export_pdf_for_print_selection` / WASM). Selection is disabled in the dialog when the caret has no glyph selection.
+
+| Test ID | Type | Spec |
+|---------|------|------|
+| `U-F25-S3-document-from-range-partial-run` | Unit (Rust) | Subset text = selected slice |
+| `U-F25-S3-document-from-range-preserves-format` | Unit (Rust) | Bold preserved |
+| `U-F25-S3-prepare-print-pdf-selection-header` | Unit (Rust) | Selection PDF → `%PDF` |
+| `U-F25-S3-print-scope-defaults-document` | Unit (Flutter) | Default scope = document |
+| `U-F25-S3-mock-engine-records-selection` | Unit (Flutter) | Engine records range |
+| `I-F25-S3-export-pdf-for-print-selection` | Integration (Rust) | Session selection export |
+| `I-F25-S3-print-passes-selection` | Integration (Flutter) | `printDocument` passes range |
+| `I-F25-S3-print-settings-selection-enabled` | Integration (Flutter) | Dialog Selection scope |
+| `S-F25-S3-document-from-range-churn` | Stress (Rust, `#[ignore]`) | Many slice subsets |
+| `S-F25-S3-print-selection-churn` | Stress (Rust `#[ignore]` / Flutter) | Selection PDF / 100× print |
+
+### F25.S4 — Duplex, booklet, N-up ✅
+
+**Deliverables:** Print settings for **Duplex** (one-sided / long edge / short edge), **Pages per sheet** (1/2/4/6/9/16), and **Booklet**. Engine plans imposition (`build_print_sheet_plan`, `booklet_page_order`, N-up cell transforms) and composes sheet pages into the print PDF when N-up/booklet is active. Duplex is forwarded as a platform attribute (`NSPrintInfo.duplex` on macOS). Booklet forces 2-up + long-edge duplex.
+
+| Test ID | Type | Spec |
+|---------|------|------|
+| `U-F25-S4-normalize-pages-per-sheet` | Unit (Rust/Flutter) | N-up clamp grid |
+| `U-F25-S4-booklet-page-order` | Unit (Rust/Flutter) | 8-page signature order |
+| `U-F25-S4-sheet-plan-nup-four` | Unit (Rust) | 5 pages → 2 sheets of 4 |
+| `U-F25-S4-nup-cell-transform-two-up` | Unit (Rust) | Left/right cell placement |
+| `U-F25-S4-prepare-print-pdf-nup-header` | Unit (Rust) | N-up PDF → `%PDF` |
+| `U-F25-S4-booklet-forces-duplex-long-edge` | Unit (Flutter) | Booklet overrides duplex |
+| `I-F25-S4-export-pdf-for-print-nup` | Integration (Rust) | Session N-up export |
+| `I-F25-S4-export-pdf-for-print-booklet` | Integration (Rust) | Session booklet export |
+| `I-F25-S4-print-passes-sheet-attributes` | Integration (Flutter) | Host receives duplex/N-up |
+| `I-F25-S4-print-settings-sheet-controls` | Integration (Flutter) | Dialog booklet toggle |
+| `S-F25-S4-sheet-plan-churn` | Stress (Rust, `#[ignore]`) | pages×N-up matrix |
+| `S-F25-S4-print-sheet-attr-churn` | Stress (Flutter) | 100× attribute variants |
 
 ---
 
 ## F26 — Macros and Automation
 
-**Scope:** Macros, scripting, plugin support, mail merge, form fields.
+**Scope:** Plugin support, mail merge, form fields.
 
-### Baseline status: **Stub** (`tw-plugin` traits only; Mailings disabled).
+**Out of scope:** VBA / scripting API execution — preserve `vbaProject.bin` only.
 
-### F26.S1 — Form fields
+### Baseline status: **Complete** — F26.S1–S3 form fields + mail merge + WASM plugin host ✅.
 
-**Deliverables:** Plain text / checkbox fields in model; DOCX preserve.
+### F26.S1 — Form fields ✅
 
-### F26.S2 — Mail merge
+**Deliverables:** Plain text / checkbox `FieldType`s + `FormFieldMeta` in model; `InsertFormField` / `SetFormFieldValue`; DOCX `FORMTEXT` / `FORMCHECKBOX` via `w:fldSimple`; Insert ribbon dialog; FFI/WASM bridge.
 
-**Deliverables:** Data source CSV → generate documents.
+| Test ID | Type | Spec | Status |
+|---------|------|------|--------|
+| `U-F26-S1-form-text-eval` | Unit | Form text evaluates to default text | ✅ `f26_s1_form_field_eval.rs` |
+| `U-F26-S1-form-checkbox-eval` | Unit | Checkbox evaluates to ☑/☐ | ✅ `f26_s1_form_field_eval.rs` |
+| `U-F26-S1-insert-form-text` | Unit | InsertFormField plain text + name | ✅ `f26_s1_insert_form_field.rs` |
+| `U-F26-S1-insert-form-checkbox` | Unit | InsertFormField checkbox checked | ✅ `f26_s1_insert_form_field.rs` |
+| `U-F26-S1-set-form-text-value` | Unit | SetFormFieldValue updates text | ✅ `f26_s1_insert_form_field.rs` |
+| `U-F26-S1-toggle-form-checkbox` | Unit | SetFormFieldValue `toggle` flips checkbox | ✅ `f26_s1_insert_form_field.rs` |
+| `I-F26-S1-form-text-docx-roundtrip` | Integration | Export/import FORMTEXT | ✅ `f26_s1_form_field_roundtrip.rs` |
+| `I-F26-S1-form-checkbox-docx-roundtrip` | Integration | Export/import FORMCHECKBOX | ✅ `f26_s1_form_field_roundtrip.rs` |
+| `U-F26-S1-mock-insert-form-text` | Unit | Mock engine inserts text field | ✅ `f26_s1_form_field_test.dart` |
+| `U-F26-S1-mock-toggle-checkbox` | Unit | Mock engine toggles checkbox | ✅ `f26_s1_form_field_test.dart` |
+| `I-F26-S1-insert-form-text-from-insert-ribbon` | Integration | Insert → Form Field → text | ✅ `f26_s1_form_field_test.dart` |
+| `I-F26-S1-insert-checkbox-from-dialog` | Integration | Dialog checkbox insert | ✅ `f26_s1_form_field_test.dart` |
+| `S-F26-S1-form-field-insert-churn` | Stress | 200 form field inserts | ✅ `f26_s1_insert_form_field.rs` (ignored) |
+| `S-F26-S1-form-field-docx-roundtrip-churn` | Stress | 40 fields DOCX round-trip | ✅ `f26_s1_form_field_roundtrip.rs` (ignored) |
+| `S-F26-S1-form-field-churn` | Stress | 100 inserts + 50 toggles (Flutter) | ✅ `f26_s1_form_field_test.dart` |
 
-| Test ID | Type | Spec |
-|---------|------|------|
-| `U-F26-S2-merge-field-replace` | Unit | `«Name»` → row value |
+**Exit:** Insert Form Field from Insert ribbon; values update via `SetFormFieldValue`; DOCX round-trips `FORMTEXT` / `FORMCHECKBOX`.
 
-### F26.S3 — WASM plugin host
+### F26.S2 — Mail merge ✅
 
-**Deliverables:** `tw-plugin` wasmtime sandbox; capability gates.
+**Deliverables:** CSV data source → `MERGEFIELD` / `«Name»` replacement → generated documents; Mailings ribbon Start / Insert Field / Finish & Merge.
 
-### F26.S4 — Scripting API
+| Test ID | Type | Spec | Status |
+|---------|------|------|--------|
+| `U-F26-S2-merge-field-replace` | Unit | `«Name»` → row value | ✅ `f26_s2_merge_field_replace.rs` |
+| `U-F26-S2-merge-field-unbound-placeholder` | Unit | Unbound field displays `«Name»` | ✅ `f26_s2_merge_field_replace.rs` |
+| `U-F26-S2-guillemet-text-replace` | Unit | Literal `«Name»` in text replaced | ✅ `f26_s2_merge_field_replace.rs` |
+| `U-F26-S2-generate-documents-from-csv` | Unit | CSV → N cloned documents | ✅ `f26_s2_merge_field_replace.rs` |
+| `U-F26-S2-insert-merge-field` | Unit | InsertMergeField command | ✅ `f26_s2_mail_merge.rs` |
+| `U-F26-S2-apply-mail-merge-row-command` | Unit | ApplyMailMergeRow replaces field | ✅ `f26_s2_mail_merge.rs` |
+| `I-F26-S2-merge-field-docx-roundtrip` | Integration | DOCX MERGEFIELD preserve | ✅ `f26_s2_merge_field_roundtrip.rs` |
+| `I-F26-S2-merge-then-export-plaintext` | Integration | Merged value in DOCX export | ✅ `f26_s2_merge_field_roundtrip.rs` |
+| `U-F26-S2-parse-csv` | Unit | Flutter CSV parse | ✅ `f26_s2_mail_merge_test.dart` |
+| `U-F26-S2-mock-merge-field-replace` | Unit | Mock engine «Name» → value | ✅ `f26_s2_mail_merge_test.dart` |
+| `I-F26-S2-start-mail-merge-from-ribbon` | Integration | Mailings → Start Mail Merge | ✅ `f26_s2_mail_merge_test.dart` |
+| `I-F26-S2-insert-and-finish-merge` | Integration | Insert field + Finish & Merge | ✅ `f26_s2_mail_merge_test.dart` |
+| `S-F26-S2-mail-merge-generate-churn` | Stress | 500-row generate | ✅ `f26_s2_mail_merge.rs` (ignored) |
+| `S-F26-S2-merge-field-docx-churn` | Stress | Multi-field DOCX round-trip | ✅ `f26_s2_merge_field_roundtrip.rs` (ignored) |
+| `S-F26-S2-mail-merge-churn` | Stress | 200-row Flutter churn | ✅ `f26_s2_mail_merge_test.dart` |
 
-**Out of scope:** VBA execution — preserve `vbaProject.bin` only.
+**Exit:** Mailings loads CSV; insert merge fields; Finish & Merge replaces `«Name»` / MERGEFIELD with row values; DOCX round-trips unbound fields.
+
+### F26.S3 — WASM plugin host ✅
+
+**Deliverables:** `tw-plugin` wasmtime sandbox (no WASI FS/network); capability gates on host imports; install/enable/disable/invoke lifecycle; Review → Plugins UI.
+
+| Test ID | Type | Spec | Status |
+|---------|------|------|--------|
+| `U-F26-S3-capability-denied-without-grant` | Unit | Edit plugin denied without `document.edit` | ✅ `f26_s3_plugin_host.rs` |
+| `U-F26-S3-wasm-edit-with-grant` | Unit | Granted plugin inserts undoable text | ✅ `f26_s3_plugin_host.rs` |
+| `U-F26-S3-host-require-gate` | Unit | Host `require` denies Network by default | ✅ `f26_s3_plugin_host.rs` |
+| `I-F26-S3-read-plugin-paragraph-count` | Integration | Read WAT returns paragraph count | ✅ `f26_s3_plugin_host.rs` |
+| `I-F26-S3-lifecycle-enable-disable` | Integration | Disable blocks invoke; enable restores | ✅ `f26_s3_plugin_host.rs` |
+| `U-F26-S3-capability-denied` | Unit | Flutter registry denies edit | ✅ `f26_s3_plugins_test.dart` |
+| `U-F26-S3-capability-granted-invoke` | Unit | Flutter registry allows edit | ✅ `f26_s3_plugins_test.dart` |
+| `I-F26-S3-plugins-dialog-from-review` | Integration | Review → Plugins → install/run | ✅ `f26_s3_plugins_test.dart` |
+| `I-F26-S3-capability-denied-in-dialog` | Integration | Read-only install → Run shows denial | ✅ `f26_s3_plugins_test.dart` |
+| `S-F26-S3-plugin-invoke-churn` | Stress | 200 wasmtime edit invokes | ✅ `f26_s3_plugin_host.rs` (ignored) |
+| `S-F26-S3-sandbox-compile-churn` | Stress | 100 sandbox compiles | ✅ `f26_s3_plugin_host.rs` (ignored) |
+| `S-F26-S3-plugin-registry-churn` | Stress | 200 Flutter registry install/invoke | ✅ `f26_s3_plugins_test.dart` |
+
+**Exit:** Sample WASM plugin reads document / inserts text via host imports; capability denial when `document.edit` not granted; Plugins dialog manages lifecycle.
 
 ---
 
@@ -1502,42 +1779,105 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 
 **Scope:** Writing assistant (rewrite, grammar, tone, expand/shorten, translate, summarize); document intelligence (chat, action items, explain, FAQs); content generation; visual assistance; smart editing (auto-format, layout fix, headings, TOC, citations).
 
-### Baseline status: **Stub** (`tw-ai` mocks only).
+### Baseline status: **Complete** — F28.S1–S6 shipped (providers, rewrite, chat/RAG, generation, visual assist, smart edit).
 
 **Dependencies:** ADR-0010; all edits via `Command`.
 
-### F28.S1 — Production providers
+### F28.S1 — Production providers ✅
 
-**Deliverables:** OpenAI/Gemini/local llama adapters replace mocks.
-
-| Test ID | Type | Spec |
-|---------|------|------|
-| `U-F28-S1-hybrid-router-local` | Unit | Grammar route → local |
-| `U-F28-S1-hybrid-router-cloud` | Unit | Summarize route → cloud |
-
-### F28.S2 — Writing assistant actions
-
-**Deliverables:** Rewrite selection → `InsertText`/`DeleteRange` commands.
+**Deliverables:** OpenAI / Gemini / local llama.cpp HTTP adapters + `HybridRouter` / `AiService`; Flutter `AiClient` facade + Review → AI Settings (routing mode). No real network in CI (`MockHttpClient` / `MockAiHttpClient`).
 
 | Test ID | Type | Spec |
 |---------|------|------|
-| `I-F28-S2-rewrite-selection` | Integration | AI sidebar replaces text; undo works |
+| `U-F28-S1-hybrid-router-local` | Unit | Grammar route → local (`llama_cpp`) — Rust + Flutter |
+| `U-F28-S1-hybrid-router-cloud` | Unit | Long summarize → cloud (`openai`) — Rust + Flutter |
+| `U-F28-S1-openai-adapter-parses-response` | Unit | OpenAI chat JSON → text |
+| `I-F28-S1-service-summarize-via-openai` | Integration | `AiService.summarize` via routed OpenAI |
+| `I-F28-S1-service-grammar-via-llama` | Integration | `correct_grammar` via local llama |
+| `I-F28-S1-ai-settings-from-review` | Integration | Review → AI Settings dialog; mode persists |
+| `I-F28-S1-switch-routing-without-restart` | Integration | Always Cloud / Always Local without restart |
+| `S-F28-S1-router-and-complete-churn` | Stress | 300 route+complete cycles (Rust `#[ignore]` + Flutter) |
 
-### F28.S3 — Document chat / RAG
+**Evidence:** `crates/tw-ai/tests/f28_s1_production_providers.rs`; `app/test/f28_s1_ai_providers_test.dart`; Review tab `ai_settings`.
 
-**Deliverables:** Chunk document; chat UI; citations to paragraph ids.
+### F28.S2 — Writing assistant actions ✅
 
-### F28.S4 — Content generation
+**Deliverables:** Rewrite selection → transactional `DeleteRange` + `InsertText` (single undo); Flutter Review → Rewrite dialog (Accept/Discard).
 
-**Deliverables:** Generate outline/minutes/report into new document.
+| Test ID | Type | Spec |
+|---------|------|------|
+| `U-F28-S2-replace-commands-delete-then-insert` | Unit | Command list is DeleteRange then InsertText — Rust + Flutter |
+| `U-F28-S2-apply-text-suggestion-replaces-run` | Unit | `apply_text_suggestion` mutates run text |
+| `U-F28-S2-rewrite-routes-local` | Unit | Rewrite task prefers local provider (Flutter) |
+| `I-F28-S2-rewrite-selection` | Integration | AI rewrite → Accept replaces text; undo restores — Rust + Flutter |
+| `I-F28-S2-rewrite-discard-keeps-text` | Integration | Discard leaves document unchanged |
+| `S-F28-S2-rewrite-apply-undo-churn` | Stress | 200 rewrite+apply+undo cycles (Rust `#[ignore]` + Flutter) |
 
-### F28.S5 — Visual assistance
+**Evidence:** `crates/tw-ai/tests/f28_s2_rewrite_selection.rs`; `tw-edit::replace_run_range`; `app/test/f28_s2_rewrite_selection_test.dart`; Review tab `ai_rewrite`.
 
-**Deliverables:** Suggest diagram/table/timeline — insert as blocks.
+### F28.S3 — Document chat / RAG ✅
 
-### F28.S6 — Smart editing
+**Deliverables:** Paragraph chunking + keyword RAG index; chat session with paragraph-id citations; Flutter Review → Ask AI dialog.
 
-**Deliverables:** Auto-format messy doc; suggest headings; TOC draft.
+| Test ID | Type | Spec |
+|---------|------|------|
+| `U-F28-S3-chunk-document-by-paragraph` | Unit | One chunk per non-empty paragraph — Rust + Flutter |
+| `U-F28-S3-rag-retrieve-by-keywords` | Unit | Query ranks matching paragraphs |
+| `U-F28-S3-chat-routes-local-for-small-context` | Unit | Chat task prefers local for small context (Flutter) |
+| `I-F28-S3-chat-returns-paragraph-citations` | Integration | Ask → assistant message cites paragraph id — Rust |
+| `I-F28-S3-chat-from-review-with-citations` | Integration | Review → Ask AI → Send; citation chip — Flutter |
+| `I-F28-S3-chat-fallback-retrieved-citations` | Integration | No `[[cite:]]` markers → retrieved chunks cited |
+| `S-F28-S3-chunk-retrieve-chat-churn` | Stress | 200 retrieve+ask cycles (Rust `#[ignore]` + Flutter) |
+
+**Evidence:** `crates/tw-ai/tests/f28_s3_document_chat.rs`; `app/test/f28_s3_document_chat_test.dart`; Review tab `ai_chat`.
+
+### F28.S4 — Content generation ✅
+
+**Deliverables:** Generate outline / minutes / report via `AiService.generate`; parse markdown into a new `Document` (Heading 1/2 styles); Flutter Review → Generate → Open as new document.
+
+| Test ID | Type | Spec |
+|---------|------|------|
+| `U-F28-S4-document-from-markdown-applies-headings` | Unit | `#` / `##` → Heading 1/2 — Rust + Flutter |
+| `U-F28-S4-content-kind-prompt` | Unit | Outline/minutes/report prompt text |
+| `U-F28-S4-generate-routes-local-for-small-context` | Unit | Generate prefers local for small context (Flutter) |
+| `I-F28-S4-generate-outline-new-document` | Integration | Generate outline → new document body — Rust + Flutter |
+| `I-F28-S4-generate-minutes-new-document` | Integration | Minutes structure materializes — Rust |
+| `I-F28-S4-generate-minutes-api` | Integration | Flutter generate + openGeneratedDocument |
+| `S-F28-S4-generate-churn` | Stress | 150 generate cycles (Rust `#[ignore]` + Flutter) |
+
+**Evidence:** `crates/tw-ai/tests/f28_s4_content_generation.rs`; `app/test/f28_s4_content_generation_test.dart`; Review tab `ai_generate`.
+
+### F28.S5 — Visual assistance ✅
+
+**Deliverables:** AI suggests table / diagram / timeline (JSON); insert via `InsertTable` / `InsertDiagram` Commands (timeline → 1×N table); Flutter Review → Visual dialog (Suggest → Insert).
+
+| Test ID | Type | Spec |
+|---------|------|------|
+| `U-F28-S5-parse-table-suggestion` | Unit | JSON table → VisualKind::Table — Rust + Flutter |
+| `U-F28-S5-parse-diagram-and-timeline` | Unit | hierarchy diagram + timeline stages |
+| `U-F28-S5-suggestion-to-commands` | Unit | Commands are InsertTable / InsertDiagram |
+| `I-F28-S5-suggest-and-insert-table` | Integration | Suggest → apply → table block; undo — Rust + Flutter |
+| `I-F28-S5-insert-diagram-and-timeline-blocks` | Integration | Diagram + timeline blocks in session — Rust |
+| `I-F28-S5-insert-diagram-and-timeline-api` | Integration | Flutter applyVisualSuggestion |
+| `S-F28-S5-suggest-insert-undo-churn` | Stress | 120 suggest+insert(+undo) cycles (Rust `#[ignore]` + Flutter) |
+
+**Evidence:** `crates/tw-ai/tests/f28_s5_visual_assistance.rs`; `app/test/f28_s5_visual_assistance_test.dart`; Review tab `ai_visual`.
+
+### F28.S6 — Smart editing ✅
+
+**Deliverables:** Heuristic (+ optional AI) smart-edit plan: heading suggestions, auto-format notes, TOC draft; apply only on Accept via `ApplyParagraphStyle` + `InsertTableOfContents`.
+
+| Test ID | Type | Spec |
+|---------|------|------|
+| `U-F28-S6-heuristics-suggest-headings-and-notes` | Unit | Messy doc → headings + format notes — Rust + Flutter |
+| `U-F28-S6-parse-ai-plan-overrides-indices` | Unit | AI JSON indices override heuristics |
+| `U-F28-S6-smart-edit-commands` | Unit | Commands include ApplyParagraphStyle + InsertTableOfContents |
+| `I-F28-S6-apply-headings-and-toc` | Integration | Accept → H1 + TOC; heading undo — Rust |
+| `I-F28-S6-smart-edit-from-review` | Integration | Review → Smart Edit → Accept — Flutter |
+| `I-F28-S6-suggest-smart-edit-via-ai` | Integration | AI refine plan — Rust + Flutter |
+| `S-F28-S6-analyze-apply-undo-churn` | Stress | 150 analyze+apply(+undo) cycles (Rust `#[ignore]` + Flutter) |
+
+**Evidence:** `crates/tw-ai/tests/f28_s6_smart_editing.rs`; `app/test/f28_s6_smart_editing_test.dart`; Review tab `ai_smart_edit`.
 
 **Out of scope:** Unsupervised auto-save of AI changes without user accept.
 
@@ -1565,4 +1905,4 @@ When implementing a stage:
 3. Update [long-tail-gaps.md](long-tail-gaps.md) if the stage closes a listed gap.
 4. Do not mark roadmap exit criteria green until this doc’s stage exit checklist passes.
 
-*Last updated: feature-phase plan initial authoring.*
+*Last updated: 2026-08-10 — phase completion rollup; baselines aligned to shipped F01–F19, F21–F26, F28 stages (F20/F27 open).*

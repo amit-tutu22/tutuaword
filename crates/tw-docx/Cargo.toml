@@ -12,6 +12,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 zip = { workspace = true }
 chrono = { workspace = true }
+office-crypto = "0.3"
+ms-offcrypto-writer = "1.0.7"
+rand = "0.9"
 
 [dev-dependencies]
 tw-layout = { path = "../tw-layout" }

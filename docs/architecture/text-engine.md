@@ -262,6 +262,10 @@ Uses the same Native serialization format as clipboard. Drop position determined
 
 Shortcuts are handled in Flutter (not Rust) because they involve UI actions beyond text editing.
 
+> **Wired today:** See [keyboard.md](../keyboard.md) (F21.S2) for the shortcuts and ribbon Tab order that are actually implemented. Tables below remain the target map.
+
+
+
 ### Text Editing (handled by tw-edit)
 
 | Shortcut | Command |

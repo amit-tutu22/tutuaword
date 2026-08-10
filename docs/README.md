@@ -26,13 +26,14 @@ Read these documents in order if you are new to the project:
 18. [CRDT Program](crdt-program.md) — collaboration / F20 implementation plan (separate from R3 remediation)
 19. [Long-Tail Gaps](long-tail-gaps.md) — partial/peripheral features not yet built (PDF fonts, Hunspell, parsers, plugins, AI)
 20. [UI Functionality Audit](ui-functionality-audit.md) — ribbon/menu wiring vs engine; P0/P1/P2 control status
+21. [Keyboard Shortcuts](keyboard.md) — wired shortcuts + ribbon Tab order (F21.S2)
 
 ### Later Phases (interface specs only)
 
-21. [AI Platform](architecture/ai-platform.md)
-22. [Collaboration](architecture/collaboration.md) — interface spec; implementation plan in [CRDT Program](crdt-program.md)
-23. [Plugins](architecture/plugins.md)
-24. [Security](architecture/security.md)
+22. [AI Platform](architecture/ai-platform.md)
+23. [Collaboration](architecture/collaboration.md) — interface spec; implementation plan in [CRDT Program](crdt-program.md)
+24. [Plugins](architecture/plugins.md)
+25. [Security](architecture/security.md)
 
 ### Architecture Decision Records
 

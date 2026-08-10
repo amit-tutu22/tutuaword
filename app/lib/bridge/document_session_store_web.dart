@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
+import 'package:tutuaword/editor/document_templates.dart';
 
 /// In-memory session store for browser hosts (no filesystem persistence).
 class DocumentSessionStore {
@@ -21,6 +22,8 @@ class DocumentSessionStore {
   List<RecentDocumentEntry> _recentEntries = const [];
   List<String> _recentSymbolIds = const [];
   Duration _autosaveInterval = defaultAutosaveInterval;
+  List<UserTemplateEntry> _userTemplates = const [];
+  final Map<String, Uint8List> _userTemplateBytes = {};
 
   Future<void> writeAutosave({
     required Uint8List bytes,
@@ -89,6 +92,44 @@ class DocumentSessionStore {
 
   Future<void> saveAutosaveInterval(Duration interval) async {
     _autosaveInterval = interval;
+  }
+
+  List<UserTemplateEntry> loadUserTemplates() => List.unmodifiable(_userTemplates);
+
+  Future<UserTemplateEntry> saveUserTemplate({
+    required String title,
+    required String themeName,
+    required Uint8List bytes,
+    DateTime? createdAt,
+  }) async {
+    final base = DocumentTemplateSpec.slugifyTitle(title);
+    final used = _userTemplates.map((e) => e.id).toSet();
+    final id = _uniqueTemplateId(base, used);
+    final entry = UserTemplateEntry(
+      id: id,
+      title: title.trim().isEmpty ? id : title.trim(),
+      themeName: themeName,
+      fileName: '$id.docx',
+      createdAt: createdAt ?? DateTime.now(),
+    );
+    _userTemplateBytes[id] = Uint8List.fromList(bytes);
+    _userTemplates = [entry, ..._userTemplates.where((e) => e.id != id)];
+    return entry;
+  }
+
+  Future<Uint8List?> readUserTemplateBytes(String id) async {
+    final bytes = _userTemplateBytes[id];
+    if (bytes == null || bytes.isEmpty) return null;
+    return Uint8List.fromList(bytes);
+  }
+
+  static String _uniqueTemplateId(String base, Set<String> used) {
+    if (!used.contains(base)) return base;
+    var n = 2;
+    while (used.contains('$base-$n')) {
+      n++;
+    }
+    return '$base-$n';
   }
 }
 

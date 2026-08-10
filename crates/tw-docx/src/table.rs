@@ -322,6 +322,11 @@ pub fn parse_image_block(para_xml: &str, media: &dyn MediaResolver) -> Option<Im
     if block.anchor.is_some() {
         block.wrap = tw_model::TextWrap::Behind;
     }
+    // Word stores alt text on wp:docPr/@descr (preferred) or pic:cNvPr/@descr.
+    block.alt_text = read_attr_value(para_xml, "wp:docPr", "descr")
+        .or_else(|| read_attr_value(para_xml, "pic:cNvPr", "descr"))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     Some(block)
 }
 

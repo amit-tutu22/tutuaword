@@ -1,13 +1,16 @@
 [package]
 name = "tw-plugin"
-description = "Plugin system — lifecycle, sandbox, and SDK surface (Phase 6)"
+description = "Plugin system — lifecycle, wasmtime sandbox, and capability gates (F26.S3)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-tw-core = { path = "../tw-core" }
 tw-edit = { path = "../tw-edit" }
+tw-model = { path = "../tw-model" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+wasmtime = { version = "29", default-features = true }
+
+[dev-dependencies]

@@ -172,6 +172,16 @@ impl LayoutCache {
             .collect()
     }
 
+    pub fn bookmarks_with_pages(&self) -> Vec<(tw_model::BookmarkNavEntry, u32)> {
+        tw_model::document_bookmarks(&self.document)
+            .into_iter()
+            .map(|entry| {
+                let page = self.page_for_paragraph(entry.paragraph_id);
+                (entry, page)
+            })
+            .collect()
+    }
+
     pub fn hit_test(&self, page: u32, x: f32, y: f32) -> Option<HitTestResult> {
         if self.is_page_stale(page) {
             return None;

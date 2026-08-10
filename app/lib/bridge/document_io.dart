@@ -24,16 +24,20 @@ class DocumentReader {
   static bool isPasswordProtectedDocx(Uint8List bytes, {String? path}) {
     final ext = _extensionFromPath(path);
     if (ext != null && ext != 'docx') return false;
+    // Encrypted OOXML is often an OLE/CFB container (not a ZIP).
+    // CFB directory entries store stream names as UTF-16LE.
+    if (_looksLikeOle(bytes)) {
+      return _containsOleStreamName(bytes, 'EncryptionInfo') ||
+          _containsOleStreamName(bytes, 'EncryptedPackage');
+    }
     if (!_looksLikeZip(bytes)) return false;
     try {
       final archive = ZipDecoder().decodeBytes(bytes);
-      final hasEncrypted = archive.files.any(
-        (file) =>
-            file.name == 'EncryptedPackage' ||
-            file.name.toLowerCase() == 'encryptioninfo',
-      );
-      final hasDocument = archive.findFile('word/document.xml') != null;
-      final hasContentTypes = archive.findFile('[Content_Types].xml') != null;
+      final hasEncrypted = _findZipFile(archive, 'EncryptedPackage') != null ||
+          _findZipFile(archive, 'EncryptionInfo') != null;
+      final hasDocument = _findZipFile(archive, 'word/document.xml') != null;
+      final hasContentTypes =
+          _findZipFile(archive, '[Content_Types].xml') != null;
       return hasEncrypted || (hasContentTypes && !hasDocument);
     } catch (_) {
       return false;
@@ -101,6 +105,63 @@ class DocumentReader {
 
   static bool _looksLikeZip(Uint8List bytes) =>
       bytes.length >= 4 && bytes[0] == 0x50 && bytes[1] == 0x4B;
+
+  static bool _looksLikeOle(Uint8List bytes) =>
+      bytes.length >= 8 &&
+      bytes[0] == 0xD0 &&
+      bytes[1] == 0xCF &&
+      bytes[2] == 0x11 &&
+      bytes[3] == 0xE0 &&
+      bytes[4] == 0xA1 &&
+      bytes[5] == 0xB1 &&
+      bytes[6] == 0x1A &&
+      bytes[7] == 0xE1;
+
+  static bool _containsAsciiCi(Uint8List haystack, String needle) {
+    if (needle.isEmpty || haystack.length < needle.length) return false;
+    final lowerNeedle = needle.toLowerCase().codeUnits;
+    final n = lowerNeedle.length;
+    for (var i = 0; i <= haystack.length - n; i++) {
+      var match = true;
+      for (var j = 0; j < n; j++) {
+        final b = haystack[i + j];
+        final c = b >= 65 && b <= 90 ? b + 32 : b;
+        if (c != lowerNeedle[j]) {
+          match = false;
+          break;
+        }
+      }
+      if (match) return true;
+    }
+    return false;
+  }
+
+  static bool _containsOleStreamName(Uint8List haystack, String name) {
+    if (_containsAsciiCi(haystack, name)) return true;
+    final utf16 = <int>[];
+    for (final unit in name.codeUnits) {
+      utf16.add(unit & 0xff);
+      utf16.add((unit >> 8) & 0xff);
+    }
+    final n = utf16.length;
+    if (haystack.length < n) return false;
+    for (var i = 0; i <= haystack.length - n; i++) {
+      var match = true;
+      for (var j = 0; j < n; j++) {
+        final a = haystack[i + j];
+        final b = utf16[j];
+        // ASCII letters only appear in the low byte of UTF-16LE names.
+        final aa = (j.isEven && a >= 65 && a <= 90) ? a + 32 : a;
+        final bb = (j.isEven && b >= 65 && b <= 90) ? b + 32 : b;
+        if (aa != bb) {
+          match = false;
+          break;
+        }
+      }
+      if (match) return true;
+    }
+    return false;
+  }
 
   static bool _looksLikeRtf(Uint8List bytes) {
     final prefix = utf8.decode(bytes.take(8).toList(), allowMalformed: true);
