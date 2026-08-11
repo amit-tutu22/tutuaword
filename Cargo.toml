@@ -20,6 +20,8 @@ members = [
     "crates/tw-ai",
     "crates/tw-crdt",
     "crates/tw-plugin",
+    "crates/tw-policy",
+    "crates/tw-automation",
     "crates/tw-wasm",
 ]
 
@@ -32,17 +34,27 @@ repository = "https://github.com/amit-tutu22/tutuaword"
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-uuid = { version = "1", features = ["v4", "serde"] }
+# `js` only affects wasm32-unknown-unknown, where `Uuid::new_v4` otherwise has
+# no source of randomness; native targets are unchanged.
+uuid = { version = "1", features = ["v4", "serde", "js"] }
 thiserror = "2"
-ropey = "1"
 rustybuzz = "0.20"
-fontdb = { version = "0.23", features = ["fs"] }
+crossbeam-channel = "0.5"
+# Features are target-specific in `tw-shape`: native adds `fs` (plus defaults
+# that pull memmap/fontconfig); wasm32 keeps `std` alone so `load_system_fonts`
+# and `Source::File` do not exist. Additive inheritance would reintroduce `fs`
+# on wasm if it lived here.
+fontdb = { version = "0.23", default-features = false }
 swash = "0.2"
 unicode-linebreak = "0.1"
 unicode-segmentation = "1"
-crossbeam-channel = "0.5"
+regex = "1"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 chrono = { version = "0.4", features = ["serde"] }
+sha2 = "0.10"
+ed25519-dalek = { version = "2", features = ["rand_core", "std"] }
+base64 = "0.22"
+rand = "0.8"
 parking_lot = "0.12"
 quick-xml = { version = "0.37", features = ["serialize"] }
 pulldown-cmark = "0.12"

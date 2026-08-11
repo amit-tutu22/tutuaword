@@ -213,6 +213,21 @@ pub struct ClassificationPolicy {
 
 Documents can be tagged with classification levels. Policies automatically enforce restrictions (e.g., "Confidential" documents cannot use cloud AI). `AiPolicy` supports per-provider allow/block lists and routing modes (Always Local, Always Cloud, Automatic) — see [ai-platform.md](ai-platform.md).
 
+### Runtime policy hooks (Layer 8 — implemented)
+
+The [`tw-policy`](../../crates/tw-policy) crate enforces tenant capabilities before automation, plugin, and AI surfaces:
+
+| Capability token | Gates |
+|------------------|-------|
+| `export_pdf` | PDF export (automation API, Review ribbon) |
+| `export_docx` | DOCX save/export |
+| `run_plugin` | WASM plugin invoke |
+| `ai_provider` | Cloud/local AI requests |
+| `open_macro_document` | Opening `.docm` / VBA-bearing packages |
+| `automation_dispatch` | F26.S4 headless API |
+
+[`tw-automation`](../../crates/tw-automation) calls `PolicyEngine::require` on each request. Plugin hosts filter granted capabilities via `PolicyEngine::filter_plugin_capabilities`. Admin console wiring (P6) will load `PolicyConfig` from tenant settings.
+
 ## Digital Signatures
 
 ```rust

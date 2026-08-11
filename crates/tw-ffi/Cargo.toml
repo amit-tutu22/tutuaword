@@ -11,9 +11,14 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 [dependencies]
 tw-core = { path = "../tw-core" }
 tw-edit = { path = "../tw-edit" }
+tw-layout = { path = "../tw-layout" }
 tw-model = { path = "../tw-model" }
+tw-pdf = { path = "../tw-pdf" }
 uuid = { workspace = true }
 parking_lot = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+# Builds multi-page fixtures for the stale-page hit-test regression tests.
+tw-native = { path = "../tw-native" }

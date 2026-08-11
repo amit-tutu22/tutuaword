@@ -6,7 +6,7 @@ Performance targets for the editor. Each budget includes the target, the measure
 
 | Metric | Target | Phase | Priority |
 |--------|--------|-------|----------|
-| Typing latency (p99) | <10 ms | 1 | Critical |
+| Typing latency (p99) | <15 ms (Phase 1 gate) → <10 ms (Phase 2 target) | 1–2 | Critical |
 | Open 500-page document | <2 s | 3 | Critical |
 | Scroll frame time | <16 ms (60 FPS) | 1 | Critical |
 | Zoom frame time | <16 ms (60 FPS) | 1 | Critical |
@@ -23,7 +23,8 @@ Performance targets for the editor. Each budget includes the target, the measure
 
 ### Typing Latency
 
-**Target:** p99 < 10 ms from key press to display list repaint.
+**Target:** p99 < 10 ms from key press to display list repaint (Phase 2). The enforced
+Phase 1 gate is < 15 ms; see "Enforced gates" below for what CI actually measures.
 
 **Breakdown:**
 
@@ -44,6 +45,29 @@ Performance targets for the editor. Each budget includes the target, the measure
 - Report p50, p95, p99 over 1000 keystrokes
 
 **Phase 1 gate:** p99 < 15 ms (relaxed). Tightened to <10 ms by Phase 2.
+
+#### Enforced gates
+
+| Gate | Where | Measures | Threshold |
+|------|-------|----------|-----------|
+| `i_r1_typing_latency_50p` | `crates/tw-core/tests/r1_incremental_layout.rs` | `Session::apply` → correlated `DisplayListReady`, 50-page doc | p50 <10 ms, p99 <15 ms |
+| `i_f02_s1_typing_latency` | `crates/tw-core/tests/f02_s1_typing_latency.rs` | Edit + layout pipeline | p99 <15 ms |
+| `typing_incremental_relayout` | `crates/tw-core/benches/typing_latency.rs` | Warm engine, one keystroke + incremental reflow | Tracked, not gated |
+| `cold_full_document_layout` | `crates/tw-core/benches/typing_latency.rs` | Cold `LayoutEngine` over the whole corpus (open path) | Tracked, not gated |
+
+Both latency tests early-return under `cfg!(debug_assertions)`, so they only enforce
+anything in `--release`. CI runs them explicitly in release; a debug-only test run
+will report success without measuring latency.
+
+`cold_full_document_layout` is the document-open path, not typing: it is expected to
+be two orders of magnitude slower than `typing_incremental_relayout` and must not be
+read as a keystroke cost. The benchmark that preceded them, `insert_text_and_layout_page`,
+rebuilt the engine every iteration and so measured cold layout while claiming to
+measure typing; it also grew the document on every iteration, so its number drifted
+with the sample count.
+
+**Not yet gated:** end-to-end key-press → painted-frame latency in Flutter. `r14_async_ffi_test.dart`
+covers FFI enqueue cost only (<16 ms per call), not repaint.
 
 ### Document Open
 
@@ -148,15 +172,13 @@ Mobile benchmarks use:
 
 Performance benchmarks run in CI on every PR:
 
-```yaml
-# .github/workflows/benchmarks.yml (future)
-- name: Run Rust benchmarks
-  run: cargo bench -- --save-baseline main
-- name: Compare benchmarks
-  run: cargo bench -- --baseline main
-- name: Fail on regression >10%
-  run: ./scripts/check_regression.sh --threshold 10
-```
+`.github/workflows/benchmarks.yml` runs criterion on every PR, restores the previous
+baseline from cache, and calls `scripts/check-bench-regression.sh 10` to report any
+benchmark more than 10% slower.
+
+Per Phase 1 policy this job **reports without failing** — criterion on shared CI runners
+is too noisy to gate on. Hard enforcement comes from the release latency tests in
+`ci.yml` (see "Enforced gates" above), which assert absolute p50/p99 thresholds.
 
 Benchmark results are stored as JSON baselines. PRs that regress any critical metric by >10% are flagged (not blocked in Phase 1; blocked in Phase 3+).
 

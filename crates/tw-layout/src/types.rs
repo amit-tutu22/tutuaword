@@ -2,7 +2,7 @@ use tw_model::NodeId;
 
 pub type PageIndex = u32;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PositionedGlyph {
     pub glyph_id: u32,
     /// Source character this glyph represents (for PDF / accessibility export).
@@ -22,11 +22,14 @@ pub struct PositionedGlyph {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecorationKind {
     Underline,
+    DoubleUnderline,
     Strikethrough,
     Highlight,
+    /// Read-only equation preview frame (F14.S2).
+    MathFrame,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TextDecoration {
     pub x: f32,
     pub y: f32,
@@ -36,7 +39,7 @@ pub struct TextDecoration {
     pub kind: DecorationKind,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TextLine {
     pub y: f32,
     pub x: f32,
@@ -51,9 +54,12 @@ pub struct TextLine {
     /// X positions immediately after a space character, used for justification.
     pub justify_stops: Vec<f32>,
     pub decorations: Vec<TextDecoration>,
+    /// When true, the line is painted but excluded from caret hit-testing
+    /// (e.g. SmartArt / Chart placeholder captions).
+    pub decorative: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ImageLayout {
     pub x: f32,
     pub y: f32,
@@ -65,9 +71,36 @@ pub struct ImageLayout {
     /// the renderer can hand them to the platform decoder. Empty for
     /// placeholders.
     pub encoded: std::sync::Arc<Vec<u8>>,
+    pub rotation_deg: f32,
+    pub opacity: f32,
+    pub crop_left: f32,
+    pub crop_top: f32,
+    pub crop_right: f32,
+    pub crop_bottom: f32,
+    /// When set, this image is a diagram/chart raster preview and participates
+    /// in read-only shape selection (F12.S2 / F13.S2 hardening).
+    pub selection_shape_kind: Option<tw_model::ShapeKind>,
 }
 
-#[derive(Debug, Clone)]
+/// Read-only imported shape placeholder bounds (F11.S1).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShapeLayout {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub shape_id: NodeId,
+    pub shape_type: tw_model::ShapeKind,
+    pub fill: Option<u32>,
+    pub stroke: Option<u32>,
+    pub stroke_width: f32,
+    /// Sample / edited chart dataset for in-editor bar preview (F13.S3).
+    pub chart_data: Option<tw_model::ChartData>,
+    /// SmartArt layout style for placeholder previews.
+    pub diagram_kind: tw_model::DiagramKind,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct TableCellLayout {
     pub x: f32,
     pub y: f32,
@@ -76,9 +109,11 @@ pub struct TableCellLayout {
     pub cell_id: NodeId,
     pub background: Option<u32>,
     pub lines: Vec<TextLine>,
+    /// Nested tables laid out inside this cell (F09.S5).
+    pub nested_tables: Vec<TableLayout>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TableLayout {
     pub x: f32,
     pub y: f32,
@@ -91,10 +126,11 @@ pub struct TableLayout {
     pub grid_line_colors: Vec<u32>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum LayoutBox {
     TextLine(TextLine),
     Image(ImageLayout),
+    Shape(ShapeLayout),
     Table(TableLayout),
     Rect {
         x: f32,
@@ -105,7 +141,7 @@ pub enum LayoutBox {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PageLayout {
     pub page_index: PageIndex,
     pub width: f32,
@@ -124,32 +160,32 @@ pub struct HitTestResult {
     pub char_offset: usize,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct LineMap {
     pub lines: Vec<TextLine>,
 }
 
 impl LineMap {
     pub fn hit_test(&self, x: f32, y: f32) -> Option<HitTestResult> {
-        for line in &self.lines {
-            if y >= line.y - line.ascent && y <= line.y + line.descent {
-                for &(x_start, x_end, run_id, char_offset) in &line.run_map {
-                    // Empty runs have zero width; give them a clickable caret target.
-                    let end = if x_end <= x_start {
-                        x_start + 4.0
-                    } else {
-                        x_end
-                    };
-                    if x >= x_start && x <= end {
-                        return Some(HitTestResult {
-                            page: 0,
-                            run_id,
-                            char_offset,
-                        });
-                    }
-                }
-                // Click on the blank part of the line → caret at end of line.
-                if let Some((run_id, char_offset)) = line_end_offset(line) {
+        // Gather every line whose vertical band contains `y`. Table cells in the
+        // same row share a baseline, so we must consider them together — otherwise
+        // the leftmost cell's blank-line fallback steals clicks meant for neighbors.
+        let y_matches: Vec<&TextLine> = self
+            .lines
+            .iter()
+            .filter(|line| y >= line.y - line.ascent && y <= line.y + line.descent)
+            .collect();
+
+        // Prefer an exact run/glyph hit across all Y-matching lines first.
+        for line in &y_matches {
+            for &(x_start, x_end, run_id, char_offset) in &line.run_map {
+                // Empty runs have zero width; give them a clickable caret target.
+                let end = if x_end <= x_start {
+                    x_start + 4.0
+                } else {
+                    x_end
+                };
+                if x >= x_start && x <= end {
                     return Some(HitTestResult {
                         page: 0,
                         run_id,
@@ -158,6 +194,19 @@ impl LineMap {
                 }
             }
         }
+
+        // Blank-area click: pick the line that owns this X (column for tables,
+        // sole line for body paragraphs) and put the caret at its end.
+        if let Some(line) = pick_line_for_x(&y_matches, x) {
+            if let Some((run_id, char_offset)) = line_end_offset(line) {
+                return Some(HitTestResult {
+                    page: 0,
+                    run_id,
+                    char_offset,
+                });
+            }
+        }
+
         // Below/above all lines: still land on the first available run so an
         // empty page remains editable without a precise click.
         self.lines.first().and_then(|line| {
@@ -230,6 +279,35 @@ fn line_end_offset(line: &TextLine) -> Option<(NodeId, usize)> {
     let &(x_start, x_end, run_id, char_offset) = line.run_map.get(last_index)?;
     let seg_chars = segment_char_count(line, last_index, x_start, x_end);
     Some((run_id, char_offset + seg_chars))
+}
+
+/// Among lines sharing a Y band, choose the one that owns horizontal position `x`.
+///
+/// Body paragraphs usually contribute a single Y match, so blank clicks anywhere
+/// on that band still resolve. Table cells on one row contribute several matches;
+/// ownership is the rightmost line whose left edge is at or left of `x`.
+fn pick_line_for_x<'a>(lines: &[&'a TextLine], x: f32) -> Option<&'a TextLine> {
+    if lines.is_empty() {
+        return None;
+    }
+    if lines.len() == 1 {
+        return Some(lines[0]);
+    }
+    let mut best: Option<&TextLine> = None;
+    for line in lines {
+        if line.x <= x + 0.5 {
+            best = Some(*line);
+        }
+    }
+    best.or_else(|| {
+        lines
+            .iter()
+            .min_by(|a, b| {
+                a.x.partial_cmp(&b.x)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .copied()
+    })
 }
 
 fn segment_char_count(line: &TextLine, index: usize, x_start: f32, x_end: f32) -> usize {

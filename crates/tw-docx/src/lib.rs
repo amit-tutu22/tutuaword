@@ -4,20 +4,38 @@ use tw_model::Document;
 
 pub type PartName = String;
 
+mod bibliography;
+mod comments;
+pub mod chart;
+pub mod diagram;
 mod export;
-mod fingerprint;
-mod image_convert;
+mod encryption;
+pub mod fingerprint;
+mod hyperlink;
 mod import;
 mod media;
 mod numbering;
 mod opc;
 mod paragraph;
+mod preserve;
+mod properties;
+pub mod retention;
+mod signatures;
 mod styles;
 mod table;
+mod vba;
 mod xml_util;
 
+pub use encryption::{
+    decrypt_with_password, encrypt_with_password, is_password_protected,
+};
 pub use export::export_docx;
-pub use import::import_docx;
+pub use import::{import_docx, import_docx_with_password};
+pub use bibliography::BIBLIOGRAPHY_PART;
+pub use comments::COMMENTS_PART;
+pub use retention::ImportRetentionReport;
+pub use signatures::SIGNATURES_PART;
+pub use vba::{is_vba_part, package_has_vba_parts};
 
 /// Original OPC package retained for passthrough export (ADR-0008).
 #[derive(Debug, Clone, Default)]
@@ -28,6 +46,13 @@ pub struct DocxPackage {
     /// Fingerprint of the document as imported. Passthrough export is only
     /// safe while the document still matches it.
     pub source_fingerprint: Option<u64>,
+    /// Fingerprints of Tier B catalogs at import time (R3.3).
+    pub source_numbering_fingerprint: Option<u64>,
+    pub source_styles_fingerprint: Option<u64>,
+    /// Unedited paragraph XML preserved for within-part round-trip (R3.3).
+    pub preserved_paragraphs: preserve::PreservedParagraphMap,
+    /// Unedited shape paragraph XML preserved for DrawingML passthrough (F11.S1).
+    pub preserved_shapes: preserve::PreservedShapeMap,
 }
 
 impl DocxPackage {
@@ -62,6 +87,10 @@ impl DocxPackage {
             modified_parts: HashSet::new(),
             original_bytes: None,
             source_fingerprint: None,
+            source_numbering_fingerprint: None,
+            source_styles_fingerprint: None,
+            preserved_paragraphs: preserve::PreservedParagraphMap::new(),
+            preserved_shapes: preserve::PreservedShapeMap::new(),
         }
     }
 }
@@ -77,6 +106,14 @@ pub(crate) const MINIMAL_CONTENT_TYPES: &[u8] = br#"<?xml version="1.0" encoding
 pub enum DocxError {
     #[error("word/document.xml missing from docx package")]
     MissingDocumentPart,
+    #[error("document is password-protected")]
+    PasswordProtected,
+    #[error("incorrect password")]
+    IncorrectPassword,
+    #[error("document decryption is unsupported: {0}")]
+    DecryptUnsupported(String),
+    #[error("document encryption failed: {0}")]
+    EncryptFailed(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("zip error: {0}")]
@@ -86,6 +123,7 @@ pub enum DocxError {
 pub struct ImportResult {
     pub document: Document,
     pub package: DocxPackage,
+    pub retention: ImportRetentionReport,
 }
 
 pub fn import(source: &[u8]) -> Result<ImportResult, DocxError> {

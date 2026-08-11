@@ -69,6 +69,8 @@ fn outline(doc: &Document) -> AuditStats {
                         stats.empty_images += 1;
                     }
                 }
+                Block::ShapeBlock(_) => {}
+                _ => {}
             }
         }
     }
@@ -76,7 +78,7 @@ fn outline(doc: &Document) -> AuditStats {
 }
 
 fn audit_para(format: &tw_model::ParaFormat, stats: &mut AuditStats) {
-    if !format.tab_stops.is_empty() {
+    if format.tab_stops.as_ref().is_some_and(|s| !s.is_empty()) {
         stats.paras_with_tab_stops += 1;
     }
     match &format.line_spacing {

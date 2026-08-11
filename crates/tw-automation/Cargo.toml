@@ -1,0 +1,25 @@
+[package]
+name = "tw-automation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Public document automation API (F26.S4)"
+
+[lib]
+name = "tw_automation"
+path = "src/lib.rs"
+
+[[bin]]
+name = "tw-automation-cli"
+path = "src/bin/automation_cli.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tw-core = { path = "../tw-core" }
+tw-docx = { path = "../tw-docx" }
+tw-edit = { path = "../tw-edit" }
+tw-model = { path = "../tw-model" }
+tw-pdf = { path = "../tw-pdf" }
+tw-policy = { path = "../tw-policy" }

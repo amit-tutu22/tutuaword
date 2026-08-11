@@ -2,6 +2,24 @@
 
 Six phases over 24 months. Each phase has measurable exit criteria that must pass before the next phase begins.
 
+## Layered Word parity stack (canonical delivery order)
+
+Engineering and product work follows a **nine-layer dependency stack**. Lower layers gate fidelity and trust for everything above; upper layers (automation, macro preservation, enterprise, VBA execution) must not ship ahead of stable DOCX/layout/editing foundations.
+
+| Layer | Goal | Maps to risk S | Maps to features |
+|-------|------|----------------|------------------|
+| **L1 — DOCX compatibility** | Open real files; Tier A identity; Tier B/C passthrough | S1 continuous | F23 |
+| **L2 — Layout** | Pagination, HF, floats vs Word baselines | S1–S2 | F07, F08 |
+| **L3 — Editing** | Command path, undo, clipboard | S0–S2 | F02–F06, F12, F18 |
+| **L4 — Tables / images** | Grid layout, media path | S1–S2 | F09, F10 |
+| **L5 — Review** | Spell, TC, comments, AI assist | S2–S3 | F17, F28, F22.S4 |
+| **L6 — Automation API** | Public headless / embedded SDK | After L5 UAT | F26.S4 |
+| **L7 — Macro preservation** | `vbaProject.bin` survives save; never execute | Tier C | F26 + ADR-0008 |
+| **L8 — Enterprise policies** | IRM, admin policy, capability gates | P6 | F22.S5 |
+| **L9 — VBA execution** | Run or translate macros — **deferred** | — | Explicit non-goal |
+
+Full layer status, gaps, and release sequencing: see [feature-phases.md](feature-phases.md) crosswalk and [risk-mitigation.md](risk-mitigation.md).
+
 ## Phase 1: Editor Foundation (Months 1–3)
 
 **Goal:** A working text editor with a document model, basic formatting, and save/load.
@@ -64,7 +82,7 @@ Six phases over 24 months. Each phase has measurable exit criteria that must pas
 | Insert 5 images with text wrap — layout correct | Golden-image test |
 | Create 3×3 table, merge cells, resize columns | Automated test |
 | Multi-level numbered list renders with correct indentation | Golden-image test |
-| Export to PDF — visual match within 2 px tolerance | PDF golden-image comparison |
+| Export to PDF — structural Helvetica + **VisualMatch** `/FontFile2` embedding (F23.S2) | `tw-pdf` export tests; subsetting / link annotations still open ([long-tail-gaps.md](long-tail-gaps.md)) |
 | 50-page document scrolls at 60 FPS | Frame time benchmark |
 
 ### Team: 8–10 engineers (+2 layout, +1 UI)
@@ -215,11 +233,13 @@ Phase 4 (AI) and Phase 5 (Collaboration) can run in parallel after Phase 3 compl
 
 ## Risk Register
 
+Full matrix (severity, delivery stage S0–S5, residual risk, TC ladder, fidelity SLA): **[risk-mitigation.md](risk-mitigation.md)**. That document wins when this register conflicts with phase plan or long-tail gaps.
+
 | Risk | Phase | Mitigation |
 |------|-------|------------|
-| Layout engine complexity underestimated | 1–2 | Golden-image regression tests from Phase 1; hire layout specialist early |
-| DOCX fidelity below 95% on corpus | 3 | Package passthrough strategy; Tier B/C preservation for unknown elements |
+| Layout engine complexity underestimated | 1–2 | Self-goldens for regression + Word screenshot baselines (see risk-mitigation) |
+| DOCX fidelity below corpus SLA | 2–3 | Passthrough + Tier A/B/C; DOCX on critical path from S1, not polish-only |
 | Flutter `drawRawAtlas` performance insufficient | 1 | Benchmark early in Phase 1; fallback to texture-based rendering if needed |
-| CRDT + track changes interaction complex | 5 | Design mutation path in Phase 1 to be CRDT-compatible (ADR-0007) |
+| CRDT + track changes interaction complex | 5 | ADR-0007; finish TC accept/reject before collab (risk-mitigation ladder) |
 | Local AI model quality insufficient | 4 | Cloud fallback always available; local AI is opt-in |
 | Plugin sandbox security | 6 | WASM isolation default; native plugins require enterprise approval |

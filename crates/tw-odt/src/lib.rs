@@ -74,24 +74,58 @@ fn serialize_content_xml(doc: &Document) -> String {
     if let Some(section) = doc.sections.first() {
         for block in &section.blocks {
             if let tw_model::Block::Paragraph(para) = block {
-                paragraphs.push_str("<text:p>");
-                for run in &para.runs {
-                    let mut span = String::from("<text:span>");
-                    if run.format.bold == Some(true) {
-                        span = String::from(r#"<text:span text:style-name="Bold">"#);
-                    }
-                    span.push_str(&escape_xml(run.text()));
-                    span.push_str("</text:span>");
-                    paragraphs.push_str(&span);
+                let heading_level = para.style_id.and_then(|id| {
+                    doc.styles
+                        .paragraph_styles
+                        .get(&id)
+                        .and_then(|s| s.name.strip_prefix("Heading ").and_then(|n| n.parse::<u8>().ok()))
+                });
+                if let Some(level) = heading_level.filter(|l| (1..=6).contains(l)) {
+                    paragraphs.push_str(&format!(r#"<text:h text:outline-level="{level}">"#));
+                } else {
+                    paragraphs.push_str("<text:p>");
                 }
-                paragraphs.push_str("</text:p>");
+                for run in &para.runs {
+                    let style = match (run.format.bold == Some(true), run.format.italic == Some(true))
+                    {
+                        (true, true) => Some("Bold_20_Italic"),
+                        (true, false) => Some("Bold"),
+                        (false, true) => Some("Italic"),
+                        (false, false) => None,
+                    };
+                    if let Some(name) = style {
+                        paragraphs.push_str(&format!(r#"<text:span text:style-name="{name}">"#));
+                    } else {
+                        paragraphs.push_str("<text:span>");
+                    }
+                    paragraphs.push_str(&escape_xml(run.text()));
+                    paragraphs.push_str("</text:span>");
+                }
+                if heading_level.filter(|l| (1..=6).contains(l)).is_some() {
+                    paragraphs.push_str("</text:h>");
+                } else {
+                    paragraphs.push_str("</text:p>");
+                }
             }
         }
     }
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+  xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0"
+  xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0"
   xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0">
+  <office:automatic-styles>
+    <style:style style:name="Bold" style:family="text">
+      <style:text-properties fo:font-weight="bold"/>
+    </style:style>
+    <style:style style:name="Italic" style:family="text">
+      <style:text-properties fo:font-style="italic"/>
+    </style:style>
+    <style:style style:name="Bold_20_Italic" style:family="text">
+      <style:text-properties fo:font-weight="bold" fo:font-style="italic"/>
+    </style:style>
+  </office:automatic-styles>
   <office:body><office:text>{paragraphs}</office:text></office:body>
 </office:document-content>"#
     )

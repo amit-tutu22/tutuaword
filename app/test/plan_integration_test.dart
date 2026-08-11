@@ -8,7 +8,7 @@ void main() {
 
   group('Plan integration — Home tab lists', () {
     testWidgets('numbered list button is wired and updates status', (tester) async {
-      final controller = EditorController();
+      final controller = EditorController.forTest();
       addTearDown(controller.dispose);
 
       await tester.pumpWidget(
@@ -29,12 +29,12 @@ void main() {
       if (controller.isEngineConnected) {
         expect(controller.statusText, contains('Numbered list'));
       } else {
-        expect(controller.statusText, contains('Numbered list applied (mock)'));
+        expect(controller.statusText, contains('Numbered list applied'));
       }
     });
 
     testWidgets('bullet and numbered list tooltips are present', (tester) async {
-      final controller = EditorController();
+      final controller = EditorController.forTest();
       addTearDown(controller.dispose);
 
       await tester.pumpWidget(
@@ -55,24 +55,25 @@ void main() {
   });
 
   group('Plan integration — EditorController lists', () {
-    test('applyNumberedList updates status in mock mode', () {
-      final controller = EditorController();
+    test('applyNumberedList updates status in mock mode', () async {
+      final controller = EditorController.forTest();
       addTearDown(controller.dispose);
 
-      if (controller.isEngineConnected) return;
-
       controller.applyNumberedList();
-      expect(controller.statusText, contains('Numbered list applied (mock)'));
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.statusText, contains('Numbered list applied'));
     });
 
-    test('applyBulletList and applyNumberedList are distinct', () {
-      final controller = EditorController();
+    test('applyBulletList and applyNumberedList are distinct', () async {
+      final controller = EditorController.forTest();
       addTearDown(controller.dispose);
 
       controller.applyBulletList();
+      await Future<void>.delayed(Duration.zero);
       final bulletStatus = controller.statusText;
 
       controller.applyNumberedList();
+      await Future<void>.delayed(Duration.zero);
       final numberedStatus = controller.statusText;
 
       expect(bulletStatus, isNot(equals(numberedStatus)));

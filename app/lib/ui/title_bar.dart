@@ -1,67 +1,98 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
 import 'package:tutuaword/ui/ribbon_widgets.dart';
 import 'package:tutuaword/ui/word_theme.dart';
 
 class WordTitleBar extends StatelessWidget {
-  const WordTitleBar({super.key, required this.controller});
+  const WordTitleBar({
+    super.key,
+    required this.controller,
+    this.onHomePressed,
+  });
 
   final EditorController controller;
+  final VoidCallback? onHomePressed;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      height: WordTheme.titleBarHeight,
-      color: WordTheme.titleBarBlue,
-      child: Row(
-        children: [
-          const SizedBox(width: WordTheme.trafficLightInset),
-          _QuickAccessIcon(
-            icon: Icons.home_outlined,
-            tooltip: kComingSoonTooltip,
-            onPressed: null,
-          ),
-          _QuickAccessIcon(
-            icon: Icons.save_outlined,
-            tooltip: 'Save',
-            onPressed: () => controller.saveDocument(),
-          ),
-          _QuickAccessIcon(
-            icon: Icons.undo,
-            tooltip: 'Undo',
-            onPressed: controller.undo,
-          ),
-          _QuickAccessIcon(
-            icon: Icons.redo,
-            tooltip: 'Redo',
-            onPressed: controller.redo,
-          ),
-          _QuickAccessIcon(
-            icon: Icons.print_outlined,
-            tooltip: 'Print',
-            onPressed: controller.togglePrintPreview,
-          ),
-          _QuickAccessIcon(
-            icon: Icons.more_horiz,
-            tooltip: 'More',
-            onPressed: null,
-          ),
-          Expanded(
-            child: Center(
-              child: Text(
-                controller.documentTitle,
-                style: WordTheme.titleBarTitle,
-                overflow: TextOverflow.ellipsis,
+    // iOS and Android draw the status bar, notch, and Dynamic Island over the
+    // app. The blue extends under them so the bar still reads as one surface,
+    // while the quick-access controls sit below the inset.
+    final viewPadding = MediaQuery.paddingOf(context);
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      // Light glyphs: the system clock and indicators sit on the blue bar.
+      value: SystemUiOverlayStyle.light,
+      child: Container(
+        color: WordTheme.titleBarBlue,
+        padding: EdgeInsets.only(
+          top: viewPadding.top,
+          left: viewPadding.left,
+          right: viewPadding.right,
+        ),
+        child: SizedBox(
+          height: WordTheme.titleBarHeight,
+          // Title is centered on the full bar width; icons sit in a separate
+          // layer so asymmetric quick-access chrome does not shift the name.
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 120),
+                child: Text(
+                  controller.documentTitle,
+                  style: WordTheme.titleBarTitle,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                ),
               ),
-            ),
+              Row(
+                children: [
+                  const SizedBox(width: WordTheme.trafficLightInset),
+                  _QuickAccessIcon(
+                    icon: Icons.home_outlined,
+                    tooltip: onHomePressed == null ? kComingSoonTooltip : 'Home',
+                    onPressed: onHomePressed,
+                  ),
+                  _QuickAccessIcon(
+                    icon: Icons.folder_open_outlined,
+                    tooltip: 'Open',
+                    onPressed: () => controller.openDocument(),
+                  ),
+                  _QuickAccessIcon(
+                    icon: Icons.save_outlined,
+                    tooltip: 'Save',
+                    onPressed: () => controller.saveDocument(),
+                  ),
+                  _QuickAccessIcon(
+                    icon: Icons.undo,
+                    tooltip: 'Undo',
+                    onPressed: controller.undo,
+                  ),
+                  _QuickAccessIcon(
+                    icon: Icons.redo,
+                    tooltip: 'Redo',
+                    onPressed: controller.redo,
+                  ),
+                  _QuickAccessIcon(
+                    icon: Icons.print_outlined,
+                    tooltip: 'Print',
+                    onPressed: () => controller.printDocument(context: context),
+                  ),
+                  const Spacer(),
+                  _QuickAccessIcon(
+                    key: const Key('title_bar_search'),
+                    icon: Icons.search,
+                    tooltip: 'Find',
+                    onPressed: controller.openFindPane,
+                  ),
+                  const SizedBox(width: 12),
+                ],
+              ),
+            ],
           ),
-          _QuickAccessIcon(
-            icon: Icons.search,
-            tooltip: 'Search',
-            onPressed: null,
-          ),
-          const SizedBox(width: 12),
-        ],
+        ),
       ),
     );
   }
@@ -69,6 +100,7 @@ class WordTitleBar extends StatelessWidget {
 
 class _QuickAccessIcon extends StatefulWidget {
   const _QuickAccessIcon({
+    super.key,
     required this.icon,
     required this.tooltip,
     this.onPressed,

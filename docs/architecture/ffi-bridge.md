@@ -2,6 +2,29 @@
 
 The FFI bridge connects the Rust engine to the Flutter UI. It defines the boundary between the UI thread (Dart) and the worker thread (Rust), including data transport, threading model, and platform-specific entry points.
 
+> **The host must call `tw_pump_events`, or it will receive no events at all.**
+>
+> Registering a callback with `tw_init` is not sufficient. The callback fires only
+> while the FFI layer drains the worker's event channel, and nothing drains it
+> spontaneously — `tw_dispatch` and the other edit exports enqueue a command and
+> return, and the worker pushes its completion into a channel that sits there until
+> somebody reads it.
+>
+> An unpumped host sees every correlated wait run to its full 30 s timeout, and the
+> symptom surfaces somewhere unrelated to the missing pump. Worse, it can look like
+> it works: any blocking export on the stack drains the channel as a side effect, so
+> the bug only appears once the last blocking call is removed.
+>
+> Call `tw_pump_events` on a timer or frame callback for the lifetime of the
+> session. Dart's `NativeEventRouter` runs it adaptively: 2 ms while a correlated
+> request is outstanding, 16 ms when idle so background reflow repaints still
+> arrive. When a correlated wait times out having never been pumped, the engine
+> prints a one-time warning to stderr naming this cause.
+>
+> See [Event callback contract](#event-callback-contract) for the two other rules
+> that go with it: read `request_id` from the by-value argument rather than the
+> payload, and treat the payload as valid only for the duration of the call.
+
 ## Design Goals
 
 1. **Zero-copy data transfer.** Display lists and atlas data cross the boundary as flat byte buffers, not serialized object graphs.
@@ -38,27 +61,37 @@ Commands are sent asynchronously. The UI thread enqueues and returns immediately
 pub enum BridgeCommand {
     // Document lifecycle
     NewDocument,
-    OpenDocument { path: String },
-    SaveDocument { doc_id: DocId, path: String, format: SaveFormat },
-    CloseDocument { doc_id: DocId },
+    OpenDocument { data: Vec<u8>, path_hint: Option<String> },
+    SaveDocument,
+    SaveDocumentAs { format: DetectedFormat },
+    SpellCheckDocument,
+    CloseDocument, // planned
 
-    // Editing
-    ApplyEdit { doc_id: DocId, command: Command },
+    // Settings (not yet modeled as Command)
+    ToggleTrackChanges { enabled: bool },
 
-    // Layout queries
-    RequestLayout { doc_id: DocId, page: PageIndex },
+    // All document edits — single mutation path (ADR-0007, R2.3)
+    ApplyEdit { command: Command },
 
-    // Search
-    Search { doc_id: DocId, query: String, options: SearchOptions },
+    // Session undo stack (not Command enum)
+    Undo,
+    Redo,
 
-    // Cursor/selection queries
-    HitTest { doc_id: DocId, page: PageIndex, x: f32, y: f32 },
-    PositionForOffset { doc_id: DocId, page: PageIndex, x: f32, y: f32 },
+    // View / navigation
+    SetCurrentPage { page: u32 },
 
-    // Image assets
-    RequestImage { doc_id: DocId, image_id: ImageAssetId },
+    // Import + paste (format crate returns Document; tw-edit mutates)
+    PasteHtml { run_id: NodeId, offset: usize, html: Vec<u8> },
+    PasteDocx { run_id: NodeId, offset: usize, bytes: Vec<u8> },
+
+    // Export
+    ExportPdf,
+
+    Shutdown,
 }
 ```
+
+Ribbon helpers (`apply_heading1`, `insert_table`, …) build a `Command` in `tw-edit::command_builders` and enqueue `ApplyEdit` — they do not add new `BridgeCommand` variants.
 
 Queue implementation:
 
@@ -69,12 +102,16 @@ pub struct CommandQueue {
 }
 ```
 
-Flutter enqueues via FFI:
+Flutter enqueues edits via JSON dispatch (R2.5):
 
 ```dart
-void applyEdit(int docId, Uint8List commandBytes) {
-  _nativeApplyEdit(docId, commandBytes, commandBytes.length);
-}
+final bytes = CommandCodec.encode(CommandCodec.insertText(
+  runId: runId,
+  offset: offset,
+  text: text,
+));
+engine.dispatchCommandBytes(bytes);
+// correlate with NativeEventRouter.waitFor(engine.lastRequestId())
 ```
 
 ### Snapshot Notification (Rust → UI)
@@ -139,28 +176,135 @@ impl SnapshotBuffer {
 
 The worker writes to the back buffer, then swaps front and back under write locks. The UI thread clones the front snapshot on read — a short lock, not a lock-free atomic pointer swap.
 
-### Synchronous Wait (5 s)
+### Async edit completion (R1.4)
 
-After enqueueing a command, `tw-ffi` blocks until the worker publishes a fresh snapshot or times out. `wait_for_document` polls `Session::poll_event()` every **5 ms** for up to **5 seconds**:
+Edit FFI exports enqueue a command and return immediately (`0` on success, negative on error). The enqueued `request_id` is available via `tw_last_request_id()`. Dart registers interest in `NativeEventRouter.waitFor(requestId)` **before or after** enqueue; early events are buffered if the worker responds before registration.
+
+`tw_wait_for_layout` is removed from production builds (`#[cfg(test)]` only).
+
+### Async document operations (P1-7)
+
+Open, save, and spell check are split into an enqueue that hands back the
+`request_id` immediately and a getter keyed by that id:
 
 ```rust
-fn wait_for_document(session: &Session) -> i32 {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline {
-        if let Some(event) = session.poll_event() {
-            match event {
-                BridgeEvent::DocumentOpened { .. } | BridgeEvent::DisplayListReady { .. } => return 0,
-                BridgeEvent::Error { .. } => return -2,
-                _ => {}
-            }
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    -3  // timeout
-}
+pub extern "C" fn tw_open_document_async(data: *const u8, len: usize, path_ptr: *const c_char, out_request_id: *mut u64) -> i32;
+pub extern "C" fn tw_take_open_result(request_id: u64) -> i32;
+pub extern "C" fn tw_save_document_async(out_request_id: *mut u64) -> i32;
+pub extern "C" fn tw_save_document_as_async(format_ptr: *const c_char, out_request_id: *mut u64) -> i32;
+pub extern "C" fn tw_take_saved_document(request_id: u64, out_ptr: *mut *const u8, out_len: *mut usize) -> i32;
+pub extern "C" fn tw_spell_check_document_async(out_request_id: *mut u64) -> i32;
+pub extern "C" fn tw_take_spell_check_result(request_id: u64, out_ptr: *mut *const u8, out_len: *mut usize) -> i32;
+pub extern "C" fn tw_pump_events() -> i32;
 ```
 
-`tw_init` and edit FFI entry points call this helper so the first display-list fetch does not race an unpublished snapshot. `Session::wait_for_event(timeout_ms)` exposes the same polling pattern for tests.
+Enqueue returns `0` on success, `-1` with no session, `-2` for a null out pointer,
+`-4` when the worker channel is gone. Getters return `0` when the payload is
+written, `1` while the request is still in flight, `-2` when the operation failed
+(message via `tw_get_last_error`), `-3` for an id that was never enqueued, was
+already collected, or aged out.
+
+Results are held in a bounded, oldest-first-evicted table of 16 slots, so a
+completion survives until the getter runs but an abandoned request cannot leak.
+Payload buffers are released with `tw_free_buffer`.
+
+Worker events reach the Dart callback only while the FFI layer drains the event
+channel. A host that never blocks must call `tw_pump_events` (timer or frame
+callback) to deliver events and settle result slots; the getters pump internally
+as well, so a poll-only host also makes progress.
+
+`tw_open_document_with_path`, `tw_save_document`, `tw_save_document_as`, and
+`tw_spell_check_document` remain as blocking wrappers over the same worker path
+(correlated wait, up to 30 s). Do not pump from another isolate while one of them
+is parked: the wrapper and the pump both consume from the same correlation buffer.
+
+### Event callback contract
+
+```c
+typedef void (*tw_event_callback)(uint32_t event_type,
+                                  uint64_t request_id,
+                                  const uint8_t* payload,
+                                  size_t payload_len);
+```
+
+**`event_type` and `request_id` are passed by value and are the authoritative
+copy.** A host must never need to read `payload` in order to correlate a request.
+
+`payload` is valid **only for the duration of the call**. It points at a stack
+buffer in the frame that invoked the callback, so a host that defers work to a
+later turn of its own event loop must copy the bytes first. Today it carries the
+same two scalars in the 12-byte wire encoding below; it exists so future events can
+carry inline data without another ABI break.
+
+This is not a theoretical hazard. The original signature passed the correlation id
+only through `payload`, and Dart registered the callback with
+`NativeCallable.listener`, which defers to a later event-loop turn — by which point
+the frame was gone. `event_type` (by value) arrived correctly while the buffer's
+own first four bytes decoded to garbage and later events read back as recycled
+zeros with request id 0. No correlation id was ever delivered correctly, so every
+`awaitEditCompletion` waited on an id that could not arrive, which is where the 30 s
+select-all timeout came from. It also made `nativeFfiEventsAvailable()` always
+false, silently skipping the entire real-FFI integration suite. Dart now uses
+`NativeCallable.isolateLocal` and asserts that the payload's event type matches the
+by-value one, and the by-value `request_id` makes correctness independent of when
+the host chooses to run the callback.
+
+**The callback never runs with an engine lock held.** Events are collected under
+`SESSION` and forwarded after it is released, so a host is free to call back into
+any export from its callback — including `tw_take_saved_document` for the very
+result the event announces. `SESSION` is a non-reentrant `parking_lot` mutex, so
+the earlier arrangement would have deadlocked such a host outright
+(`crates/tw-ffi/tests/r1_callback_reentrancy.rs`).
+
+### Event wire format and correlation guarantees
+
+The `payload` buffer is exactly 12 bytes: LE `u32` event type followed by LE `u64` `request_id`. Any future extension appends after byte 12; the first 12 bytes keep this meaning.
+
+The worker's `EventPublisher` coalesces redundant `DisplayListReady` events for the same page so a burst of keystrokes does not schedule a repaint per character. Coalescing drops the *event*, never the *correlation*: the `request_id` of every superseded event is retained in a compact queue and re-emitted as a `DisplayListReady` carrying the latest page and version as soon as the channel has room. A caller awaiting an enqueued edit therefore always receives a completion, even when the Dart side falls far behind the worker.
+
+Two `request_id` values are reserved and never handed out to callers:
+
+| Constant | Value | Meaning |
+| --- | --- | --- |
+| `STARTUP_REQUEST_ID` | `0` | Worker's initial `DocumentOpened` |
+| `BACKGROUND_REQUEST_ID` | `u64::MAX` | Repaint produced by background forward relayout |
+
+`BACKGROUND_REQUEST_ID` events are repaint hints only. They tell the UI that pages it may already be displaying have been re-laid-out; they never satisfy a pending edit correlation.
+
+### Stale pages and hit testing
+
+While a background forward relayout is owed, pages past the reflow frontier still
+hold pre-edit geometry. Hit testing them would resolve a caret against content that
+has since moved, so the engine refuses:
+
+```rust
+/// 1 = page is stale (pending forward reflow, hit tests unreliable)
+/// 0 = page is fresh
+/// -1 = no session
+pub extern "C" fn tw_is_page_stale(page: u32) -> i32;
+```
+
+`tw_hit_test` returns `-4` for a stale page and keeps `-2` for a genuine miss on a
+page that is current. Treating the two the same is a bug: a miss means "nothing
+here, place the caret accordingly", while stale means "ask again after the next
+repaint". Callers should consult `tw_is_page_stale` before falling back to any
+empty-page caret placement.
+
+Staleness gates *geometry* queries only. A pending reflow leaves the document model
+fully current — the edit has already been applied — so anything that reads the model
+and ignores per-page geometry must still answer. `tw_document_tail_hit` resolves the
+last run of the document and only echoes `page` back for caret display, so it is
+deliberately **not** gated on staleness; select-all depends on it succeeding during
+catch-up. Apply the same rule to anything added later: gate it only if it reads
+`line_maps`.
+
+The stale set is `[frontier, page_count)`, where the frontier is the first page no
+pass has rebuilt since the edit that opened the window. It advances as background
+chunks land and is not reset by a later edit that converges, so pages already
+caught up stay usable. On a 48-page document a single large front-of-document
+insert marks 44 pages stale; the midpoint clears at ~215 ms and the last page at
+~460 ms in release, i.e. roughly 10 ms per page of catch-up. Edits that do not
+cascade past the synchronous window mark nothing stale at all.
 
 ## Zero-Copy Data Transport
 
@@ -203,12 +347,20 @@ The glyph atlas is transferred once per atlas rebuild (not per frame):
 ```rust
 #[no_mangle]
 pub extern "C" fn tw_get_atlas(
-    doc_id: u32,
+    out_generation: *mut u64,
     out_ptr: *mut *const u8,
+    out_len: *mut usize,
     out_width: *mut u32,
     out_height: *mut u32,
 ) -> i32;
+
+/// Generation only, no pixel copy: `0` on success, `-1` no session, `-2` null out.
+#[no_mangle]
+pub extern "C" fn tw_get_atlas_generation(out_generation: *mut u64) -> i32;
 ```
+
+`tw_get_atlas` clones the whole pixel buffer, so check `tw_get_atlas_generation`
+first and skip the fetch when the generation is unchanged.
 
 Flutter creates a `ui.Image` from the RGBA data:
 
@@ -223,19 +375,52 @@ Future<ui.Image> _createAtlasImage(Uint8List rgba, int width, int height) {
 }
 ```
 
-### Command Serialization
+### Command Serialization (R2.5)
 
-Edit commands are serialized as compact binary (not JSON) for minimal overhead:
+Document edits use JSON-serialized [`Command`](../../crates/tw-edit/src/command.rs) values dispatched through a single FFI entry point:
 
 ```rust
-// Command wire format
+#[no_mangle]
+pub extern "C" fn tw_dispatch(command_ptr: *const u8, command_len: usize) -> i32;
+```
+
+Example wire payload:
+
+```json
+{"type":"InsertText","run_id":"00000000-0000-0000-0000-000000000004","offset":3,"text":"hi"}
+```
+
+Dart builds commands via `CommandCodec` and enqueues with `NativeEngine.dispatchCommand()`. Character and paragraph format patches use open `Map<String, dynamic>` helpers in `format_codec.dart` — new Rust `CharFormat` fields require no Dart typedef/codegen.
+
+Legacy per-operation edit exports (`tw_apply_insert_text`, `tw_apply_char_format`, …) remain as thin ABI-compatible wrappers that call the same internal `apply_command` path.
+
+### Stable native ABI (R2.5)
+
+| Category | Exports |
+|----------|---------|
+| Lifecycle | `tw_init`, `tw_shutdown`, `tw_new_document`, `tw_open_document`, `tw_open_document_with_path`, `tw_save_document`, `tw_save_document_as`, `tw_export_pdf` |
+| Lifecycle (async) | `tw_open_document_async`, `tw_save_document_async`, `tw_save_document_as_async`, `tw_spell_check_document_async`, `tw_take_open_result`, `tw_take_saved_document`, `tw_take_spell_check_result` |
+| Edits | `tw_dispatch` (primary), legacy `tw_apply_*` wrappers |
+| Session | `tw_undo`, `tw_redo`, `tw_set_track_changes`, `tw_set_current_page` |
+| Paste | `tw_apply_paste_html`, `tw_apply_paste_docx` |
+| Display | `tw_get_display_list`, `tw_get_page_display_list`, `tw_get_atlas`, `tw_get_atlas_generation` |
+| Query JSON | `tw_get_caret_format`, `tw_get_document_text`, `tw_get_text_range`, `tw_hit_test`, `tw_is_page_stale`, … |
+| Correlation | `tw_last_request_id`, `tw_pump_events`, `tw_free_buffer`, `tw_get_last_error` |
+
+Query/format APIs return JSON or flat bytes; only display lists and atlas cross as opaque buffers.
+
+### Legacy binary command sketch (superseded)
+
+The original compact binary wire format is superseded by JSON dispatch for extensibility:
+
+```rust
 // u8 command_type
 // ... command-specific fields (fixed-size where possible)
 ```
 
 Example: `InsertText { run_id: [16 bytes UUID], offset: u32, text: [u32 len][utf8 bytes] }`
 
-Total overhead for a single character insert: ~25 bytes.
+Total overhead for a single character insert: ~25 bytes (binary) vs ~120 bytes (JSON). JSON chosen for R2.5 exit criteria (zero Dart codegen on new fields).
 
 ## Page-Granular Invalidation
 
@@ -273,10 +458,11 @@ final applyEdit = lib.lookupFunction<ApplyEditNative, ApplyEditDart>('tw_apply_e
 ```
 
 Technology options (decide in Phase 1 implementation):
-- **flutter_rust_bridge** — codegen, async support, automatic type conversion
-- **Manual C ABI + cbindgen** — full control, minimal dependencies
+- **JSON command dispatch (R2.5, chosen)** — extensible `Command` serde, dynamic Dart format maps, no codegen
+- **flutter_rust_bridge** — deferred; may wrap query APIs later (R2.6+)
+- **Manual C ABI + cbindgen** — display list / atlas hot paths
 
-Recommendation: start with `flutter_rust_bridge` for velocity; migrate hot paths to manual FFI if profiling shows overhead.
+Recommendation: keep JSON dispatch for edits; add FRB only if query surface outgrows hand-written JSON parsers.
 
 ### Web (tw-wasm)
 

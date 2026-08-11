@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:tutuaword/editor/change_case.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
+import 'package:tutuaword/ui/ribbon_color_picker.dart';
 import 'package:tutuaword/ui/ribbon_widgets.dart';
 import 'package:tutuaword/ui/word_theme.dart';
 
@@ -8,15 +10,66 @@ class HomeTab extends StatelessWidget {
 
   final EditorController controller;
 
+  Future<void> _openChangeCaseMenu(BuildContext context) async {
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    await showRibbonPresetMenu(
+      context,
+      box,
+      kChangeCaseMenuLabels.map((e) => e.$2).toList(),
+      (label) {
+        final kind = kChangeCaseMenuLabels
+            .firstWhere((e) => e.$2 == label)
+            .$1;
+        controller.applyChangeCase(kind);
+      },
+      minWidth: 180,
+      maxWidth: 220,
+    );
+  }
+
+  Future<void> _openSortMenu(BuildContext context) async {
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    await showRibbonPresetMenu(
+      context,
+      box,
+      const ['Sort A → Z', 'Sort Z → A'],
+      (label) {
+        if (label.startsWith('Sort A')) {
+          controller.sortParagraphs(ascending: true);
+        } else {
+          controller.sortParagraphs(ascending: false);
+        }
+      },
+      minWidth: 140,
+    );
+  }
+
+  static const _builtinGalleryStyles = <(String, TextStyle)>[
+    ('Normal', TextStyle(fontSize: 9)),
+    ('Heading 1', TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+    ('Heading 2', TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+    ('Heading 3', TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+    ('Heading 4', TextStyle(fontSize: 9, fontStyle: FontStyle.italic)),
+    ('Heading 5', TextStyle(fontSize: 9)),
+    ('Heading 6', TextStyle(fontSize: 9, fontStyle: FontStyle.italic)),
+    ('Heading 7', TextStyle(fontSize: 9)),
+    ('Heading 8', TextStyle(fontSize: 8, fontStyle: FontStyle.italic)),
+    ('Heading 9', TextStyle(fontSize: 8)),
+    ('Quote', TextStyle(fontSize: 9, fontStyle: FontStyle.italic)),
+    ('Caption', TextStyle(fontSize: 8, fontStyle: FontStyle.italic)),
+  ];
+
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          RibbonGroup(
-            label: 'Clipboard',
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) {
+        return RibbonTabScroller(
+          children: [
+              RibbonGroup(
+                label: 'Clipboard',
             child: Row(
               children: [
                 RibbonLargeButton(
@@ -41,10 +94,14 @@ class HomeTab extends StatelessWidget {
                       onPressed: controller.copySelection,
                       iconSize: 14,
                     ),
-                    RibbonIconButton(
+                    RibbonToggleButton(
+                      key: const Key('format_painter'),
                       icon: Icons.format_paint,
-                      tooltip: 'Format Painter',
-                      onPressed: null,
+                      tooltip: controller.formatPainterArmed
+                          ? 'Format Painter (armed — select text to paint, or click to cancel)'
+                          : 'Format Painter',
+                      selected: controller.formatPainterArmed,
+                      onPressed: controller.toggleFormatPainter,
                       iconSize: 14,
                     ),
                   ],
@@ -68,15 +125,22 @@ class HomeTab extends StatelessWidget {
                     ),
                     const SizedBox(width: 4),
                     RibbonDropdown(
-                      value: controller.fontSize.toInt().toString(),
-                      width: 40,
+                      value: formatRibbonFontSize(controller.fontSize),
+                      width: 48,
                       items: kRibbonFontSizes,
                       onSelected: (size) => controller.setFontSize(double.parse(size)),
                     ),
                     const SizedBox(width: 4),
                     RibbonIconButton(icon: Icons.text_increase, onPressed: controller.increaseFontSize),
                     RibbonIconButton(icon: Icons.text_decrease, onPressed: controller.decreaseFontSize),
-                    RibbonIconButton(icon: Icons.change_circle_outlined, onPressed: null),
+                    Builder(
+                      builder: (context) => RibbonIconButton(
+                        key: const Key('change_case'),
+                        icon: Icons.change_circle_outlined,
+                        tooltip: 'Change Case',
+                        onPressed: () => _openChangeCaseMenu(context),
+                      ),
+                    ),
                     RibbonIconButton(
                       icon: Icons.format_clear,
                       tooltip: 'Clear Formatting',
@@ -123,8 +187,52 @@ class HomeTab extends StatelessWidget {
                       selected: controller.superscript,
                       onPressed: controller.toggleSuperscript,
                     ),
-                    RibbonIconButton(icon: Icons.format_color_text, onPressed: null),
-                    RibbonIconButton(icon: Icons.format_color_fill, onPressed: null),
+                    RibbonColorButton(
+                      icon: Icons.format_color_text,
+                      tooltip: 'Font Color',
+                      barColor: controller.fontColor,
+                      onColorSelected: (selection) => controller.setFontColor(
+                        selection.color,
+                        themeSlot: selection.themeSlot,
+                        themeVariant: selection.themeVariant,
+                      ),
+                      onAutomatic: controller.clearFontColor,
+                    ),
+                    RibbonColorButton(
+                      icon: Icons.format_color_fill,
+                      tooltip: 'Text Highlight Color',
+                      barColor: controller.highlightColor ?? const Color(0xFFFFFF00),
+                      onColorSelected: (selection) => controller.setHighlight(selection.color),
+                      onClear: controller.clearHighlight,
+                    ),
+                    RibbonTextToggleButton(
+                      text: 'AA',
+                      tooltip: 'All Caps',
+                      selected: controller.allCaps,
+                      onPressed: controller.toggleAllCaps,
+                    ),
+                    RibbonTextToggleButton(
+                      text: 'Aa',
+                      tooltip: 'Small Caps',
+                      selected: controller.smallCaps,
+                      onPressed: controller.toggleSmallCaps,
+                      textStyle: const TextStyle(
+                        fontSize: 11,
+                        fontFeatures: [FontFeature.enable('smcp')],
+                      ),
+                    ),
+                    RibbonToggleButton(
+                      icon: Icons.visibility_off,
+                      tooltip: 'Hidden',
+                      selected: controller.hidden,
+                      onPressed: controller.toggleHidden,
+                    ),
+                    RibbonToggleButton(
+                      icon: Icons.link,
+                      tooltip: 'Ligatures',
+                      selected: controller.ligatures,
+                      onPressed: controller.toggleLigatures,
+                    ),
                   ],
                 ),
               ],
@@ -148,6 +256,16 @@ class HomeTab extends StatelessWidget {
                       onPressed: controller.applyNumberedList,
                     ),
                     RibbonIconButton(
+                      icon: Icons.restart_alt,
+                      tooltip: 'Restart Numbering',
+                      onPressed: controller.isInList ? controller.restartNumbering : null,
+                    ),
+                    RibbonIconButton(
+                      icon: Icons.playlist_play,
+                      tooltip: 'Continue Numbering',
+                      onPressed: controller.isInList ? controller.continueNumbering : null,
+                    ),
+                    RibbonIconButton(
                       icon: Icons.format_indent_decrease,
                       tooltip: 'Decrease Indent',
                       onPressed: controller.decreaseIndent,
@@ -157,8 +275,23 @@ class HomeTab extends StatelessWidget {
                       tooltip: 'Increase Indent',
                       onPressed: controller.increaseIndent,
                     ),
-                    RibbonIconButton(icon: Icons.sort, onPressed: null),
-                    RibbonIconButton(icon: Icons.visibility, onPressed: null),
+                    Builder(
+                      builder: (context) => RibbonIconButton(
+                        key: const Key('sort_paragraphs'),
+                        icon: Icons.sort,
+                        tooltip: 'Sort paragraphs',
+                        onPressed: () => _openSortMenu(context),
+                      ),
+                    ),
+                    RibbonToggleButton(
+                      key: const Key('show_formatting_marks'),
+                      icon: Icons.visibility,
+                      tooltip: controller.showFormattingMarks
+                          ? 'Hide formatting marks (¶)'
+                          : 'Show formatting marks (¶)',
+                      selected: controller.showFormattingMarks,
+                      onPressed: controller.toggleFormattingMarks,
+                    ),
                   ],
                 ),
                 const SizedBox(height: 2),
@@ -188,8 +321,16 @@ class HomeTab extends StatelessWidget {
                       selected: controller.alignment == TextAlign.justify,
                       onPressed: () => controller.setAlignment(TextAlign.justify),
                     ),
-                    RibbonIconButton(icon: Icons.format_line_spacing, onPressed: null),
-                    RibbonIconButton(icon: Icons.border_all, onPressed: null),
+                    RibbonIconButton(
+                      icon: Icons.format_line_spacing,
+                      tooltip: 'Paragraph Spacing',
+                      onPressed: () => controller.showParagraphSpacingDialog(context),
+                    ),
+                    RibbonIconButton(
+                      icon: Icons.border_all,
+                      tooltip: 'Borders and Shading',
+                      onPressed: () => controller.showParagraphBordersDialog(context),
+                    ),
                   ],
                 ),
               ],
@@ -199,38 +340,52 @@ class HomeTab extends StatelessWidget {
             label: 'Styles',
             child: Row(
               children: [
-                StyleGalleryCard(
-                  label: 'Normal',
-                  previewStyle: const TextStyle(fontSize: 9),
-                  selected: controller.activeParagraphStyle == 'Normal',
-                  onPressed: controller.applyNormalStyle,
+                SizedBox(
+                  width: 420,
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        for (final entry in _builtinGalleryStyles)
+                          StyleGalleryCard(
+                            label: entry.$1,
+                            previewStyle: entry.$2,
+                            selected: controller.activeParagraphStyle == entry.$1,
+                            onPressed: () => controller.applyParagraphStyle(entry.$1),
+                          ),
+                        StyleGalleryCard(
+                          label: 'No Spacing',
+                          previewStyle: const TextStyle(fontSize: 9, height: 1.0),
+                          selected: controller.activeParagraphStyle == 'No Spacing',
+                          onPressed: () => controller.applyParagraphStyle('No Spacing'),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
-                StyleGalleryCard(
-                  label: 'No Spacing',
-                  previewStyle: const TextStyle(fontSize: 9, height: 1.0),
-                  onPressed: null,
+                RibbonTextButton(
+                  label: 'Styles\nPane',
+                  onPressed: controller.toggleStyleInspector,
                 ),
-                StyleGalleryCard(
-                  label: 'Heading 1',
-                  previewStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
-                  onPressed: controller.applyHeading1,
-                ),
-                RibbonIconButton(icon: Icons.chevron_right, onPressed: null),
-                RibbonTextButton(label: 'Styles\nPane', onPressed: null),
               ],
             ),
           ),
           RibbonGroup(
             label: 'Add-ins',
             showDivider: false,
-            child: RibbonTextButton(
-              label: 'Add-ins',
-              icon: Icons.extension_outlined,
-              onPressed: null,
+            child: Builder(
+              builder: (context) => RibbonTextButton(
+                key: const Key('home_add_ins'),
+                label: 'Add-ins',
+                icon: Icons.extension_outlined,
+                tooltip: 'Manage plugins and add-ins',
+                onPressed: () => controller.managePlugins(context),
+              ),
             ),
           ),
-        ],
-      ),
+          ],
+        );
+      },
     );
   }
 }

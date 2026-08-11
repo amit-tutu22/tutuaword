@@ -94,12 +94,16 @@ pub fn advance_past_tag<'a>(xml: &'a str, tag: &str) -> &'a str {
         .unwrap_or("")
 }
 
-/// The next run-level child inside a paragraph body: `w:r`, `w:ins`, or `w:del`.
+/// The next run-level child inside a paragraph body.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunLevelTag {
     Run,
     Insert,
     Delete,
+    Hyperlink,
+    FieldSimple,
+    BookmarkStart,
+    OfficeMath,
 }
 
 /// Finds the earliest run-level element at the current parse position.
@@ -108,6 +112,10 @@ pub fn next_run_level_tag(xml: &str) -> Option<(usize, RunLevelTag)> {
         xml.find("<w:r").map(|i| (i, RunLevelTag::Run)),
         xml.find("<w:ins").map(|i| (i, RunLevelTag::Insert)),
         xml.find("<w:del").map(|i| (i, RunLevelTag::Delete)),
+        xml.find("<w:hyperlink").map(|i| (i, RunLevelTag::Hyperlink)),
+        xml.find("<w:fldSimple").map(|i| (i, RunLevelTag::FieldSimple)),
+        xml.find("<w:bookmarkStart").map(|i| (i, RunLevelTag::BookmarkStart)),
+        xml.find("<m:oMath").map(|i| (i, RunLevelTag::OfficeMath)),
     ]
     .into_iter()
     .flatten()
@@ -117,6 +125,10 @@ pub fn next_run_level_tag(xml: &str) -> Option<(usize, RunLevelTag)> {
             RunLevelTag::Run => "<w:r",
             RunLevelTag::Insert => "<w:ins",
             RunLevelTag::Delete => "<w:del",
+            RunLevelTag::Hyperlink => "<w:hyperlink",
+            RunLevelTag::FieldSimple => "<w:fldSimple",
+            RunLevelTag::BookmarkStart => "<w:bookmarkStart",
+            RunLevelTag::OfficeMath => "<m:oMath",
         };
         after
             .get(prefix.len()..)
@@ -213,6 +225,22 @@ pub fn extract_body_xml(document_xml: &str) -> &str {
     document_xml
 }
 
+pub fn extract_embedded_sect_pr(paragraph_xml: &str) -> Option<&str> {
+    let ppr_start = paragraph_xml.find("<w:pPr")?;
+    let ppr_end = paragraph_xml[ppr_start..]
+        .find("</w:pPr>")
+        .map(|i| i + ppr_start)
+        .unwrap_or(paragraph_xml.len());
+    let ppr = &paragraph_xml[ppr_start..ppr_end];
+    if !ppr.contains("<w:sectPr") {
+        return None;
+    }
+    let sect_start = ppr.find("<w:sectPr")?;
+    let sect_rest = &ppr[sect_start..];
+    let sect_end = sect_rest.find("</w:sectPr>")? + "</w:sectPr>".len();
+    Some(&sect_rest[..sect_end])
+}
+
 /// Iterate top-level block tags (`w:p`, `w:tbl`, `w:sectPr`) in document order.
 pub fn iter_body_blocks(body_xml: &str) -> Vec<(&str, BlockKind)> {
     let mut blocks = Vec::new();
@@ -221,11 +249,20 @@ pub fn iter_body_blocks(body_xml: &str) -> Vec<(&str, BlockKind)> {
         let next_p = rest.find("<w:p");
         let next_tbl = rest.find("<w:tbl");
         let next_sect = rest.find("<w:sectPr");
+        let next_math = rest.find("<m:oMathPara");
 
         let mut candidates = [
             next_p.map(|i| (i, BlockKind::Paragraph)),
             next_tbl.map(|i| (i, BlockKind::Table)),
             next_sect.map(|i| (i, BlockKind::SectionProps)),
+            next_math
+                .filter(|i| {
+                    rest[*i..]
+                        .get("<m:oMathPara".len()..)
+                        .map(is_name_boundary)
+                        .unwrap_or(false)
+                })
+                .map(|i| (i, BlockKind::MathPara)),
         ]
         .into_iter()
         .flatten()
@@ -242,6 +279,7 @@ pub fn iter_body_blocks(body_xml: &str) -> Vec<(&str, BlockKind)> {
             BlockKind::Paragraph => "</w:p>",
             BlockKind::Table => "</w:tbl>",
             BlockKind::SectionProps => "</w:sectPr>",
+            BlockKind::MathPara => "</m:oMathPara>",
         };
         if let Some(end) = rest.find(close_tag) {
             let chunk = &rest[..end + close_tag.len()];
@@ -259,6 +297,7 @@ pub enum BlockKind {
     Paragraph,
     Table,
     SectionProps,
+    MathPara,
 }
 
 pub fn twips_to_points(twips: f32) -> f32 {
@@ -367,5 +406,26 @@ mod tests {
         let (element, rest) = take_element(&xml, "w:r").expect("element");
         assert!(element.contains('\u{2002}'));
         assert!(rest.is_empty());
+    }
+
+    #[test]
+    fn iter_body_blocks_preserves_order_with_math_para() {
+        let body = "<w:p><w:r><w:t>A</w:t></w:r></w:p>\
+                    <m:oMathPara xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\">\
+                    <m:oMath><m:r><m:t>E=mc2</m:t></m:r></m:oMath></m:oMathPara>\
+                    <w:tbl></w:tbl>";
+        let blocks = iter_body_blocks(body);
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(blocks[0].1, BlockKind::Paragraph);
+        assert_eq!(blocks[1].1, BlockKind::MathPara);
+        assert_eq!(blocks[2].1, BlockKind::Table);
+    }
+
+    #[test]
+    fn next_run_level_tag_finds_omath_before_run() {
+        let xml = "<m:oMath xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\">\
+                   <m:r><m:t>x</m:t></m:r></m:oMath><w:r><w:t>y</w:t></w:r>";
+        let (_, tag) = next_run_level_tag(xml).expect("tag");
+        assert_eq!(tag, RunLevelTag::OfficeMath);
     }
 }

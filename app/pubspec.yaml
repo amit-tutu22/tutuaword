@@ -10,9 +10,13 @@ dependencies:
   flutter:
     sdk: flutter
   ffi: ^2.1.0
-  file_picker: ^8.1.2
+  # 11.x skips the Kotlin Android plugin under AGP 9 when builtInKotlin=false
+  # (Flutter template default), so FilePickerPlugin never compiles. 12 beta
+  # applies Kotlin when built-in Kotlin is off. Pin until 12 stable ships.
+  file_picker: 12.0.0-beta.7
   path: ^1.9.0
   archive: ^3.6.1
+  share_plus: ^13.3.0
 
 dev_dependencies:
   flutter_test:
@@ -21,3 +25,6 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/fonts/
+    - assets/templates/

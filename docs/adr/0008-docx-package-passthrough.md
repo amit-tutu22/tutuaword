@@ -41,7 +41,7 @@ Fidelity is classified into three tiers:
 
 **Positive:**
 - Unknown OOXML elements survive save cycles — critical for 99% compatibility target
-- Custom XML, macros, ActiveX, ink annotations are never lost
+- Custom XML, macros, ActiveX, ink annotations are never lost on unmodified passthrough export
 - Save is fast — only modified parts are re-serialized
 - Incremental compatibility — new part parsers can be added without affecting existing passthrough
 - Matches Word's own behavior — users expect this

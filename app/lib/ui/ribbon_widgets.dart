@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:tutuaword/ui/ribbon_focusable.dart';
 import 'package:tutuaword/ui/word_theme.dart';
 
 /// Default tooltip for disabled ribbon controls that are not yet wired.
@@ -14,6 +15,62 @@ String? effectiveRibbonTooltip({String? tooltip, required bool enabled}) {
 Widget wrapRibbonTooltip(String? tooltip, Widget child) {
   if (tooltip == null) return child;
   return Tooltip(message: tooltip, child: child);
+}
+
+/// Anchored preset menu used by Layout and Design ribbon groups.
+Future<void> showRibbonPresetMenu(
+  BuildContext context,
+  RenderBox anchor,
+  List<String> items,
+  ValueChanged<String> onSelected, {
+  double minWidth = 120,
+  double maxWidth = 200,
+}) async {
+  final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+  final origin = anchor.localToGlobal(Offset.zero, ancestor: overlay);
+  final selected = await showMenu<String>(
+    context: context,
+    position: RelativeRect.fromLTRB(
+      origin.dx,
+      origin.dy + anchor.size.height,
+      origin.dx + anchor.size.width,
+      origin.dy + anchor.size.height + 4,
+    ),
+    constraints: BoxConstraints(minWidth: minWidth, maxWidth: maxWidth, maxHeight: 280),
+    items: items
+        .map(
+          (item) => PopupMenuItem<String>(
+            value: item,
+            height: 28,
+            child: Text(item, style: WordTheme.ribbonLabel),
+          ),
+        )
+        .toList(),
+  );
+  if (selected != null) onSelected(selected);
+}
+
+/// Horizontal scroller for a ribbon tab's groups.
+///
+/// Phone-width screens cannot fit every group at once; drag horizontally to
+/// reach the rest. No overlay scrollbar — on a short ribbon a track reads as a
+/// rule through the icons.
+class RibbonTabScroller extends StatelessWidget {
+  const RibbonTabScroller({super.key, required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      physics: const BouncingScrollPhysics(),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: children,
+      ),
+    );
+  }
 }
 
 class RibbonGroup extends StatelessWidget {
@@ -79,30 +136,25 @@ class RibbonIconButton extends StatefulWidget {
 }
 
 class _RibbonIconButtonState extends State<RibbonIconButton> {
-  bool _hovered = false;
-
   @override
   Widget build(BuildContext context) {
     final enabled = widget.onPressed != null;
     final color = enabled ? WordTheme.ribbonText : WordTheme.ribbonTextDisabled;
-    final bg = _hovered && enabled ? WordTheme.ribbonHover : Colors.transparent;
-
     final effectiveTooltip =
         effectiveRibbonTooltip(tooltip: widget.tooltip, enabled: enabled);
 
     return wrapRibbonTooltip(
       effectiveTooltip,
-      MouseRegion(
-        onEnter: (_) => setState(() => _hovered = true),
-        onExit: (_) => setState(() => _hovered = false),
-        child: GestureDetector(
-          onTap: widget.onPressed,
-          child: Container(
+      RibbonFocusable(
+        enabled: enabled,
+        onActivate: widget.onPressed,
+        builder: (context, {required hovered, required focused}) {
+          final bg = (hovered || focused) && enabled
+              ? WordTheme.ribbonHover
+              : Colors.transparent;
+          return Container(
             padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-            decoration: BoxDecoration(
-              color: bg,
-              borderRadius: BorderRadius.circular(3),
-            ),
+            decoration: ribbonFocusDecoration(fill: bg, focused: focused),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -119,8 +171,8 @@ class _RibbonIconButtonState extends State<RibbonIconButton> {
                 ],
               ],
             ),
-          ),
-        ),
+          );
+        },
       ),
     );
   }
@@ -149,35 +201,28 @@ class RibbonToggleButton extends StatefulWidget {
 }
 
 class _RibbonToggleButtonState extends State<RibbonToggleButton> {
-  bool _hovered = false;
-
   @override
   Widget build(BuildContext context) {
     final enabled = widget.onPressed != null;
     final color = enabled ? WordTheme.ribbonText : WordTheme.ribbonTextDisabled;
-    Color bg = Colors.transparent;
-    if (widget.selected) {
-      bg = WordTheme.ribbonSelected;
-    } else if (_hovered && enabled) {
-      bg = WordTheme.ribbonHover;
-    }
-
     final effectiveTooltip =
         effectiveRibbonTooltip(tooltip: widget.tooltip, enabled: enabled);
 
     return wrapRibbonTooltip(
       effectiveTooltip,
-      MouseRegion(
-        onEnter: (_) => setState(() => _hovered = true),
-        onExit: (_) => setState(() => _hovered = false),
-        child: GestureDetector(
-          onTap: widget.onPressed,
-          child: Container(
+      RibbonFocusable(
+        enabled: enabled,
+        onActivate: widget.onPressed,
+        builder: (context, {required hovered, required focused}) {
+          Color bg = Colors.transparent;
+          if (widget.selected) {
+            bg = WordTheme.ribbonSelected;
+          } else if ((hovered || focused) && enabled) {
+            bg = WordTheme.ribbonHover;
+          }
+          return Container(
             padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-            decoration: BoxDecoration(
-              color: bg,
-              borderRadius: BorderRadius.circular(3),
-            ),
+            decoration: ribbonFocusDecoration(fill: bg, focused: focused),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -194,8 +239,70 @@ class _RibbonToggleButtonState extends State<RibbonToggleButton> {
                 ],
               ],
             ),
-          ),
-        ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// Compact text toggle for font effects such as All Caps / Small Caps.
+class RibbonTextToggleButton extends StatefulWidget {
+  const RibbonTextToggleButton({
+    super.key,
+    required this.text,
+    this.tooltip,
+    this.selected = false,
+    this.onPressed,
+    this.textStyle,
+  });
+
+  final String text;
+  final String? tooltip;
+  final bool selected;
+  final VoidCallback? onPressed;
+  final TextStyle? textStyle;
+
+  @override
+  State<RibbonTextToggleButton> createState() => _RibbonTextToggleButtonState();
+}
+
+class _RibbonTextToggleButtonState extends State<RibbonTextToggleButton> {
+  @override
+  Widget build(BuildContext context) {
+    final enabled = widget.onPressed != null;
+    final color = enabled ? WordTheme.ribbonText : WordTheme.ribbonTextDisabled;
+    final effectiveTooltip =
+        effectiveRibbonTooltip(tooltip: widget.tooltip, enabled: enabled);
+
+    return wrapRibbonTooltip(
+      effectiveTooltip,
+      RibbonFocusable(
+        enabled: enabled,
+        onActivate: widget.onPressed,
+        builder: (context, {required hovered, required focused}) {
+          Color bg = Colors.transparent;
+          if (widget.selected) {
+            bg = WordTheme.ribbonSelected;
+          } else if ((hovered || focused) && enabled) {
+            bg = WordTheme.ribbonHover;
+          }
+          return Container(
+            constraints: const BoxConstraints(minWidth: 22, minHeight: 22),
+            padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 2),
+            decoration: ribbonFocusDecoration(fill: bg, focused: focused),
+            alignment: Alignment.center,
+            child: Text(
+              widget.text,
+              style: (widget.textStyle ?? WordTheme.ribbonLabel).copyWith(
+                color: color,
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                height: 1.0,
+              ),
+            ),
+          );
+        },
       ),
     );
   }
@@ -222,55 +329,69 @@ class RibbonLargeButton extends StatefulWidget {
 }
 
 class _RibbonLargeButtonState extends State<RibbonLargeButton> {
-  bool _hovered = false;
-
   @override
   Widget build(BuildContext context) {
     final enabled = widget.onPressed != null;
     final color = enabled ? WordTheme.ribbonText : WordTheme.ribbonTextDisabled;
     final effectiveTooltip =
         effectiveRibbonTooltip(tooltip: widget.tooltip, enabled: enabled);
+    final activate = widget.onPressed;
+    final dropdown = widget.onDropdown ?? widget.onPressed;
 
     return wrapRibbonTooltip(
       effectiveTooltip,
-      MouseRegion(
-        onEnter: (_) => setState(() => _hovered = true),
-        onExit: (_) => setState(() => _hovered = false),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            GestureDetector(
-              onTap: widget.onPressed,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                decoration: BoxDecoration(
-                  color: _hovered && enabled ? WordTheme.ribbonHover : Colors.transparent,
-                  borderRadius: const BorderRadius.horizontal(left: Radius.circular(3)),
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(widget.icon, size: WordTheme.largeIconSize, color: color),
-                    const SizedBox(height: 2),
-                    Text(widget.label, style: WordTheme.ribbonLabel.copyWith(color: color)),
-                  ],
+      RibbonFocusable(
+        enabled: enabled,
+        onActivate: activate,
+        builder: (context, {required hovered, required focused}) {
+          final fill = (hovered || focused) && enabled
+              ? WordTheme.ribbonHover
+              : Colors.transparent;
+          return Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              GestureDetector(
+                onTap: enabled ? activate : null,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                  decoration: ribbonFocusDecoration(
+                    fill: fill,
+                    focused: focused,
+                    borderRadius: const BorderRadius.horizontal(
+                      left: Radius.circular(3),
+                    ),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(widget.icon, size: WordTheme.largeIconSize, color: color),
+                      const SizedBox(height: 2),
+                      Text(
+                        widget.label,
+                        textAlign: TextAlign.center,
+                        style: WordTheme.ribbonLabel.copyWith(color: color),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
-            GestureDetector(
-              onTap: widget.onDropdown ?? widget.onPressed,
-              child: Container(
-                width: 14,
-                height: 52,
-                decoration: BoxDecoration(
-                  color: _hovered && enabled ? WordTheme.ribbonHover : Colors.transparent,
-                  borderRadius: const BorderRadius.horizontal(right: Radius.circular(3)),
+              GestureDetector(
+                onTap: enabled ? dropdown : null,
+                child: Container(
+                  width: 14,
+                  height: 52,
+                  decoration: BoxDecoration(
+                    color: fill,
+                    borderRadius: const BorderRadius.horizontal(
+                      right: Radius.circular(3),
+                    ),
+                  ),
+                  child: Icon(Icons.arrow_drop_down, size: 14, color: color),
                 ),
-                child: Icon(Icons.arrow_drop_down, size: 14, color: color),
               ),
-            ),
-          ],
-        ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -297,8 +418,6 @@ class RibbonDropdown extends StatefulWidget {
 }
 
 class _RibbonDropdownState extends State<RibbonDropdown> {
-  bool _hovered = false;
-
   Future<void> _openMenu() async {
     final box = context.findRenderObject() as RenderBox?;
     if (box == null || !box.hasSize) return;
@@ -340,34 +459,42 @@ class _RibbonDropdownState extends State<RibbonDropdown> {
 
   @override
   Widget build(BuildContext context) {
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
-      child: GestureDetector(
-        onTap: _openMenu,
-        child: Container(
+    return RibbonFocusable(
+      enabled: true,
+      onActivate: _openMenu,
+      builder: (context, {required hovered, required focused}) {
+        return Container(
           width: widget.width,
           height: 22,
           padding: const EdgeInsets.symmetric(horizontal: 6),
           decoration: BoxDecoration(
-            color: _hovered ? WordTheme.ribbonHover : Colors.white,
-            border: Border.all(color: WordTheme.groupDivider),
+            color: (hovered || focused) ? WordTheme.ribbonHover : Colors.white,
+            border: Border.all(
+              color: focused
+                  ? WordTheme.activeTabUnderline
+                  : WordTheme.groupDivider,
+              width: focused ? 1.5 : 1,
+            ),
             borderRadius: BorderRadius.circular(2),
           ),
           child: Row(
             children: [
               Expanded(
-                child: Text(
-                  widget.value,
-                  style: WordTheme.ribbonLabel.copyWith(fontSize: 11),
-                  overflow: TextOverflow.ellipsis,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    widget.value,
+                    style: WordTheme.ribbonLabel.copyWith(fontSize: 11),
+                    maxLines: 1,
+                  ),
                 ),
               ),
               const Icon(Icons.arrow_drop_down, size: 14, color: WordTheme.ribbonText),
             ],
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }
@@ -385,6 +512,11 @@ const kRibbonFontFamilies = [
   'Courier New',
   'Consolas',
 ];
+
+/// Point size label for the Home tab font-size dropdown.
+String formatRibbonFontSize(double size) {
+  return size.round().clamp(1, 999).toString();
+}
 
 /// Common Word point sizes for the Home tab ribbon.
 const kRibbonFontSizes = [
@@ -427,36 +559,35 @@ class StyleGalleryCard extends StatefulWidget {
 }
 
 class _StyleGalleryCardState extends State<StyleGalleryCard> {
-  bool _hovered = false;
-
   @override
   Widget build(BuildContext context) {
     final enabled = widget.onPressed != null;
-    Color borderColor = WordTheme.groupDivider;
-    if (widget.selected) {
-      borderColor = WordTheme.activeTabUnderline;
-    } else if (_hovered && enabled) {
-      borderColor = WordTheme.ribbonText;
-    }
-
     final effectiveTooltip =
         effectiveRibbonTooltip(tooltip: widget.tooltip, enabled: enabled);
 
     return wrapRibbonTooltip(
       effectiveTooltip,
-      MouseRegion(
-        onEnter: (_) => setState(() => _hovered = true),
-        onExit: (_) => setState(() => _hovered = false),
-        child: GestureDetector(
-          onTap: widget.onPressed,
-          child: Container(
+      RibbonFocusable(
+        enabled: enabled,
+        onActivate: widget.onPressed,
+        builder: (context, {required hovered, required focused}) {
+          Color borderColor = WordTheme.groupDivider;
+          if (widget.selected || focused) {
+            borderColor = WordTheme.activeTabUnderline;
+          } else if (hovered && enabled) {
+            borderColor = WordTheme.ribbonText;
+          }
+          return Container(
             width: 72,
             height: 52,
             margin: const EdgeInsets.symmetric(horizontal: 2),
             padding: const EdgeInsets.all(4),
             decoration: BoxDecoration(
               color: widget.selected ? WordTheme.ribbonSelected : Colors.white,
-              border: Border.all(color: borderColor),
+              border: Border.all(
+                color: borderColor,
+                width: focused ? 1.5 : 1,
+              ),
               borderRadius: BorderRadius.circular(2),
             ),
             child: Column(
@@ -475,8 +606,8 @@ class _StyleGalleryCardState extends State<StyleGalleryCard> {
                 ),
               ],
             ),
-          ),
-        ),
+          );
+        },
       ),
     );
   }
@@ -501,8 +632,6 @@ class RibbonTextButton extends StatefulWidget {
 }
 
 class _RibbonTextButtonState extends State<RibbonTextButton> {
-  bool _hovered = false;
-
   @override
   Widget build(BuildContext context) {
     final enabled = widget.onPressed != null;
@@ -512,17 +641,16 @@ class _RibbonTextButtonState extends State<RibbonTextButton> {
 
     return wrapRibbonTooltip(
       effectiveTooltip,
-      MouseRegion(
-        onEnter: (_) => setState(() => _hovered = true),
-        onExit: (_) => setState(() => _hovered = false),
-        child: GestureDetector(
-          onTap: widget.onPressed,
-          child: Container(
+      RibbonFocusable(
+        enabled: enabled,
+        onActivate: widget.onPressed,
+        builder: (context, {required hovered, required focused}) {
+          final bg = (hovered || focused) && enabled
+              ? WordTheme.ribbonHover
+              : Colors.transparent;
+          return Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: _hovered && enabled ? WordTheme.ribbonHover : Colors.transparent,
-              borderRadius: BorderRadius.circular(3),
-            ),
+            decoration: ribbonFocusDecoration(fill: bg, focused: focused),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -533,8 +661,8 @@ class _RibbonTextButtonState extends State<RibbonTextButton> {
                 Text(widget.label, style: WordTheme.ribbonLabel.copyWith(color: color)),
               ],
             ),
-          ),
-        ),
+          );
+        },
       ),
     );
   }

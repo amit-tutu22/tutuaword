@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
-/// Parsed display list from Rust tw-render binary format (v3).
+/// Parsed display list from Rust tw-render binary format (v3/v4).
 class DisplayListSnapshot {
   DisplayListSnapshot({
     required this.version,
@@ -20,7 +20,13 @@ class DisplayListSnapshot {
     required this.imageTransforms,
     required this.imageSizes,
     required this.imageAssetIds,
+    required this.imageIds,
     required this.imagePayloads,
+    required this.imageRotations,
+    required this.imageOpacities,
+    required this.imageCropRects,
+    required this.shapeIds,
+    required this.shapeRects,
   });
 
   final int version;
@@ -39,13 +45,19 @@ class DisplayListSnapshot {
   final Float32List imageTransforms;
   final Float32List imageSizes;
   final List<String> imageAssetIds;
+  final List<String> imageIds;
 
   /// Encoded source bytes (PNG, JPEG, ...) per image, parallel to
   /// [imageAssetIds]. Empty for an image whose asset could not be resolved.
   final List<Uint8List> imagePayloads;
+  final Float32List imageRotations;
+  final Float32List imageOpacities;
+  final Float32List imageCropRects;
+  final List<String> shapeIds;
+  final Float32List shapeRects;
 
   factory DisplayListSnapshot.fromBytes(Uint8List bytes) {
-    if (bytes.length < 28) {
+    if (bytes.length < 20) {
       return DisplayListSnapshot.empty();
     }
     var offset = 0;
@@ -58,14 +70,20 @@ class DisplayListSnapshot {
     offset += 4;
     final pageHeight = _readF32(bytes, offset);
     offset += 4;
-    final atlasWidth = _readU32(bytes, offset);
-    offset += 4;
-    final atlasHeight = _readU32(bytes, offset);
-    offset += 4;
-    final atlasLen = _readU32(bytes, offset);
-    offset += 4;
-    final atlasPixels = bytes.sublist(offset, offset + atlasLen);
-    offset += atlasLen;
+
+    var atlasWidth = 0;
+    var atlasHeight = 0;
+    var atlasPixels = Uint8List(0);
+    if (fileVersion < 4) {
+      atlasWidth = _readU32(bytes, offset);
+      offset += 4;
+      atlasHeight = _readU32(bytes, offset);
+      offset += 4;
+      final atlasLen = _readU32(bytes, offset);
+      offset += 4;
+      atlasPixels = bytes.sublist(offset, offset + atlasLen);
+      offset += atlasLen;
+    }
 
     final glyphCount = _readU32(bytes, offset);
     offset += 4;
@@ -93,7 +111,13 @@ class DisplayListSnapshot {
     Float32List imageTransforms = Float32List(0);
     Float32List imageSizes = Float32List(0);
     var imageAssetIds = <String>[];
+    var imageIds = <String>[];
     var imagePayloads = <Uint8List>[];
+    Float32List imageRotations = Float32List(0);
+    Float32List imageOpacities = Float32List(0);
+    Float32List imageCropRects = Float32List(0);
+    var shapeIds = <String>[];
+    Float32List shapeRects = Float32List(0);
     if (fileVersion >= 2 && offset + 4 <= bytes.length) {
       final pathData = _readPathBatch(bytes, offset);
       pathPoints = pathData.$1;
@@ -104,7 +128,18 @@ class DisplayListSnapshot {
         imageTransforms = imageData.$1;
         imageSizes = imageData.$2;
         imageAssetIds = imageData.$3;
-        imagePayloads = imageData.$4;
+        imageIds = imageData.$4;
+        imagePayloads = imageData.$5;
+        imageRotations = imageData.$6;
+        imageOpacities = imageData.$7;
+        imageCropRects = imageData.$8;
+        offset = imageData.$9;
+      }
+      if (fileVersion >= 7 && offset + 4 <= bytes.length) {
+        final shapeData = _readShapeSelectionBatch(bytes, offset);
+        shapeIds = shapeData.$1;
+        shapeRects = shapeData.$2;
+        offset = shapeData.$3;
       }
     }
 
@@ -125,7 +160,13 @@ class DisplayListSnapshot {
       imageTransforms: imageTransforms,
       imageSizes: imageSizes,
       imageAssetIds: imageAssetIds,
+      imageIds: imageIds,
       imagePayloads: imagePayloads,
+      imageRotations: imageRotations,
+      imageOpacities: imageOpacities,
+      imageCropRects: imageCropRects,
+      shapeIds: shapeIds,
+      shapeRects: shapeRects,
     );
   }
 
@@ -147,19 +188,34 @@ class DisplayListSnapshot {
       imageTransforms: Float32List(0),
       imageSizes: Float32List(0),
       imageAssetIds: [],
+      imageIds: [],
       imagePayloads: [],
+      imageRotations: Float32List(0),
+      imageOpacities: Float32List(0),
+      imageCropRects: Float32List(0),
+      shapeIds: [],
+      shapeRects: Float32List(0),
     );
   }
 
   Future<ui.Image?> buildAtlasImage() async {
-    if (atlasPixels.isEmpty || atlasWidth == 0 || atlasHeight == 0) {
+    return buildAtlasImageFromPixels(atlasPixels, atlasWidth, atlasHeight);
+  }
+
+  /// Upload RGBA atlas pixels to a GPU texture.
+  static Future<ui.Image?> buildAtlasImageFromPixels(
+    Uint8List pixels,
+    int width,
+    int height,
+  ) async {
+    if (pixels.isEmpty || width == 0 || height == 0) {
       return null;
     }
-    final buffer = await ui.ImmutableBuffer.fromUint8List(atlasPixels);
+    final buffer = await ui.ImmutableBuffer.fromUint8List(pixels);
     final descriptor = ui.ImageDescriptor.raw(
       buffer,
-      width: atlasWidth,
-      height: atlasHeight,
+      width: width,
+      height: height,
       pixelFormat: ui.PixelFormat.rgba8888,
     );
     final codec = await descriptor.instantiateCodec();
@@ -195,8 +251,12 @@ class DisplayListSnapshot {
     return decoded;
   }
 
-  bool get hasPaintableGlyphs =>
-      glyphCount > 0 && atlasPixels.isNotEmpty && atlasWidth > 0 && atlasHeight > 0;
+  bool get hasPaintableGlyphs => glyphCount > 0;
+
+  /// True when glyph draws need an atlas texture (v4 page lists omit pixels).
+  bool get needsAtlasTexture =>
+      glyphCount > 0 &&
+      (atlasPixels.isNotEmpty || atlasWidth == 0);
 
   int get glyphCount => glyphOffsets.length ~/ 2;
 
@@ -250,13 +310,25 @@ class DisplayListSnapshot {
   return (points, colors, offset);
 }
 
-(Float32List, Float32List, List<String>, List<Uint8List>) _readImageBatch(
+(Float32List, Float32List, List<String>, List<String>, List<Uint8List>, Float32List,
+    Float32List, Float32List, int)
+_readImageBatch(
   Uint8List bytes,
   int offset,
   int fileVersion,
 ) {
   if (offset + 4 > bytes.length) {
-    return (Float32List(0), Float32List(0), <String>[], <Uint8List>[]);
+    return (
+      Float32List(0),
+      Float32List(0),
+      <String>[],
+      <String>[],
+      <Uint8List>[],
+      Float32List(0),
+      Float32List(0),
+      Float32List(0),
+      offset,
+    );
   }
   final imageCount = _readU32(bytes, offset);
   offset += 4;
@@ -281,6 +353,17 @@ class DisplayListSnapshot {
     assetIds.add(String.fromCharCodes(bytes.sublist(offset, offset + len)));
     offset += len;
   }
+  final imageIds = <String>[];
+  if (fileVersion >= 5) {
+    for (var i = 0; i < imageCount; i++) {
+      if (offset + 4 > bytes.length) break;
+      final len = _readU32(bytes, offset);
+      offset += 4;
+      if (offset + len > bytes.length) break;
+      imageIds.add(String.fromCharCodes(bytes.sublist(offset, offset + len)));
+      offset += len;
+    }
+  }
   final payloads = List<Uint8List>.filled(imageCount, Uint8List(0));
   if (fileVersion >= 3) {
     for (var i = 0; i < imageCount; i++) {
@@ -292,7 +375,64 @@ class DisplayListSnapshot {
       offset += len;
     }
   }
-  return (transforms, sizes, assetIds, payloads);
+  var rotations = Float32List(0);
+  var opacities = Float32List(0);
+  var cropRects = Float32List(0);
+  if (fileVersion >= 6 && imageCount > 0) {
+    rotations = Float32List(imageCount);
+    for (var i = 0; i < imageCount; i++) {
+      if (offset + 4 > bytes.length) break;
+      rotations[i] = _readF32(bytes, offset);
+      offset += 4;
+    }
+    opacities = Float32List(imageCount);
+    for (var i = 0; i < imageCount; i++) {
+      if (offset + 4 > bytes.length) break;
+      opacities[i] = _readF32(bytes, offset);
+      offset += 4;
+    }
+    cropRects = Float32List(imageCount * 4);
+    for (var i = 0; i < imageCount * 4; i++) {
+      if (offset + 4 > bytes.length) break;
+      cropRects[i] = _readF32(bytes, offset);
+      offset += 4;
+    }
+  }
+  return (
+    transforms,
+    sizes,
+    assetIds,
+    imageIds,
+    payloads,
+    rotations,
+    opacities,
+    cropRects,
+    offset,
+  );
+}
+
+(List<String>, Float32List, int) _readShapeSelectionBatch(Uint8List bytes, int offset) {
+  if (offset + 4 > bytes.length) {
+    return (<String>[], Float32List(0), offset);
+  }
+  final shapeCount = _readU32(bytes, offset);
+  offset += 4;
+  final rects = Float32List(shapeCount * 4);
+  for (var i = 0; i < shapeCount * 4; i++) {
+    if (offset + 4 > bytes.length) break;
+    rects[i] = _readF32(bytes, offset);
+    offset += 4;
+  }
+  final shapeIds = <String>[];
+  for (var i = 0; i < shapeCount; i++) {
+    if (offset + 4 > bytes.length) break;
+    final len = _readU32(bytes, offset);
+    offset += 4;
+    if (offset + len > bytes.length) break;
+    shapeIds.add(String.fromCharCodes(bytes.sublist(offset, offset + len)));
+    offset += len;
+  }
+  return (shapeIds, rects, offset);
 }
 
 int _readU32(Uint8List bytes, int offset) {
@@ -300,7 +440,18 @@ int _readU32(Uint8List bytes, int offset) {
 }
 
 int _readU64(Uint8List bytes, int offset) {
-  return ByteData.sublistView(bytes, offset, offset + 8).getUint64(0, Endian.little);
+  // dart2js rejects ByteData.getUint64 — assemble LE u64 from bytes.
+  final b0 = bytes[offset];
+  final b1 = bytes[offset + 1];
+  final b2 = bytes[offset + 2];
+  final b3 = bytes[offset + 3];
+  final b4 = bytes[offset + 4];
+  final b5 = bytes[offset + 5];
+  final b6 = bytes[offset + 6];
+  final b7 = bytes[offset + 7];
+  final low = b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
+  final high = b4 | (b5 << 8) | (b6 << 16) | (b7 << 24);
+  return low + high * 0x100000000;
 }
 
 double _readF32(Uint8List bytes, int offset) {

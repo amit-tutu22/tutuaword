@@ -133,6 +133,12 @@ DisplayListSnapshot _snapshotWith({
     imageTransforms: Float32List.fromList(transforms),
     imageSizes: Float32List.fromList(sizes),
     imageAssetIds: assetIds,
+    imageIds: List<String>.generate(assetIds.length, (i) => 'img-$i'),
     imagePayloads: payloads,
+    imageRotations: Float32List(assetIds.length),
+    imageOpacities: Float32List.fromList(List.filled(assetIds.length, 1.0)),
+    imageCropRects: Float32List(assetIds.length * 4),
+    shapeIds: const [],
+    shapeRects: Float32List(0),
   );
 }

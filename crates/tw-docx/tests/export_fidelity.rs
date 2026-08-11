@@ -10,7 +10,8 @@ use std::io::{Cursor, Write};
 use tw_docx::{export, import, DocxPackage};
 use tw_model::{
     Alignment, Block, BorderSpec, CellFormat, CharFormat, Color, Document, ImageBlock, ImageData,
-    NumberingRef, Paragraph, ParaFormat, Run, Table, TableCell, TableRow, TextWrap, UnderlineStyle,
+    ImageTransform, NumberingRef, Paragraph, ParaFormat, Run, Table, TableCell, TableRow, TextWrap,
+    UnderlineStyle,
 };
 use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
@@ -129,6 +130,7 @@ fn a_merged_cell_keeps_its_span() {
             border: Some(BorderSpec::default()),
         },
         rows: vec![TableRow::with_cells(vec![wide])],
+        style_id: None,
     };
     doc.sections[0].blocks = vec![Block::Table(table)];
 
@@ -154,6 +156,9 @@ fn an_image_survives_export_with_its_bytes() {
         display_height: 90.0,
         wrap: TextWrap::Inline,
         anchor: None,
+        transform: ImageTransform::default(),
+        caption_paragraph_id: None,
+        alt_text: None,
     };
     doc.sections[0].blocks = vec![Block::ImageBlock(image)];
 

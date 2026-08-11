@@ -21,6 +21,9 @@ fn document_with_mixed_list_styling() -> Document {
                 indent: 13.5,
                 hanging: 18.0,
                 suffix: ListSuffix::Tab,
+                marker_text: None,
+                start: 1,
+                char_format: Default::default(),
             }],
         },
     );

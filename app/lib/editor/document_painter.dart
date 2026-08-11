@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -43,23 +44,47 @@ class DocumentPainter extends CustomPainter {
       final y = snapshot.imageTransforms[i * 2 + 1];
       final w = snapshot.imageSizes[i * 2];
       final h = snapshot.imageSizes[i * 2 + 1];
+      final rotationDeg = i < snapshot.imageRotations.length
+          ? snapshot.imageRotations[i]
+          : 0.0;
+      final opacity = i < snapshot.imageOpacities.length
+          ? snapshot.imageOpacities[i].clamp(0.0, 1.0)
+          : 1.0;
+      final cropBase = i * 4;
+      final cropL = cropBase + 3 < snapshot.imageCropRects.length
+          ? snapshot.imageCropRects[cropBase]
+          : 0.0;
+      final cropT = cropBase + 3 < snapshot.imageCropRects.length
+          ? snapshot.imageCropRects[cropBase + 1]
+          : 0.0;
+      final cropR = cropBase + 3 < snapshot.imageCropRects.length
+          ? snapshot.imageCropRects[cropBase + 2]
+          : 0.0;
+      final cropB = cropBase + 3 < snapshot.imageCropRects.length
+          ? snapshot.imageCropRects[cropBase + 3]
+          : 0.0;
       final dst = Rect.fromLTWH(x, y, w, h);
 
       final image = i < snapshot.imageAssetIds.length
           ? images[snapshot.imageAssetIds[i]]
           : null;
       if (image == null) {
-        // Rust already filled the grey block; just outline the empty frame.
         canvas.drawRect(dst, placeholderBorder);
         continue;
       }
       final src = Rect.fromLTWH(
-        0,
-        0,
-        image.width.toDouble(),
-        image.height.toDouble(),
+        image.width * cropL,
+        image.height * cropT,
+        image.width * (1 - cropL - cropR).clamp(0.01, 1.0),
+        image.height * (1 - cropT - cropB).clamp(0.01, 1.0),
       );
-      canvas.drawImageRect(image, src, dst, paint);
+      paint.color = Color.fromRGBO(255, 255, 255, opacity);
+      canvas.save();
+      canvas.translate(x + w / 2, y + h / 2);
+      canvas.rotate(rotationDeg * math.pi / 180);
+      canvas.translate(-w / 2, -h / 2);
+      canvas.drawImageRect(image, src, Rect.fromLTWH(0, 0, w, h), paint);
+      canvas.restore();
     }
   }
 

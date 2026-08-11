@@ -49,6 +49,17 @@ Invalidation: page-granular — a keystroke re-layouts only the affected page.
 | **Shared mutable state (Arc<Mutex<Document>>)** | Data races between UI reads and worker writes; complex locking |
 | **MessagePack/Protobuf serialization for FFI** | Serialization overhead on every frame; flat bytes are faster |
 
+## Implementation status (R1.4)
+
+| Invariant | Status | Notes |
+|-----------|--------|-------|
+| UI thread never blocks on edit FFI | **Implemented** | Edit exports enqueue and return; Dart correlates via `tw_last_request_id` + `NativeEventRouter` |
+| Worker → UI event callback | **Implemented** | `NativeCallable.listener` dispatches from worker thread to Dart isolate |
+| Open/save blocking | Implemented | Open/save/spell check have non-blocking `tw_*_async` enqueues plus `tw_take_*` getters keyed by `request_id`; the 30 s blocking exports remain only as wrappers for callers that have not migrated |
+| `tw_wait_for_layout` | Test-only | Gated behind `#[cfg(test)]` in `tw-ffi` |
+
 ## WASM Exception
 
 Web platform (Phase 1): no `SharedArrayBuffer` requirement. Layout runs synchronously after each command. Acceptable because web is not the primary target and WASM threading is available in Phase 2.
+
+Implemented in R3.1 as `EngineExecutor`: `Session::new()` selects `ThreadedExecutor` (a worker thread, the model above) on native targets and `InlineExecutor` on `wasm32`. The inline engine owns no thread and executes queued commands on the caller's thread when the host drives it, normally via `Session::pump_events` on a timer or frame callback. `ThreadedExecutor` is compiled out on `wasm32`, so no `std::thread::spawn` or `std::thread::sleep` is reachable in a web build. See [architecture-remediation.md](../architecture-remediation.md) R3.1 for the drive contract and how background forward relayout is scheduled without an idle thread.

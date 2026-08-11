@@ -1,72 +1,30 @@
-use ropey::Rope;
+//! Character-index string utilities for run text (R2.2 single storage).
+
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::ops::Range;
-use tw_model::NodeId;
 
-#[derive(Clone, Debug)]
-pub struct TextBuffer {
-    ropes: HashMap<NodeId, Rope>,
+/// Character length of a UTF-8 string.
+pub fn char_len(text: &str) -> usize {
+    text.chars().count()
 }
 
-impl Default for TextBuffer {
-    fn default() -> Self {
-        Self::new()
+/// Slice by character indices; clamps when `end` exceeds length.
+pub fn slice_chars(text: &str, char_range: Range<usize>) -> Cow<'_, str> {
+    let len = char_len(text);
+    let start = char_range.start.min(len);
+    let end = char_range.end.min(len);
+    if start >= end {
+        return Cow::Borrowed("");
     }
-}
-
-impl TextBuffer {
-    pub fn new() -> Self {
-        Self {
-            ropes: HashMap::new(),
-        }
-    }
-
-    pub fn register(&mut self, run_id: NodeId, text: &str) {
-        self.ropes.insert(run_id, Rope::from_str(text));
-    }
-
-    pub fn unregister(&mut self, run_id: NodeId) {
-        self.ropes.remove(&run_id);
-    }
-
-    pub fn insert(&mut self, run_id: NodeId, char_offset: usize, text: &str) {
-        if let Some(rope) = self.ropes.get_mut(&run_id) {
-            let byte_offset = rope.char_to_byte(char_offset);
-            rope.insert(byte_offset, text);
-        }
-    }
-
-    pub fn delete(&mut self, run_id: NodeId, char_range: Range<usize>) {
-        if let Some(rope) = self.ropes.get_mut(&run_id) {
-            let start = rope.char_to_byte(char_range.start);
-            let end = rope.char_to_byte(char_range.end);
-            rope.remove(start..end);
-        }
-    }
-
-    pub fn slice(&self, run_id: NodeId, char_range: Range<usize>) -> Cow<'_, str> {
-        if let Some(rope) = self.ropes.get(&run_id) {
-            let start = rope.char_to_byte(char_range.start);
-            let end = rope.char_to_byte(char_range.end);
-            Cow::Owned(rope.slice(start..end).to_string())
-        } else {
-            Cow::Borrowed("")
-        }
-    }
-
-    pub fn len(&self, run_id: NodeId) -> usize {
-        self.ropes.get(&run_id).map(|r| r.len_chars()).unwrap_or(0)
-    }
-
-    pub fn to_string(&self, run_id: NodeId) -> String {
-        self.ropes
-            .get(&run_id)
-            .map(|r| r.to_string())
-            .unwrap_or_default()
-    }
-
-    pub fn sync_from_run(&mut self, run_id: NodeId, text: &str) {
-        self.ropes.insert(run_id, Rope::from_str(text));
-    }
+    let start_byte = text
+        .char_indices()
+        .nth(start)
+        .map(|(i, _)| i)
+        .unwrap_or(text.len());
+    let end_byte = if end >= len {
+        text.len()
+    } else {
+        text.char_indices().nth(end).map(|(i, _)| i).unwrap_or(text.len())
+    };
+    Cow::Owned(text[start_byte..end_byte].to_string())
 }

@@ -1,6 +1,18 @@
+//! Plugin host — wasmtime sandbox + capability gates (F26.S3).
+
+mod capability;
+mod host;
+mod manager;
+mod sandbox;
+
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tw_edit::{Command, DocRange};
+
+pub use capability::{grant_capabilities, Capability};
+pub use host::SandboxHostState;
+pub use manager::{PluginInfo, PluginManager};
+pub use sandbox::{WasmSandbox, SAMPLE_EDIT_PLUGIN_WAT, SAMPLE_READ_PLUGIN_WAT};
 
 #[derive(Debug, Error)]
 pub enum PluginError {
@@ -10,23 +22,6 @@ pub enum PluginError {
     CapabilityDenied(Capability),
     #[error("not implemented")]
     NotImplemented,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum Capability {
-    DocumentRead,
-    DocumentEdit,
-    DocumentSuggest,
-    UiSidebar,
-    UiContextMenu,
-    UiToolbar,
-    UiDialog,
-    EventsDocument,
-    EventsSelection,
-    Network,
-    Storage,
-    FilesystemRead,
-    AiProvider,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,6 +43,7 @@ impl PluginContext {
     }
 }
 
+/// In-process plugin trait (dev / native plugins).
 pub trait Plugin: Send + Sync {
     fn on_activate(&self, ctx: &PluginContext) -> Result<(), PluginError>;
     fn on_deactivate(&self) -> Result<(), PluginError>;
@@ -58,36 +54,11 @@ pub trait Plugin: Send + Sync {
     ) -> Result<serde_json::Value, PluginError>;
 }
 
+/// Capability-gated document surface for plugins.
 pub trait PluginDocument {
-    fn get_text(&self, range: Option<DocRange>) -> String;
-    fn get_paragraph_count(&self) -> u32;
-    fn get_paragraph_text(&self, index: u32) -> Option<String>;
-    fn get_selection(&self) -> Option<DocRange>;
+    fn get_text(&self, range: Option<DocRange>) -> Result<String, PluginError>;
+    fn get_paragraph_count(&self) -> Result<u32, PluginError>;
+    fn get_paragraph_text(&self, index: u32) -> Result<Option<String>, PluginError>;
+    fn get_selection(&self) -> Result<Option<DocRange>, PluginError>;
     fn apply_edit(&self, command: Command) -> Result<(), PluginError>;
-}
-
-pub struct PluginManager {
-    plugins: Vec<Box<dyn Plugin>>,
-}
-
-impl PluginManager {
-    pub fn new() -> Self {
-        Self {
-            plugins: Vec::new(),
-        }
-    }
-
-    pub fn register(&mut self, plugin: Box<dyn Plugin>) {
-        self.plugins.push(plugin);
-    }
-
-    pub fn plugin_count(&self) -> usize {
-        self.plugins.len()
-    }
-}
-
-impl Default for PluginManager {
-    fn default() -> Self {
-        Self::new()
-    }
 }

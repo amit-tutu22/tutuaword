@@ -38,11 +38,62 @@ PageLayout (from tw-layout)
   canvas.drawRawAtlas() + drawRect() + drawPath() + drawImageRect()
 ```
 
-## Display List Format (v3)
+## Display List Format
 
-The display list is a single flat byte buffer — not a command array. After a fixed header and embedded glyph atlas pixels, four batches are appended in order: atlas (glyphs), rects, paths, images. There are no clip-stack commands; clipping is handled implicitly by batch bounds.
+The display list is a flat binary buffer — not a command array. **Version 4** (current) carries draw batches only; the glyph atlas is a separate resource fetched via `tw_get_atlas`. Versions 1–3 embedded atlas pixels inline (deprecated).
 
-### Binary Layout
+### v4 Page Payload (current)
+
+```
+u32                     file_version (4)
+u64                     snapshot version
+f32                     page_width
+f32                     page_height
+
+// AtlasBatch (glyphs) — atlas UV rects only, no pixel blob
+u32                     glyph_count
+f32[glyph_count * 2]    transforms ([x, y] per glyph)
+f32[glyph_count * 4]    atlas rects ([atlasX, atlasY, atlasW, atlasH])
+u32[glyph_count]        colors (ARGB tint)
+
+// RectBatch
+u32                     rect_count
+f32[rect_count * 4]     rects ([x, y, w, h])
+u32[rect_count]         colors (ARGB fill)
+
+// PathBatch
+u32                     line_count
+f32[line_count * 4]     line segments ([x1, y1, x2, y2])
+u32[line_count]         colors
+
+// ImageBatch
+u32                     image_count
+f32[image_count * 2]    transforms
+f32[image_count * 2]    sizes ([w, h])
+image_count × { u32 len; u8[len] }   asset_id (UTF-8)
+image_count × { u32 len; u8[len] }   payload
+```
+
+Serialization: `DisplayListBuilder::to_page_bytes(&list)`. Deserialization: `DisplayListBuilder::from_bytes(&bytes)` (handles v1–v4).
+
+### Atlas Resource (separate from page DL)
+
+Fetched once per session via `tw_get_atlas` when `atlas_generation` changes:
+
+```
+u32                     atlas_resource_version (1)
+u64                     generation
+u32                     width
+u32                     height
+u32                     pixel_len
+u8[pixel_len]           RGBA atlas pixels
+```
+
+Serialization: `DisplayListBuilder::atlas_to_bytes(atlas, generation)`.
+
+Flutter re-uploads the atlas texture only when `atlasGeneration` changes, not on every page display-list update.
+
+### v3 Page Payload (legacy)
 
 ```
 u32                     file_version (3)
@@ -54,50 +105,12 @@ u32                     atlas_height
 u32                     atlas_pixel_len
 u8[atlas_pixel_len]     RGBA atlas pixels
 
-// AtlasBatch (glyphs)
-u32                     glyph_count
-f32[glyph_count * 2]    transforms ([x, y] per glyph)
-f32[glyph_count * 4]    atlas rects ([atlasX, atlasY, atlasW, atlasH])
-u32[glyph_count]        colors (ARGB tint)
-
-// RectBatch
-u32                     rect_count
-f32[rect_count * 4]     rects ([x, y, w, h])
-u32[rect_count]         colors (ARGB fill)
-
-// PathBatch (v2+)
-u32                     line_count
-f32[line_count * 4]     line segments ([x1, y1, x2, y2])
-u32[line_count]         colors
-
-// ImageBatch (v2+; payloads added in v3)
-u32                     image_count
-f32[image_count * 2]    transforms
-f32[image_count * 2]    sizes ([w, h])
-image_count × { u32 len; u8[len] }   asset_id (UTF-8)
-image_count × { u32 len; u8[len] }   payload (v3 only; empty in v2)
+// … same batches as v4 …
 ```
 
-All multi-byte values are little-endian. Version 1 readers stop after the rect batch; version 2 adds path and image batches without payloads; version 3 adds encoded image payloads inline.
+**Migration:** v3 readers remain supported via `DisplayListBuilder::from_bytes`. New worker exports use v4 page bytes + separate atlas resource. `DisplayListBuilder::to_bytes` still emits v3 for PDF export and legacy tests.
 
-The in-memory struct mirrors the wire format:
-
-```rust
-pub struct DisplayList {
-    pub version: u64,
-    pub page_width: f32,
-    pub page_height: f32,
-    pub atlas_width: u32,
-    pub atlas_height: u32,
-    pub atlas_pixels: Vec<u8>,
-    pub atlas_batch: AtlasBatch,
-    pub rect_batch: RectBatch,
-    pub path_batch: PathBatch,
-    pub image_batch: ImageBatch,
-}
-```
-
-Serialization: `DisplayListBuilder::to_bytes(&list)`. Deserialization: `DisplayListBuilder::from_bytes(&bytes)`.
+### v3 Binary Layout (reference)
 
 ## Glyph Atlas
 
@@ -367,7 +380,7 @@ Standard Flutter `ScrollView` with page height × page count as total extent. On
 | Paint during scroll (60 FPS) | <16 ms total frame | Only paint visible pages |
 | Atlas upload (new page) | <5 ms | RGBA texture upload to GPU |
 | Display list deserialization | <1 ms | Zero-copy from FFI buffer |
-| Memory per page snapshot | ~500 KB | Atlas shared across pages |
+| Memory per page snapshot | ~50 KB | Atlas shared via separate resource (R1.2) |
 
 ### Display List Versioning
 
@@ -383,6 +396,15 @@ pub struct DisplayListSnapshot {
 ```
 
 When a page is not dirty, the previous snapshot is reused (no rebuild, no repaint).
+
+### Per-page snapshot store (R1.3)
+
+`SnapshotBuffer` stores each page as `Arc<SinglePageSnapshot>` keyed by page index. Incremental edits update only rebuilt pages via `publish_incremental`; unchanged pages keep the same `Arc` (shared with the previous snapshot generation).
+
+- `Session::get_display_list_bytes()` returns `Arc<PageSnapshot>` (metadata + current page view).
+- `Session::page_display_list(page)` returns `Arc<SinglePageSnapshot>` for scroll/lazy fetch.
+- FFI `tw_get_page_display_list(page, …, out_version, …)` exposes per-page layout version for Dart cache validation.
+- Flutter `EditorController.displayListForPage` and `DocumentView` invalidate only dirty pages on edit, not the full scroll cache.
 
 ## Debug Rendering
 

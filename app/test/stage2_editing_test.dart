@@ -36,26 +36,19 @@ void main() {
     late EditorController controller;
 
     setUp(() {
-      controller = EditorController();
+      controller = EditorController.forTest();
     });
 
     tearDown(() {
       controller.dispose();
     });
 
-    test('engine-connected sessions prefer glyph editing', () {
-      if (!controller.isEngineConnected) return;
+    test('mock sessions use glyph editing via MockDocumentEngine', () {
       expect(controller.preferTextRendering, isFalse);
       expect(controller.usesGlyphRendering, isTrue);
     });
 
-    test('mock sessions prefer text editing', () {
-      if (controller.isEngineConnected) return;
-      expect(controller.preferTextRendering, isTrue);
-      expect(controller.usesGlyphRendering, isFalse);
-    });
-
-    test('setDisplayListForTest enables glyph mode flags', () {
+    test('setDisplayListForTest injects display list bytes', () {
       controller.setDisplayListForTest(_fakeGlyphDisplayList());
       expect(controller.preferTextRendering, isFalse);
       expect(controller.usesGlyphRendering, isTrue);
@@ -93,17 +86,16 @@ void main() {
       expect(controller.selectionRects, isEmpty);
     });
 
-    test('glyph insert is a no-op without caret or engine run', () {
-      if (controller.isEngineConnected) return;
-      // Mock mode: insertGlyphCharacter requires engine.
-      controller.insertGlyphCharacter('A');
-      expect(controller.documentText, isEmpty);
+    test('glyph insert updates mock engine text', () async {
+      controller.ensureGlyphCaret();
+      await controller.insertGlyphCharacter('A');
+      expect(controller.documentText, 'A');
     });
   });
 
   group('GlyphEditorSurface Stage 2 unit', () {
     testWidgets('mounts and requests focus on page 0', (tester) async {
-      final controller = EditorController();
+      final controller = EditorController.forTest();
       addTearDown(controller.dispose);
       controller.setDisplayListForTest(_fakeGlyphDisplayList());
 
@@ -131,7 +123,7 @@ void main() {
     });
 
     testWidgets('tap on surface does not throw', (tester) async {
-      final controller = EditorController();
+      final controller = EditorController.forTest();
       addTearDown(controller.dispose);
       controller.setDisplayListForTest(_fakeGlyphDisplayList());
       final snapshot = DisplayListSnapshot.fromBytes(controller.displayListBytes);
@@ -155,7 +147,7 @@ void main() {
       await tester.pumpAndSettle();
 
       await tester.tap(find.byType(GlyphEditorSurface));
-      await tester.pump();
+      await tester.pumpAndSettle();
     });
   });
 }

@@ -1,7 +1,8 @@
 use tw_model::{
-    Alignment, CharFormat, Color, LineSpacing, NumberingRef, ParaFormat, SectionFormat, StyleId,
-    CharacterStyle, DocumentTheme, ListLevel, ListMarkerFormat, ListSuffix, TabAlignment, TabStop,
-    NumberingCatalog, NumberingDefinition, ParagraphStyle, StyleSheet, TableStyle, BorderSpec,
+    Alignment, BorderSet, CharFormat, Color, LineSpacing, NumberingRef, ParaFormat, SectionFormat,
+    StyleId, CharacterStyle, DocumentTheme, ListLevel, ListMarkerFormat, ListSuffix, TabAlignment,
+    TabStop, NumberingCatalog, NumberingDefinition, ParagraphStyle, StyleSheet, TableStyle,
+    BorderSpec, ThemeColorRef, UnderlineStyle,
 };
 
 use crate::xml_util::{
@@ -10,59 +11,17 @@ use crate::xml_util::{
 };
 
 /// Marks a `font_family` that names a theme slot rather than a real family.
-pub const THEME_FONT_PREFIX: &str = "+";
+pub use tw_model::THEME_FONT_PREFIX;
 
 /// Substitutes theme font references for the families the theme names. Runs
 /// after the whole document is parsed, since `styles.xml` is read before
 /// `theme1.xml`.
 pub fn resolve_theme_fonts(doc: &mut tw_model::Document) {
-    let theme = doc.settings.theme.clone();
-    let substitute = |format: &mut CharFormat| {
-        let Some(family) = format.font_family.as_deref() else {
-            return;
-        };
-        let Some(slot) = family.strip_prefix(THEME_FONT_PREFIX) else {
-            return;
-        };
-        format.font_family = Some(if slot.starts_with("major") {
-            theme.major_font.clone()
-        } else {
-            theme.minor_font.clone()
-        });
-    };
-
-    substitute(&mut doc.styles.defaults.char_format);
-    for style in doc.styles.paragraph_styles.values_mut() {
-        substitute(&mut style.char_format);
-    }
-    for style in doc.styles.character_styles.values_mut() {
-        substitute(&mut style.char_format);
-    }
-    for section in &mut doc.sections {
-        for block in &mut section.blocks {
-            visit_block_runs(block, &substitute);
-        }
-    }
+    tw_model::resolve_theme_fonts(doc);
 }
 
-fn visit_block_runs(block: &mut tw_model::Block, substitute: &impl Fn(&mut CharFormat)) {
-    match block {
-        tw_model::Block::Paragraph(para) => {
-            for run in &mut para.runs {
-                substitute(&mut run.format);
-            }
-        }
-        tw_model::Block::Table(table) => {
-            for row in &mut table.rows {
-                for cell in &mut row.cells {
-                    for block in &mut cell.blocks {
-                        visit_block_runs(block, substitute);
-                    }
-                }
-            }
-        }
-        tw_model::Block::ImageBlock(_) => {}
-    }
+pub fn resolve_theme(doc: &mut tw_model::Document) {
+    tw_model::resolve_theme(doc);
 }
 
 pub fn parse_styles_xml(xml: &str) -> StyleSheet {
@@ -313,8 +272,22 @@ pub fn parse_para_properties(xml: &str) -> ParaFormat {
             .and_then(|v| v.parse().ok())
             .unwrap_or(0);
         format.numbering = Some(NumberingRef { numbering_id: num_id, level });
+        if read_toggle(xml, "w:numRestart").unwrap_or(false) {
+            format.num_restart = Some(true);
+        }
     }
-    format.tab_stops = parse_tab_stops(xml);
+    if let Some(level) = read_tag_text_in(xml, "w:outlineLvl", "w:val").and_then(|v| v.parse::<u8>().ok()) {
+        format.outline_level = Some(level.min(9));
+    }
+    if xml.contains("<w:tabs") {
+        format.tab_stops = Some(parse_tab_stops(xml));
+    }
+    if let Some(fill) = read_attr_value(xml, "w:shd", "w:fill") {
+        format.shading = parse_fill_color(&fill);
+    }
+    if let Some(borders) = parse_para_borders(xml) {
+        format.borders = Some(borders);
+    }
     if read_toggle(xml, "w:keepNext").unwrap_or(false) {
         format.keep_with_next = Some(true);
     }
@@ -334,6 +307,34 @@ pub fn parse_para_default_char_format(ppr_xml: &str) -> CharFormat {
         .next()
         .map(parse_char_properties)
         .unwrap_or_default()
+}
+
+fn parse_para_borders(xml: &str) -> Option<BorderSet> {
+    if !xml.contains("<w:pBdr") {
+        return None;
+    }
+    let pbdr = split_elements(xml, "w:pBdr").into_iter().next()?;
+    let borders = BorderSet {
+        top: parse_edge_border(&pbdr, "w:top"),
+        left: parse_edge_border(&pbdr, "w:left"),
+        bottom: parse_edge_border(&pbdr, "w:bottom"),
+        right: parse_edge_border(&pbdr, "w:right"),
+    };
+    if borders.any() {
+        Some(borders)
+    } else {
+        None
+    }
+}
+
+fn parse_edge_border(xml: &str, edge: &str) -> Option<BorderSpec> {
+    let width = read_int_attr(xml, edge, "w:sz")
+        .filter(|v| *v > 0)
+        .map(|v| v as f32 / 8.0)?;
+    let color = read_attr_value(xml, edge, "w:color")
+        .and_then(|v| parse_fill_color(&v))
+        .unwrap_or(Color::BLACK);
+    Some(BorderSpec { width, color })
 }
 
 fn parse_tab_stops(xml: &str) -> Vec<TabStop> {
@@ -373,11 +374,9 @@ pub fn parse_char_properties(xml: &str) -> CharFormat {
         format.strikethrough = Some(true);
     }
     if let Some(underline) = read_attr_value(xml, "w:u", "w:val") {
-        if underline != "none" {
-            format.underline = Some(tw_model::UnderlineStyle::Single);
-        }
+        format.underline = parse_underline_style(&underline);
     } else if split_elements(xml, "w:u").first().is_some() {
-        format.underline = Some(tw_model::UnderlineStyle::Single);
+        format.underline = Some(UnderlineStyle::Single);
     }
     if let Some(sz) = read_numeric_attr(xml, "w:sz", "w:val") {
         format.font_size = Some(half_points_to_points(sz));
@@ -393,12 +392,29 @@ pub fn parse_char_properties(xml: &str) -> CharFormat {
         // `resolve_theme_fonts` substitute the real family afterwards.
         format.font_family = Some(format!("{THEME_FONT_PREFIX}{theme}"));
     }
-    if let Some(color) = read_tag_text_in(xml, "w:color", "w:val") {
-        format.color = parse_color(&color);
+    if let Some(color_body) = split_elements(xml, "w:color").into_iter().next() {
+        if let Some(theme_name) = read_own_attr(color_body, "w:themeColor") {
+            let tint = read_own_attr(color_body, "w:themeTint")
+                .and_then(|v| u8::from_str_radix(v.trim_start_matches('#'), 16).ok());
+            let shade = read_own_attr(color_body, "w:themeShade")
+                .and_then(|v| u8::from_str_radix(v.trim_start_matches('#'), 16).ok());
+            format.theme_color = ThemeColorRef::from_ooxml(theme_name, tint, shade);
+        }
+        if let Some(color) = read_own_attr(color_body, "w:val") {
+            format.color = parse_color(color);
+        }
     }
     if let Some(highlight) = read_tag_text_in(xml, "w:highlight", "w:val") {
         format.highlight = parse_highlight(&highlight);
     }
+    if let Some(spacing) = read_numeric_attr(xml, "w:spacing", "w:val") {
+        if spacing != 0.0 {
+            format.character_spacing = Some(twips_to_points(spacing));
+        }
+    }
+    format.all_caps = read_toggle(xml, "w:caps");
+    format.small_caps = read_toggle(xml, "w:smallCaps");
+    format.hidden = read_toggle(xml, "w:vanish");
     if let Some(align) = read_tag_text_in(xml, "w:vertAlign", "w:val") {
         match align.as_str() {
             "superscript" => {
@@ -417,6 +433,20 @@ pub fn parse_char_properties(xml: &str) -> CharFormat {
         }
     }
     format
+}
+
+fn parse_underline_style(value: &str) -> Option<UnderlineStyle> {
+    match value {
+        "none" => None,
+        "single" | "words" => Some(UnderlineStyle::Single),
+        "double" => Some(UnderlineStyle::Double),
+        "dotted" => Some(UnderlineStyle::Dotted),
+        "dash" | "dashed" | "dashLong" | "dashDotDotHeavy" | "dashDotHeavy" | "dashDot" => {
+            Some(UnderlineStyle::Dashed)
+        }
+        "wave" | "wavyHeavy" | "wavyDouble" => Some(UnderlineStyle::Wave),
+        _ => Some(UnderlineStyle::Single),
+    }
 }
 
 pub fn parse_section_properties(xml: &str) -> SectionFormat {
@@ -438,6 +468,18 @@ pub fn parse_section_properties(xml: &str) -> SectionFormat {
     }
     if let Some(v) = read_numeric_attr(xml, "w:pgMar", "w:right") {
         format.margin_right = twips_to_points(v);
+    }
+    if let Some(num) = read_numeric_attr(xml, "w:cols", "w:num") {
+        format.columns.count = (num as u32).clamp(1, 3);
+    }
+    if let Some(space) = read_numeric_attr(xml, "w:cols", "w:space") {
+        format.columns.gap = twips_to_points(space);
+    }
+    if xml.contains("<w:titlePg") {
+        format.different_first_page = true;
+    }
+    if read_attr_value(xml, "w:pgSz", "w:orient").as_deref() == Some("landscape") {
+        format = format.with_orientation(true);
     }
     format
 }
@@ -481,6 +523,9 @@ fn parse_highlight(value: &str) -> Option<Color> {
         "yellow" => Some(Color { r: 255, g: 255, b: 0, a: 255 }),
         "green" => Some(Color { r: 0, g: 255, b: 0, a: 255 }),
         "cyan" => Some(Color { r: 0, g: 255, b: 255, a: 255 }),
+        "magenta" => Some(Color { r: 255, g: 0, b: 255, a: 255 }),
+        "red" => Some(Color { r: 255, g: 0, b: 0, a: 255 }),
+        "blue" => Some(Color { r: 0, g: 0, b: 255, a: 255 }),
         _ => None,
     }
 }
@@ -579,10 +624,41 @@ mod tests {
             parse_char_properties(r#"<w:rPr><w:u w:val="none"/></w:rPr>"#).underline,
             None
         );
-        assert!(
-            parse_char_properties(r#"<w:rPr><w:u w:val="single"/></w:rPr>"#)
-                .underline
-                .is_some()
+        assert_eq!(
+            parse_char_properties(r#"<w:rPr><w:u w:val="single"/></w:rPr>"#).underline,
+            Some(UnderlineStyle::Single)
+        );
+        assert_eq!(
+            parse_char_properties(r#"<w:rPr><w:u w:val="double"/></w:rPr>"#).underline,
+            Some(UnderlineStyle::Double)
+        );
+    }
+
+    #[test]
+    fn character_spacing_is_read_from_run_properties() {
+        assert_eq!(
+            parse_char_properties(r#"<w:rPr><w:spacing w:val="40"/></w:rPr>"#).character_spacing,
+            Some(2.0)
+        );
+        assert_eq!(
+            parse_char_properties(r#"<w:rPr><w:spacing w:val="0"/></w:rPr>"#).character_spacing,
+            None
+        );
+    }
+
+    #[test]
+    fn caps_and_hidden_are_read_from_run_properties() {
+        assert_eq!(
+            parse_char_properties(r#"<w:rPr><w:caps/></w:rPr>"#).all_caps,
+            Some(true)
+        );
+        assert_eq!(
+            parse_char_properties(r#"<w:rPr><w:smallCaps/></w:rPr>"#).small_caps,
+            Some(true)
+        );
+        assert_eq!(
+            parse_char_properties(r#"<w:rPr><w:vanish/></w:rPr>"#).hidden,
+            Some(true)
         );
     }
 
@@ -674,10 +750,51 @@ mod tests {
     #[test]
     fn explicit_tab_stops_are_parsed_in_twips() {
         let xml = r#"<w:tabs><w:tab w:val="right" w:pos="2880"/></w:tabs>"#;
-        let stops = parse_para_properties(xml).tab_stops;
+        let stops = parse_para_properties(xml).tab_stops.expect("tab stops");
         assert_eq!(stops.len(), 1);
         assert!((stops[0].position - 144.0).abs() < 0.01);
         assert_eq!(stops[0].alignment, TabAlignment::Right);
+    }
+
+    #[test]
+    fn paragraph_shading_and_borders_import() {
+        let xml = r#"<w:shd w:val="clear" w:fill="FFFF00"/>
+            <w:pBdr>
+              <w:top w:val="single" w:sz="8" w:color="000000"/>
+              <w:bottom w:val="single" w:sz="8" w:color="000000"/>
+            </w:pBdr>"#;
+        let format = parse_para_properties(xml);
+        let shading = format.shading.expect("shading");
+        assert_eq!(shading.r, 255);
+        assert_eq!(shading.g, 255);
+        let borders = format.borders.expect("borders");
+        assert!(borders.top.is_some());
+        assert!(borders.bottom.is_some());
+    }
+
+    #[test]
+    fn num_restart_imports_from_num_pr() {
+        let xml = r#"<w:numPr>
+            <w:ilvl w:val="0"/>
+            <w:numId w:val="2"/>
+            <w:numRestart w:val="1"/>
+        </w:numPr>"#;
+        let format = parse_para_properties(xml);
+        assert_eq!(
+            format.numbering,
+            Some(NumberingRef {
+                numbering_id: 2,
+                level: 0,
+            })
+        );
+        assert_eq!(format.num_restart, Some(true));
+    }
+
+    #[test]
+    fn outline_level_imports_from_ppr() {
+        let xml = r#"<w:outlineLvl w:val="2"/>"#;
+        let format = parse_para_properties(xml);
+        assert_eq!(format.outline_level, Some(2));
     }
 
     #[test]

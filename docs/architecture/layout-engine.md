@@ -97,6 +97,62 @@ Fallback chain example for a document using "Calibri":
 
 Font enumeration uses `fontdb` to scan system fonts at startup. Embedded document fonts (from DOCX `fontTable.xml`) are loaded into the database on document open.
 
+### Injected fonts (R3.1)
+
+There is no font directory and no filesystem on the web, so a host must supply
+font bytes itself. `FontDatabase` therefore has two sources, chosen at
+construction and never mixed:
+
+| Constructor | Faces | Filesystem |
+|-------------|-------|------------|
+| `FontDatabase::new()` / `TextShaper::new()` / `LayoutEngine::new()` | Whatever the OS has installed | `fontdb` scans font directories |
+| `FontDatabase::empty()` / `TextShaper::with_injected_fonts()` / `LayoutEngine::with_injected_fonts()` | Only what the host registers | None |
+
+```rust
+let mut engine = LayoutEngine::with_injected_fonts();
+engine.register_face(&FontFaceSpec::new("Calibri"), calibri_regular_bytes)?;
+engine.register_face(&FontFaceSpec::new("Calibri").bold(), calibri_bold_bytes)?;
+```
+
+`FontFaceSpec { family, weight, italic, index }` labels the bytes, overriding the
+names inside the file — a host may register any face under the family a document
+asks for. `register_font_data` keeps the file's own names instead. Registered
+bytes are shared (`Arc`) with the shaper and rasterizer, so nothing is copied per
+shaping call, and family names match case-insensitively.
+
+`fontdb`'s `fs` feature is off on `wasm32` (target-specific dependency in
+`crates/tw-shape/Cargo.toml`), which removes `Database::load_system_fonts`,
+`Source::File`, and `Source::SharedFile` from the crate entirely. A filesystem
+font path on the web is a compile error, not a runtime miss.
+
+#### Resolution order for an unregistered family
+
+`resolve_styled` walks, at the requested weight and slant:
+
+1. the requested family (case-insensitive),
+2. its Office aliases (`Calibri → Carlito, Helvetica Neue, Arial`, …),
+3. the document default family — the theme minor font from `configure_document`,
+4. **last resort:** any available face, nearest in style (slant first, then
+   weight distance).
+
+Step 4 exists for injected fonts, where the default family is as likely to be
+missing as the requested one. A document then renders in the wrong typeface
+rather than rendering blank. `None` comes back only from a database with no faces
+at all, and layout then emits lines with correct heights and no glyphs — it does
+not panic.
+
+Per-character coverage fallback (`fallback_for`) searches the document fallback
+list, then the built-in family list, then every available face; on the web that
+list is exactly the host's registrations.
+
+#### Minimum font set for a web host
+
+One regular upright face renders every document, via the last-resort step. For
+output that is not obviously wrong you want, in order of payoff: regular, bold,
+italic, and bold-italic of the body family; the theme major (heading) family; and
+a broad-coverage face such as Noto Sans for symbols and currency the body family
+lacks.
+
 ### OpenType Features
 
 | Feature | Tag | Usage |

@@ -1,7 +1,8 @@
-import 'dart:io';
+import 'dart:io' if (dart.library.html) 'package:tutuaword/bridge/platform_stub.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
 import 'package:tutuaword/editor/editor_controller.dart';
 
 /// Full macOS menu bar — app menu (Quit), File, Edit, View, Window.
@@ -9,16 +10,40 @@ class EditorMenuBar extends StatelessWidget {
   const EditorMenuBar({
     super.key,
     required this.controller,
+    required this.onNew,
+    required this.onNewFromTemplate,
     required this.onOpen,
+    required this.onOpenRecent,
     required this.onSave,
     required this.onSaveAs,
+    required this.onSaveAsTemplate,
+    required this.onPrint,
+    required this.onShowProperties,
+    required this.onShowPasteSpecial,
+    required this.onShowGoTo,
+    required this.onProtectWithPassword,
+    required this.onRemovePassword,
+    required this.onInspectDocument,
+    required this.onDigitalSignatures,
     required this.child,
   });
 
   final EditorController controller;
+  final VoidCallback onNew;
+  final VoidCallback onNewFromTemplate;
   final VoidCallback onOpen;
+  final void Function(String path) onOpenRecent;
   final VoidCallback onSave;
   final void Function(String extension) onSaveAs;
+  final VoidCallback onSaveAsTemplate;
+  final VoidCallback onPrint;
+  final VoidCallback onShowProperties;
+  final VoidCallback onShowPasteSpecial;
+  final VoidCallback onShowGoTo;
+  final VoidCallback onProtectWithPassword;
+  final VoidCallback onRemovePassword;
+  final VoidCallback onInspectDocument;
+  final VoidCallback onDigitalSignatures;
   final Widget child;
 
   static const _appName = 'tutuaword';
@@ -100,17 +125,74 @@ class EditorMenuBar extends StatelessWidget {
       label: 'File',
       menus: [
         PlatformMenuItem(
+          label: 'New',
+          shortcut: const SingleActivator(LogicalKeyboardKey.keyN, meta: true),
+          onSelected: onNew,
+        ),
+        PlatformMenuItem(
+          label: 'New from Template…',
+          onSelected: onNewFromTemplate,
+        ),
+        PlatformMenuItem(
           label: 'Open…',
           shortcut: const SingleActivator(LogicalKeyboardKey.keyO, meta: true),
           onSelected: onOpen,
         ),
+        if (controller.recentDocuments.isNotEmpty)
+          PlatformMenuItemGroup(
+            members: [
+              for (final path in controller.recentDocuments)
+                PlatformMenuItem(
+                  label: p.basename(path),
+                  onSelected: () => onOpenRecent(path),
+                ),
+            ],
+          ),
         PlatformMenuItem(
-          label: 'Save…',
+          label: 'Save',
           shortcut: const SingleActivator(LogicalKeyboardKey.keyS, meta: true),
           onSelected: onSave,
         ),
+        PlatformMenuItem(
+          label: 'Save as Template…',
+          onSelected: onSaveAsTemplate,
+        ),
+        PlatformMenuItem(
+          label: 'Print…',
+          shortcut: const SingleActivator(LogicalKeyboardKey.keyP, meta: true),
+          onSelected: onPrint,
+        ),
+        PlatformMenuItem(
+          label: 'Properties…',
+          onSelected: onShowProperties,
+        ),
+        PlatformMenuItem(
+          label: 'Inspect Document…',
+          onSelected: onInspectDocument,
+        ),
+        PlatformMenuItem(
+          label: 'Digital Signatures…',
+          onSelected: onDigitalSignatures,
+        ),
         PlatformMenuItemGroup(
           members: [
+            PlatformMenuItem(
+              label: 'Protect with Password…',
+              onSelected: onProtectWithPassword,
+            ),
+            if (controller.encryptionPasswordSet)
+              PlatformMenuItem(
+                label: 'Remove Password',
+                onSelected: onRemovePassword,
+              ),
+          ],
+        ),
+        PlatformMenuItemGroup(
+          members: [
+            PlatformMenuItem(
+              label: 'Save as TWDOC…',
+              onSelected: () => onSaveAs('twdoc'),
+            ),
             PlatformMenuItem(
               label: 'Save as DOCX…',
               onSelected: () => onSaveAs('docx'),
@@ -199,6 +281,10 @@ class EditorMenuBar extends StatelessWidget {
               onSelected: () => controller.paste(plainText: true),
             ),
             PlatformMenuItem(
+              label: 'Paste Special…',
+              onSelected: onShowPasteSpecial,
+            ),
+            PlatformMenuItem(
               label: 'Delete',
               onSelected: controller.deleteSelection,
             ),
@@ -206,6 +292,16 @@ class EditorMenuBar extends StatelessWidget {
               label: 'Select All',
               shortcut: const SingleActivator(LogicalKeyboardKey.keyA, meta: true),
               onSelected: controller.selectAll,
+            ),
+            PlatformMenuItem(
+              label: 'Find…',
+              shortcut: const SingleActivator(LogicalKeyboardKey.keyF, meta: true),
+              onSelected: controller.openFindPane,
+            ),
+            PlatformMenuItem(
+              label: 'Go To…',
+              shortcut: const SingleActivator(LogicalKeyboardKey.keyG, meta: true),
+              onSelected: onShowGoTo,
             ),
           ],
         ),
@@ -217,6 +313,10 @@ class EditorMenuBar extends StatelessWidget {
     return PlatformMenu(
       label: 'View',
       menus: _compact([
+        PlatformMenuItem(
+          label: controller.printPreview ? 'Exit Print Preview' : 'Print Preview',
+          onSelected: controller.togglePrintPreview,
+        ),
         if (_has(PlatformProvidedMenuItemType.toggleFullScreen))
           PlatformProvidedMenuItem(
             type: PlatformProvidedMenuItemType.toggleFullScreen,

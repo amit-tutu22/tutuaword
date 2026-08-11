@@ -9,7 +9,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use tw_model::{Block, Document, Paragraph, RunContent};
+use tw_model::{Block, Document, NumberingCatalog, Paragraph, RunContent, StyleSheet};
 
 pub fn document_fingerprint(doc: &Document) -> u64 {
     let mut hasher = DefaultHasher::new();
@@ -30,6 +30,44 @@ pub fn document_fingerprint(doc: &Document) -> u64 {
         format.footer_text.hash(&mut hasher);
         hash_blocks(&section.blocks, &mut hasher);
     }
+    doc.bibliography_sources.len().hash(&mut hasher);
+    for source in &doc.bibliography_sources {
+        source.key.hash(&mut hasher);
+        source.author.hash(&mut hasher);
+        source.title.hash(&mut hasher);
+        source.year.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// Content hash of a single paragraph for within-part preservation.
+pub fn paragraph_fingerprint(para: &Paragraph) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    hash_paragraph(para, &mut hasher);
+    hasher.finish()
+}
+
+/// Fingerprint for an imported shape block (bounds + kind + wrap).
+pub fn shape_fingerprint(shape: &tw_model::ShapeBlock) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    hash_shape(shape, &mut hasher);
+    hasher.finish()
+}
+
+/// Tier B fingerprint for the numbering catalog.
+pub fn numbering_fingerprint(catalog: &NumberingCatalog) -> u64 {
+    fingerprint_json(catalog)
+}
+
+/// Tier B fingerprint for the style sheet.
+pub fn styles_fingerprint(styles: &StyleSheet) -> u64 {
+    fingerprint_json(styles)
+}
+
+fn fingerprint_json<T: serde::Serialize>(value: &T) -> u64 {
+    let json = serde_json::to_string(value).unwrap_or_default();
+    let mut hasher = DefaultHasher::new();
+    json.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -61,6 +99,13 @@ fn hash_blocks(blocks: &[Block], hasher: &mut DefaultHasher) {
                 image.display_width.to_bits().hash(hasher);
                 image.display_height.to_bits().hash(hasher);
             }
+            Block::ShapeBlock(shape) => {
+                3u8.hash(hasher);
+                hash_shape(shape, hasher);
+            }
+            _ => {
+                255u8.hash(hasher);
+            }
         }
     }
 }
@@ -81,17 +126,89 @@ fn hash_paragraph(para: &Paragraph, hasher: &mut DefaultHasher) {
                 2u8.hash(hasher);
                 kind.hash(hasher);
             }
+            RunContent::Hyperlink { text, .. } => {
+                3u8.hash(hasher);
+                text.hash(hasher);
+            }
+            RunContent::Field(field) => {
+                4u8.hash(hasher);
+                field.display_text.hash(hasher);
+            }
+            RunContent::InlineImage(img) => {
+                5u8.hash(hasher);
+                img.image.asset_id.hash(hasher);
+            }
+            RunContent::FootnoteRef(note) => {
+                6u8.hash(hasher);
+                note.note_id.hash(hasher);
+            }
+            RunContent::CitationRef(cite) => {
+                11u8.hash(hasher);
+                cite.source_key.hash(hasher);
+                cite.display_text.hash(hasher);
+            }
+            RunContent::CommentRef(c) => {
+                7u8.hash(hasher);
+                c.comment_id.hash(hasher);
+            }
+            RunContent::Bookmark(b) => {
+                8u8.hash(hasher);
+                b.name.hash(hasher);
+            }
+            RunContent::OfficeMath { xml } => {
+                10u8.hash(hasher);
+                xml.hash(hasher);
+            }
+            _ => {
+                9u8.hash(hasher);
+            }
         }
         let format = &run.format;
         format.bold.hash(hasher);
         format.italic.hash(hasher);
         format.underline.hash(hasher);
         format.strikethrough.hash(hasher);
+        format.all_caps.hash(hasher);
+        format.small_caps.hash(hasher);
+        format.hidden.hash(hasher);
         format.font_family.hash(hasher);
         format.font_size.map(f32::to_bits).hash(hasher);
+        format.character_spacing.map(f32::to_bits).hash(hasher);
         format.color.hash(hasher);
         run.revision.is_some().hash(hasher);
     }
+}
+
+fn hash_shape(shape: &tw_model::ShapeBlock, hasher: &mut DefaultHasher) {
+    shape.shape.shape_type.hash(hasher);
+    shape.shape.width.to_bits().hash(hasher);
+    shape.shape.height.to_bits().hash(hasher);
+    shape.wrap.hash(hasher);
+    shape.style.fill.hash(hasher);
+    shape.style.stroke.hash(hasher);
+    shape.style.stroke_width.to_bits().hash(hasher);
+    shape.paragraphs.len().hash(hasher);
+    for para in &shape.paragraphs {
+        hash_paragraph(para, hasher);
+    }
+    if let Some(preview) = &shape.preview_image {
+        preview.asset_id.hash(hasher);
+        preview.bytes.len().hash(hasher);
+    }
+    if let Some(data) = &shape.chart_data {
+        data.categories.len().hash(hasher);
+        for category in &data.categories {
+            category.hash(hasher);
+        }
+        data.series.len().hash(hasher);
+        for series in &data.series {
+            series.name.hash(hasher);
+            for value in &series.values {
+                value.to_bits().hash(hasher);
+            }
+        }
+    }
+    shape.chart_part.hash(hasher);
 }
 
 #[cfg(test)]

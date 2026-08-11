@@ -1,6 +1,6 @@
 # Collaboration
 
-Real-time multi-user editing powered by CRDTs. This spec defines the interface; implementation is deferred to Phase 5.
+Real-time multi-user editing powered by CRDTs. This spec defines the **interface**; implementation is deferred to Phase 5 (F20). The ordered implementation plan lives in [crdt-program.md](../crdt-program.md), separate from [architecture remediation](../architecture-remediation.md) R3.
 
 ## Design Principles
 

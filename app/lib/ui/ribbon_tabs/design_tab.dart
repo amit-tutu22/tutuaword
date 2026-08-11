@@ -1,40 +1,95 @@
 import 'package:flutter/material.dart';
+import 'package:tutuaword/editor/editor_controller.dart';
+import 'package:tutuaword/ui/page_setup.dart';
+import 'package:tutuaword/ui/ribbon_color_picker.dart';
 import 'package:tutuaword/ui/ribbon_widgets.dart';
 
 class DesignTab extends StatelessWidget {
-  const DesignTab({super.key});
+  const DesignTab({super.key, required this.controller});
+
+  final EditorController controller;
+
+  static const _galleryThemes = <(String, TextStyle)>[
+    ('Office', TextStyle(fontSize: 9)),
+    ('Facet', TextStyle(fontSize: 9, fontWeight: FontWeight.w600)),
+    ('Ion', TextStyle(fontSize: 9)),
+  ];
+
+  Future<void> _openWatermarkMenu(BuildContext context) async {
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final items = [
+      ...PageSetupPresets.watermarkPresets,
+      if (controller.watermarkText != null) PageSetupPresets.removeWatermarkLabel,
+    ];
+    await showRibbonPresetMenu(context, box, items, (value) {
+      if (value == PageSetupPresets.removeWatermarkLabel) {
+        controller.clearWatermark();
+      } else {
+        controller.applyWatermark(value);
+      }
+    }, minWidth: 140, maxWidth: 220);
+  }
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          RibbonGroup(
-            label: 'Document Formatting',
-            child: Row(
-              children: [
-                StyleGalleryCard(label: 'Office', onPressed: null),
-                StyleGalleryCard(label: 'Facet', onPressed: null),
-                StyleGalleryCard(label: 'Ion', onPressed: null),
-                RibbonIconButton(icon: Icons.chevron_right, onPressed: null),
-              ],
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) {
+        return RibbonTabScroller(
+          children: [
+            RibbonGroup(
+              label: 'Document Formatting',
+              child: Row(
+                children: [
+                  for (final entry in _galleryThemes)
+                    StyleGalleryCard(
+                      label: entry.$1,
+                      previewStyle: entry.$2,
+                      selected: controller.documentThemeName == entry.$1,
+                      onPressed: () => controller.applyDocumentTheme(entry.$1),
+                    ),
+                ],
+              ),
             ),
-          ),
-          RibbonGroup(
-            label: 'Page Background',
-            showDivider: false,
-            child: Row(
-              children: [
-                RibbonLargeButton(icon: Icons.water_drop_outlined, label: 'Watermark', onPressed: null),
-                RibbonLargeButton(icon: Icons.palette_outlined, label: 'Page\nColor', onPressed: null),
-                RibbonLargeButton(icon: Icons.border_style, label: 'Page\nBorders', onPressed: null),
-              ],
+            RibbonGroup(
+              label: 'Page Background',
+              showDivider: false,
+              child: Row(
+                children: [
+                  Builder(
+                    builder: (context) => RibbonLargeButton(
+                      icon: Icons.water_drop_outlined,
+                      label: 'Watermark',
+                      tooltip: controller.watermarkText ?? 'Watermark',
+                      onPressed: () => _openWatermarkMenu(context),
+                    ),
+                  ),
+                  RibbonColorButton(
+                    icon: Icons.palette_outlined,
+                    tooltip: 'Page Color',
+                    barColor: controller.pageColor ?? const Color(0xFFFFFFFF),
+                    onColorSelected: (selection) =>
+                        controller.applyPageColor(selection.color),
+                    onClear: () => controller.applyPageColor(null),
+                  ),
+                  Builder(
+                    builder: (context) => RibbonLargeButton(
+                      key: const Key('design_page_borders'),
+                      icon: Icons.border_style,
+                      label: 'Page\nBorders',
+                      tooltip: controller.hasPageBorders
+                          ? 'Page borders on'
+                          : 'Page borders',
+                      onPressed: () => controller.editPageBorders(context),
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
-      ),
+          ],
+        );
+      },
     );
   }
 }

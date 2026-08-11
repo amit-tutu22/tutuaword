@@ -8,11 +8,15 @@ license.workspace = true
 [dependencies]
 tw-model = { path = "../tw-model" }
 thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 zip = { workspace = true }
-resvg = "0.44"
-usvg = "0.44"
-tiny-skia = "0.11"
+chrono = { workspace = true }
+office-crypto = "0.3"
+ms-offcrypto-writer = "1.0.7"
+rand = "0.9"
 
 [dev-dependencies]
 tw-layout = { path = "../tw-layout" }
 tw-render = { path = "../tw-render" }
+tw-edit = { path = "../tw-edit" }

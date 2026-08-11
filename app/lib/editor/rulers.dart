@@ -28,8 +28,8 @@ class DocumentRulers extends StatelessWidget {
                 child: CustomPaint(
                   painter: _HorizontalRulerPainter(
                     pageWidth: controller.pageWidth,
-                    marginLeft: 72,
-                    marginRight: 72,
+                    marginLeft: controller.marginLeft,
+                    marginRight: controller.marginRight,
                   ),
                   size: Size.infinite,
                 ),
@@ -43,7 +43,7 @@ class DocumentRulers extends StatelessWidget {
                       child: CustomPaint(
                         painter: _VerticalRulerPainter(
                           pageHeight: controller.pageHeight,
-                          marginTop: 72,
+                          marginTop: controller.marginTop,
                         ),
                         size: Size.infinite,
                       ),
@@ -88,7 +88,10 @@ class _HorizontalRulerPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _HorizontalRulerPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _HorizontalRulerPainter oldDelegate) =>
+      oldDelegate.pageWidth != pageWidth ||
+      oldDelegate.marginLeft != marginLeft ||
+      oldDelegate.marginRight != marginRight;
 }
 
 class _VerticalRulerPainter extends CustomPainter {
@@ -110,5 +113,6 @@ class _VerticalRulerPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _VerticalRulerPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _VerticalRulerPainter oldDelegate) =>
+      oldDelegate.pageHeight != pageHeight || oldDelegate.marginTop != marginTop;
 }

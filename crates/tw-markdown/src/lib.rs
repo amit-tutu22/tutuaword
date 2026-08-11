@@ -1,6 +1,6 @@
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use thiserror::Error;
-use tw_model::{Block, CharFormat, Document, Paragraph, Run};
+use tw_model::{Block, CharFormat, Document, Paragraph, Run, StyleSheet};
 
 #[derive(Debug, Error)]
 pub enum MarkdownError {
@@ -22,17 +22,17 @@ pub fn import(source: &[u8]) -> Result<Document, MarkdownError> {
     for event in parser {
         match event {
             Event::Start(Tag::Heading { level, .. }) => {
-                flush_paragraph(&mut blocks, &mut current_runs, heading_level.take());
+                flush_paragraph(&doc.styles, &mut blocks, &mut current_runs, heading_level.take());
                 heading_level = Some(level as u8);
             }
             Event::End(TagEnd::Heading(_)) => {
-                flush_paragraph(&mut blocks, &mut current_runs, heading_level.take());
+                flush_paragraph(&doc.styles, &mut blocks, &mut current_runs, heading_level.take());
             }
             Event::Start(Tag::Paragraph) => {
-                flush_paragraph(&mut blocks, &mut current_runs, heading_level.take());
+                flush_paragraph(&doc.styles, &mut blocks, &mut current_runs, heading_level.take());
             }
             Event::End(TagEnd::Paragraph) => {
-                flush_paragraph(&mut blocks, &mut current_runs, heading_level.take());
+                flush_paragraph(&doc.styles, &mut blocks, &mut current_runs, heading_level.take());
             }
             Event::Start(Tag::Strong) => current_format.bold = Some(true),
             Event::End(TagEnd::Strong) => current_format.bold = None,
@@ -51,7 +51,12 @@ pub fn import(source: &[u8]) -> Result<Document, MarkdownError> {
             _ => {}
         }
     }
-    flush_paragraph(&mut blocks, &mut current_runs, heading_level.take());
+    flush_paragraph(
+        &doc.styles,
+        &mut blocks,
+        &mut current_runs,
+        heading_level.take(),
+    );
 
     if blocks.is_empty() {
         blocks.push(Block::Paragraph(Paragraph::new()));
@@ -62,21 +67,23 @@ pub fn import(source: &[u8]) -> Result<Document, MarkdownError> {
     Ok(doc)
 }
 
-fn flush_paragraph(blocks: &mut Vec<Block>, runs: &mut Vec<Run>, heading_level: Option<u8>) {
+fn flush_paragraph(
+    styles: &StyleSheet,
+    blocks: &mut Vec<Block>,
+    runs: &mut Vec<Run>,
+    heading_level: Option<u8>,
+) {
     if runs.is_empty() {
         return;
     }
     let mut para = Paragraph::new();
     para.runs = std::mem::take(runs);
     if let Some(level) = heading_level {
+        let name = format!("Heading {level}");
+        if let Some(id) = styles.find_style_by_name(&name).map(|s| s.id) {
+            para.style_id = Some(id);
+        }
         if level == 1 {
-            if let Some(id) = Document::new()
-                .styles
-                .find_style_by_name("Heading 1")
-                .map(|s| s.id)
-            {
-                para.style_id = Some(id);
-            }
             for run in &mut para.runs {
                 run.format.bold = Some(true);
             }
@@ -85,14 +92,28 @@ fn flush_paragraph(blocks: &mut Vec<Block>, runs: &mut Vec<Run>, heading_level: 
     blocks.push(Block::Paragraph(para));
 }
 
+fn markdown_heading_prefix(styles: &StyleSheet, style_id: Option<tw_model::StyleId>) -> Option<&'static str> {
+    let id = style_id?;
+    let style = styles.paragraph_styles.get(&id)?;
+    match style.name.as_str() {
+        "Heading 1" => Some("# "),
+        "Heading 2" => Some("## "),
+        "Heading 3" => Some("### "),
+        "Heading 4" => Some("#### "),
+        "Heading 5" => Some("##### "),
+        "Heading 6" => Some("###### "),
+        _ => None,
+    }
+}
+
 pub fn export(doc: &Document) -> Result<Vec<u8>, MarkdownError> {
     let mut out = String::new();
     if let Some(section) = doc.sections.first() {
         for block in &section.blocks {
             if let Block::Paragraph(para) = block {
-                let is_heading = para.style_id.is_some();
-                if is_heading {
-                    out.push_str("# ");
+                let heading = markdown_heading_prefix(&doc.styles, para.style_id);
+                if let Some(prefix) = heading {
+                    out.push_str(prefix);
                 }
                 for run in &para.runs {
                     let mut text = run.text().to_string();
@@ -105,7 +126,7 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, MarkdownError> {
                     out.push_str(&text);
                 }
                 out.push('\n');
-                if is_heading {
+                if heading.is_some() {
                     out.push('\n');
                 }
             }
@@ -122,7 +143,8 @@ mod tests {
     fn imports_heading_and_bold() {
         let doc = import(b"# Title\n\nHello **world**").unwrap();
         let first = doc.sections[0].blocks[0].paragraph().unwrap();
-        assert!(first.style_id.is_some() || first.runs[0].format.bold == Some(true));
+        let h1 = doc.styles.find_style_by_name("Heading 1").unwrap().id;
+        assert_eq!(first.style_id, Some(h1));
         assert!(doc.sections[0].blocks.len() >= 2);
     }
 
@@ -131,7 +153,20 @@ mod tests {
         let doc = import(b"# Heading\n\nBody").unwrap();
         let md = export(&doc).unwrap();
         let text = String::from_utf8(md).unwrap();
-        assert!(text.contains('#'));
+        assert!(text.starts_with("# "));
         assert!(text.contains("Body"));
+        assert!(!text.contains("# Body"));
+    }
+
+    #[test]
+    fn u_f23_s3_md_heading_not_every_style() {
+        let mut doc = Document::new();
+        let quote = doc.styles.find_style_by_name("Quote").unwrap().id;
+        let mut para = Paragraph::with_text("Quoted");
+        para.style_id = Some(quote);
+        doc.sections[0].blocks = vec![Block::Paragraph(para)];
+        let text = String::from_utf8(export(&doc).unwrap()).unwrap();
+        assert!(!text.starts_with('#'), "Quote must not export as ATX heading");
+        assert!(text.contains("Quoted"));
     }
 }

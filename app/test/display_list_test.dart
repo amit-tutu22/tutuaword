@@ -13,7 +13,25 @@ void main() {
       expect(snap.hasPaintableGlyphs, isFalse);
     });
 
-    test('parses v2 display list with glyphs, rects, paths, and images', () {
+    test('parses v4 display list without embedded atlas pixels', () {
+      final bytes = _buildV4DisplayList(
+        version: 9,
+        pageWidth: 612,
+        pageHeight: 792,
+        glyphCount: 2,
+        rectCount: 1,
+      );
+
+      final snap = DisplayListSnapshot.fromBytes(bytes);
+      expect(snap.version, 9);
+      expect(snap.atlasPixels, isEmpty);
+      expect(snap.atlasWidth, 0);
+      expect(snap.glyphOffsets.length, 4);
+      expect(snap.hasPaintableGlyphs, isTrue);
+      expect(snap.needsAtlasTexture, isTrue);
+    });
+
+    test('v2 display list with glyphs, rects, paths, and images', () {
       final bytes = _buildV2DisplayList(
         version: 7,
         pageWidth: 612,
@@ -93,7 +111,62 @@ void main() {
       final snap = DisplayListSnapshot.fromBytes(truncated);
       expect(snap.imagePayloads.single, isEmpty);
     });
+
+    test('v7 page list parses shape selection after empty image batch', () {
+      final bytes = _buildV7PageDisplayList(
+        shapeId: 'chart-1',
+        shapeRect: const [72.0, 96.0, 432.0, 216.0],
+      );
+
+      final snap = DisplayListSnapshot.fromBytes(bytes);
+      expect(snap.shapeIds, ['chart-1']);
+      expect(snap.shapeRects.length, 4);
+      expect(snap.shapeRects[0], 72.0);
+      expect(snap.shapeRects[2], 432.0);
+    });
   });
+}
+
+Uint8List _buildV7PageDisplayList({
+  required String shapeId,
+  required List<double> shapeRect,
+}) {
+  final writer = _ByteWriter();
+  writer.writeU32(7);
+  writer.writeU64(1);
+  writer.writeF32(612);
+  writer.writeF32(792);
+  _writeGlyphBatch(writer, 0);
+  _writeRectBatch(writer, 0);
+  _writePathBatch(writer, 0);
+  writer.writeU32(0); // empty image batch
+  writer.writeU32(1); // one selectable shape
+  for (final value in shapeRect) {
+    writer.writeF32(value);
+  }
+  final idBytes = shapeId.codeUnits;
+  writer.writeU32(idBytes.length);
+  writer.writeBytes(idBytes);
+  return writer.toBytes();
+}
+
+Uint8List _buildV4DisplayList({
+  required int version,
+  required double pageWidth,
+  required double pageHeight,
+  required int glyphCount,
+  required int rectCount,
+}) {
+  final writer = _ByteWriter();
+  writer.writeU32(4);
+  writer.writeU64(version);
+  writer.writeF32(pageWidth);
+  writer.writeF32(pageHeight);
+  _writeGlyphBatch(writer, glyphCount);
+  _writeRectBatch(writer, rectCount);
+  _writePathBatch(writer, 0);
+  _writeImageBatch(writer, 0, '');
+  return writer.toBytes();
 }
 
 Uint8List _buildV3DisplayList({

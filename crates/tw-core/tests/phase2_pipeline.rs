@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use tw_core::{document_plain_text, snapshot_from_pages, SnapshotBuffer, SinglePageSnapshot, SyncSession};
 use tw_edit::Command;
 use tw_layout::LayoutEngine;
@@ -76,7 +78,7 @@ fn sync_session_long_document_reports_multiple_pages() {
         let _ = para_id;
     }
 
-    session.relayout();
+    session.relayout(None);
     assert!(session.page_count() > 1);
 }
 
@@ -126,12 +128,14 @@ fn snapshot_buffer_stores_multiple_pages_and_switches_index() {
     let buffer = SnapshotBuffer::new();
     let pages = vec![
         SinglePageSnapshot {
-            bytes: vec![1, 2, 3],
+            version: 10,
+            bytes: Arc::new(vec![1, 2, 3]),
             page_width: 612.0,
             page_height: 792.0,
         },
         SinglePageSnapshot {
-            bytes: vec![4, 5, 6],
+            version: 10,
+            bytes: Arc::new(vec![4, 5, 6]),
             page_width: 612.0,
             page_height: 792.0,
         },
@@ -141,18 +145,24 @@ fn snapshot_buffer_stores_multiple_pages_and_switches_index() {
         pages,
         0,
         10,
+        0,
+        0,
+        0,
+        Arc::new(Vec::new()),
         "page one\npage two".into(),
+        "{}".into(),
+        false,
     ));
 
     let snap0 = buffer.read();
     assert_eq!(snap0.page_count, 2);
     assert_eq!(snap0.page_index, 0);
-    assert_eq!(snap0.bytes, vec![1, 2, 3]);
+    assert_eq!(snap0.bytes.as_ref(), &[1, 2, 3]);
 
     buffer.set_current_page(1);
     let snap1 = buffer.read();
     assert_eq!(snap1.page_index, 1);
-    assert_eq!(snap1.bytes, vec![4, 5, 6]);
+    assert_eq!(snap1.bytes.as_ref(), &[4, 5, 6]);
 }
 
 #[test]

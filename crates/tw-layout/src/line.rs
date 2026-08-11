@@ -1,4 +1,4 @@
-use tw_model::{Alignment, LineSpacing, Paragraph, RevisionType, TabStop};
+use tw_model::{Alignment, FieldEvalContext, LineSpacing, Paragraph, RevisionType, TabStop, paragraph_layout_text, run_layout_text};
 use tw_shape::{AtlasKey, GlyphAtlas, TextShaper};
 use unicode_linebreak::{linebreaks, BreakOpportunity};
 
@@ -51,6 +51,8 @@ pub struct ParagraphFrame {
     pub tab_interval: f32,
     /// Explicit tab stops from paragraph formatting.
     pub tab_stops: Vec<TabStop>,
+    /// Dynamic field evaluation (PAGE, DATE, …) during layout.
+    pub field_context: Option<FieldEvalContext>,
 }
 
 impl ParagraphFrame {
@@ -64,6 +66,7 @@ impl ParagraphFrame {
             tab_origin: x,
             tab_interval: DEFAULT_TAB_INTERVAL,
             tab_stops: Vec::new(),
+            field_context: None,
         }
     }
 
@@ -77,6 +80,11 @@ impl ParagraphFrame {
         self
     }
 
+    pub fn with_field_context(mut self, field_context: FieldEvalContext) -> Self {
+        self.field_context = Some(field_context);
+        self
+    }
+
     pub fn indented_in(column_x: f32, indent: f32, y: f32, column_width: f32) -> Self {
         Self {
             x: column_x + indent,
@@ -85,6 +93,7 @@ impl ParagraphFrame {
             tab_origin: column_x,
             tab_interval: DEFAULT_TAB_INTERVAL,
             tab_stops: Vec::new(),
+            field_context: None,
         }
     }
 }
@@ -103,6 +112,7 @@ pub fn layout_paragraph(
         tab_origin,
         tab_interval,
         tab_stops,
+        field_context,
     } = frame;
     let font_id = shaper.default_font();
     let mut lines = Vec::new();
@@ -118,7 +128,7 @@ pub fn layout_paragraph(
         .map(|fid| shaper.vertical_metrics(fid, size))
         .unwrap_or((size, size * 0.25, size * 0.1));
 
-    let text = para.full_text();
+    let text = paragraph_layout_text(para, frame.field_context.as_ref());
     if text.trim().is_empty() {
         lines.push(super::types::TextLine {
             y: current_y + ascent,
@@ -133,6 +143,7 @@ pub fn layout_paragraph(
             list_marker: None,
             justify_stops: Vec::new(),
             decorations: Vec::new(),
+            decorative: false,
         });
         return (lines, line_height);
     }
@@ -156,7 +167,7 @@ pub fn layout_paragraph(
             if tail.is_empty() || tail.chars().all(char::is_whitespace) {
                 continue;
             }
-            emit_line(
+            current_y += emit_line_wrapped(
                 shaper,
                 atlas,
                 atlas_ctx(
@@ -169,13 +180,15 @@ pub fn layout_paragraph(
                     tab_origin,
                     tab_interval,
                     &tab_stops,
+                    field_context,
                 ),
                 font_id,
                 default_color,
                 true,
+                max_width,
+                line_height,
                 &mut lines,
             );
-            current_y += line_height;
             line_start = byte_idx;
             last_fit = None;
             continue;
@@ -191,6 +204,7 @@ pub fn layout_paragraph(
             tab_interval,
             &tab_stops,
             font_id,
+            field_context,
         );
 
         if width <= max_width {
@@ -198,43 +212,82 @@ pub fn layout_paragraph(
             continue;
         }
 
-        let break_at = match last_fit {
-            Some(fit) if fit > line_start => fit,
-            // A single unbreakable token wider than the column: let it overflow.
-            _ => byte_idx,
-        };
-        emit_line(
-            shaper,
-            atlas,
-            atlas_ctx(
+        // Close the line at the last opportunity that fit, if there was one.
+        let mut pending_width = width;
+        if let Some(fit) = last_fit.filter(|&fit| fit > line_start) {
+            emit_line(
+                shaper,
+                atlas,
+                atlas_ctx(
+                    para,
+                    &text,
+                    line_start,
+                    fit,
+                    x,
+                    current_y + ascent,
+                    tab_origin,
+                    tab_interval,
+                    &tab_stops,
+                    field_context,
+                ),
+                font_id,
+                default_color,
+                true,
+                line_height,
+                &mut lines,
+            );
+            current_y += line_height;
+            line_start = fit;
+            pending_width = measure_range(
+                shaper,
                 para,
-                &text,
                 line_start,
-                break_at,
-                x,
-                current_y + ascent,
-                tab_origin,
+                trim_trailing(&text, line_start, byte_idx),
+                tab_origin - x,
                 tab_interval,
                 &tab_stops,
-            ),
-            font_id,
-            default_color,
-            true,
-            &mut lines,
-        );
-        current_y += line_height;
-        line_start = break_at;
-        last_fit = if break_at == byte_idx {
-            None
+                font_id,
+                field_context,
+            );
+        }
+
+        // What is left before this opportunity can still exceed the column when
+        // it holds no opportunity of its own. Closing the line at `fit` only
+        // proves the text before `fit` fit, not the token after it.
+        if pending_width > max_width {
+            current_y += emit_line_wrapped(
+                shaper,
+                atlas,
+                atlas_ctx(
+                    para,
+                    &text,
+                    line_start,
+                    byte_idx,
+                    x,
+                    current_y + ascent,
+                    tab_origin,
+                    tab_interval,
+                    &tab_stops,
+                    field_context,
+                ),
+                font_id,
+                default_color,
+                true,
+                max_width,
+                line_height,
+                &mut lines,
+            );
+            line_start = byte_idx;
+            last_fit = None;
         } else {
-            Some(byte_idx)
-        };
+            last_fit = Some(byte_idx);
+        }
     }
 
     if line_start < text.len() {
         // Keep trailing whitespace on the paragraph's last line so a typed space
         // is visible and the caret can advance before the next character.
-        emit_line(
+        current_y += emit_line_wrapped(
             shaper,
             atlas,
             atlas_ctx(
@@ -247,13 +300,15 @@ pub fn layout_paragraph(
                 tab_origin,
                 tab_interval,
                 &tab_stops,
+                field_context,
             ),
             font_id,
             default_color,
             false,
+            max_width,
+            line_height,
             &mut lines,
         );
-        current_y += line_height;
     }
 
     if lines.is_empty() {
@@ -270,13 +325,34 @@ pub fn layout_paragraph(
             list_marker: None,
             justify_stops: Vec::new(),
             decorations: Vec::new(),
+            decorative: false,
         });
         current_y += line_height;
     }
 
-    apply_alignment(&mut lines, max_width, para.format.alignment.unwrap_or(Alignment::Left));
+    apply_alignment(
+        &mut lines,
+        max_width,
+        paragraph_alignment(para),
+    );
 
     (lines, current_y - y)
+}
+
+fn paragraph_alignment(para: &Paragraph) -> Alignment {
+    if is_display_math_para(para) {
+        Alignment::Center
+    } else {
+        para.format.alignment.unwrap_or(Alignment::Left)
+    }
+}
+
+fn is_display_math_para(para: &Paragraph) -> bool {
+    para.runs.len() == 1
+        && matches!(
+            &para.runs[0].content,
+            tw_model::RunContent::OfficeMath { xml } if xml.contains("<m:oMathPara")
+        )
 }
 
 fn line_height_for(para: &Paragraph, size: f32) -> f32 {
@@ -287,6 +363,7 @@ fn line_height_for(para: &Paragraph, size: f32) -> f32 {
         Some(LineSpacing::Exactly(pt)) => pt.max(1.0),
         Some(LineSpacing::AtLeast(pt)) => single.max(pt),
         Some(LineSpacing::Single) | None => single,
+        Some(_) => single,
     }
 }
 
@@ -306,6 +383,7 @@ struct LineContext<'a> {
     tab_origin: f32,
     tab_interval: f32,
     tab_stops: &'a [TabStop],
+    field_context: Option<FieldEvalContext>,
 }
 
 fn atlas_ctx<'a>(
@@ -318,6 +396,7 @@ fn atlas_ctx<'a>(
     tab_origin: f32,
     tab_interval: f32,
     tab_stops: &'a [TabStop],
+    field_context: Option<FieldEvalContext>,
 ) -> LineContext<'a> {
     LineContext {
         para,
@@ -329,6 +408,7 @@ fn atlas_ctx<'a>(
         tab_origin,
         tab_interval,
         tab_stops,
+        field_context,
     }
 }
 
@@ -339,6 +419,9 @@ fn emit_line(
     font_id: Option<tw_shape::FontId>,
     default_color: u32,
     trim_end: bool,
+    // Paragraph line-spacing rule must win over font-metric height from
+    // `shape_line` — Exact is an absolute height.
+    line_height: f32,
     lines: &mut Vec<super::types::TextLine>,
 ) {
     let end = if trim_end && ctx.end < ctx.text.len() {
@@ -347,7 +430,7 @@ fn emit_line(
         ctx.end
     };
     let line_text = &ctx.text[ctx.start..end];
-    let (line, _) = shape_line(
+    let (mut line, _) = shape_line(
         shaper,
         atlas,
         ctx.para,
@@ -360,8 +443,162 @@ fn emit_line(
         ctx.tab_stops,
         font_id,
         default_color,
+        ctx.field_context,
     );
+    line.line_height = line_height;
     lines.push(line);
+}
+
+/// Last character boundary in `start..end` whose text still fits `max_width`.
+///
+/// Only used for a token with no break opportunity of its own, so the choice is
+/// between breaking mid-character-cluster and running past the margin. Advances
+/// by at least one character: a column narrower than a single glyph must still
+/// make progress rather than spin.
+#[allow(clippy::too_many_arguments)]
+fn break_overlong(
+    shaper: &mut TextShaper,
+    para: &Paragraph,
+    text: &str,
+    start: usize,
+    end: usize,
+    max_width: f32,
+    tab_origin_offset: f32,
+    tab_interval: f32,
+    tab_stops: &[TabStop],
+    font_id: Option<tw_shape::FontId>,
+    field_context: Option<FieldEvalContext>,
+) -> usize {
+    // Interior boundaries only: `start` would make no progress and `end` is
+    // already known not to fit.
+    let boundaries: Vec<usize> = text[start..end]
+        .char_indices()
+        .skip(1)
+        .map(|(offset, _)| start + offset)
+        .collect();
+    if boundaries.is_empty() {
+        return end;
+    }
+    // Advances are non-negative, so width grows monotonically with the boundary
+    // and the fitting boundaries form a prefix.
+    let fitting = boundaries.partition_point(|&candidate| {
+        measure_range(
+            shaper,
+            para,
+            start,
+            candidate,
+            tab_origin_offset,
+            tab_interval,
+            tab_stops,
+            font_id,
+            field_context,
+        ) <= max_width
+    });
+    if fitting == 0 {
+        boundaries[0]
+    } else {
+        boundaries[fitting - 1]
+    }
+}
+
+/// Emits `ctx.start..ctx.end`, splitting it across lines when it is wider than
+/// `max_width` and holds no break opportunity to split on — a long URL or an
+/// unspaced token. Word breaks those at the margin instead of letting them run
+/// off the page. Returns the total baseline height the emitted lines consumed.
+#[allow(clippy::too_many_arguments)]
+fn emit_line_wrapped(
+    shaper: &mut TextShaper,
+    atlas: &mut GlyphAtlas,
+    ctx: LineContext<'_>,
+    font_id: Option<tw_shape::FontId>,
+    default_color: u32,
+    trim_end: bool,
+    max_width: f32,
+    line_height: f32,
+    lines: &mut Vec<super::types::TextLine>,
+) -> f32 {
+    let mut start = ctx.start;
+    let mut baseline_y = ctx.baseline_y;
+    let mut consumed = 0.0;
+    while start < ctx.end {
+        let measured_end = trim_trailing(ctx.text, start, ctx.end);
+        let width = measure_range(
+            shaper,
+            ctx.para,
+            start,
+            measured_end,
+            ctx.tab_origin - ctx.x,
+            ctx.tab_interval,
+            ctx.tab_stops,
+            font_id,
+            ctx.field_context,
+        );
+        if width <= max_width {
+            break;
+        }
+        let break_at = break_overlong(
+            shaper,
+            ctx.para,
+            ctx.text,
+            start,
+            ctx.end,
+            max_width,
+            ctx.tab_origin - ctx.x,
+            ctx.tab_interval,
+            ctx.tab_stops,
+            font_id,
+            ctx.field_context,
+        );
+        if break_at <= start || break_at >= ctx.end {
+            break;
+        }
+        emit_line(
+            shaper,
+            atlas,
+            atlas_ctx(
+                ctx.para,
+                ctx.text,
+                start,
+                break_at,
+                ctx.x,
+                baseline_y,
+                ctx.tab_origin,
+                ctx.tab_interval,
+                ctx.tab_stops,
+                ctx.field_context,
+            ),
+            font_id,
+            default_color,
+            true,
+            line_height,
+            lines,
+        );
+        baseline_y += line_height;
+        consumed += line_height;
+        start = break_at;
+    }
+    emit_line(
+        shaper,
+        atlas,
+        atlas_ctx(
+            ctx.para,
+            ctx.text,
+            start,
+            ctx.end,
+            ctx.x,
+            baseline_y,
+            ctx.tab_origin,
+            ctx.tab_interval,
+            ctx.tab_stops,
+            ctx.field_context,
+        ),
+        font_id,
+        default_color,
+        trim_end,
+        line_height,
+        lines,
+    );
+    consumed + line_height
 }
 
 /// The face a run asks for: its family at its weight and slant, falling back to
@@ -391,6 +628,7 @@ fn measure_range(
     tab_interval: f32,
     tab_stops: &[TabStop],
     font_id: Option<tw_shape::FontId>,
+    field_context: Option<FieldEvalContext>,
 ) -> f32 {
     let Some(fid) = font_id.or_else(|| shaper.default_font()) else {
         return 0.0;
@@ -398,16 +636,27 @@ fn measure_range(
     // Widths are relative to the line origin, so the tab grid resolves against
     // the column origin expressed in the same space.
     let mut width = 0.0;
-    for (segment_text, run, _) in run_segments_for_range(para, start_byte, end_byte) {
-        if segment_text.is_empty() {
+    for (segment_text, run, _) in run_segments_for_range(para, start_byte, end_byte, field_context) {
+        let is_office_math = matches!(&run.content, tw_model::RunContent::OfficeMath { .. });
+        if segment_text.is_empty() && !is_office_math {
             continue;
         }
         let base_size = run.format.font_size.unwrap_or(12.0);
         let (size_scale, _) = script_scale(&run.format);
-        let size = base_size * size_scale;
+        let mut size = base_size * size_scale;
+        if is_office_math {
+            size *= tw_model::MATH_PREVIEW_SCALE;
+        }
+        if is_office_math && segment_text.is_empty() {
+            width += 18.0;
+            continue;
+        }
         let run_font = font_for(shaper, &run.format, fid);
         let mut shape_format = run.format.clone();
         shape_format.font_size = Some(size);
+        if is_office_math {
+            shape_format.italic = Some(true);
+        }
         for (piece_index, piece) in segment_text.split('\t').enumerate() {
             if piece_index > 0 {
                 width = next_tab_stop(width, tab_origin_offset, tab_interval, tab_stops);
@@ -457,6 +706,7 @@ pub fn apply_list_markers(
         &[],
         font_id,
         marker_color,
+        None,
     );
     lines[0].glyphs.append(&mut marker_line.glyphs);
     lines[0].list_marker = Some(marker.to_string());
@@ -473,6 +723,36 @@ fn script_scale(format: &tw_model::CharFormat) -> (f32, f32) {
     }
 }
 
+/// A line with no glyphs, used when no face is available to shape with.
+fn blank_line(
+    para: &Paragraph,
+    x: f32,
+    baseline_y: f32,
+    size: f32,
+) -> super::types::TextLine {
+    let ascent = size;
+    let descent = size * 0.25;
+    super::types::TextLine {
+        y: baseline_y,
+        x,
+        width: 0.0,
+        ascent,
+        descent,
+        line_height: (ascent + descent).max(size * 1.2),
+        glyphs: Vec::new(),
+        paragraph_id: para.id,
+        run_map: para
+            .runs
+            .first()
+            .map(|run| vec![(x, x, run.id, 0)])
+            .unwrap_or_default(),
+        list_marker: None,
+        justify_stops: Vec::new(),
+        decorations: Vec::new(),
+        decorative: false,
+    }
+}
+
 fn shape_line(
     shaper: &mut TextShaper,
     atlas: &mut GlyphAtlas,
@@ -486,15 +766,20 @@ fn shape_line(
     tab_stops: &[TabStop],
     font_id: Option<tw_shape::FontId>,
     default_color: u32,
+    field_context: Option<FieldEvalContext>,
 ) -> (super::types::TextLine, f32) {
-    let fid = font_id.or_else(|| shaper.default_font()).unwrap();
+    let default_size = para.runs.first().and_then(|r| r.format.font_size).unwrap_or(12.0);
+    let Some(fid) = font_id.or_else(|| shaper.default_font()) else {
+        // No face at all — a host that has registered no fonts yet. The document
+        // still paginates against nominal metrics; it just has nothing to draw.
+        return (blank_line(para, x, baseline_y, default_size), 0.0);
+    };
     let mut cursor_x = x;
     let mut glyphs = Vec::new();
     let mut run_map = Vec::new();
     let line_end_byte = line_start_byte + line_text.len();
 
-    let segments = run_segments_for_range(para, line_start_byte, line_end_byte);
-    let default_size = para.runs.first().and_then(|r| r.format.font_size).unwrap_or(12.0);
+    let segments = run_segments_for_range(para, line_start_byte, line_end_byte, field_context);
     let mut line_ascent = 0.0f32;
     let mut line_descent = 0.0f32;
     let mut line_gap = 0.0f32;
@@ -502,12 +787,16 @@ fn shape_line(
     let mut decorations = Vec::new();
 
     for (segment_text, run, char_offset) in segments {
-        if segment_text.is_empty() {
+        let is_office_math = matches!(&run.content, tw_model::RunContent::OfficeMath { .. });
+        if segment_text.is_empty() && !is_office_math {
             continue;
         }
         let base_size = run.format.font_size.unwrap_or(default_size);
         let (size_scale, baseline_frac) = script_scale(&run.format);
-        let size = base_size * size_scale;
+        let mut size = base_size * size_scale;
+        if is_office_math {
+            size *= tw_model::MATH_PREVIEW_SCALE;
+        }
         let baseline_shift = baseline_frac * base_size;
         let run_font = font_for(shaper, &run.format, fid);
         let (run_ascent, run_descent, run_gap) = shaper.vertical_metrics(run_font, size);
@@ -528,6 +817,10 @@ fn shape_line(
         }
         let seg_start_x = cursor_x;
 
+        if is_office_math && segment_text.is_empty() {
+            cursor_x += 18.0;
+        }
+
         // Tabs jump to the next stop rather than being shaped, which would
         // render them as `.notdef` boxes.
         for (piece_index, piece) in segment_text.split('\t').enumerate() {
@@ -541,6 +834,9 @@ fn shape_line(
             let piece_chars: Vec<char> = piece.chars().collect();
             let mut shape_format = run.format.clone();
             shape_format.font_size = Some(size);
+            if is_office_math {
+                shape_format.italic = Some(true);
+            }
             let shaped = shaper.shape(piece, &shape_format, run_font);
             for g in &shaped.glyphs {
                 let codepoint = piece_chars
@@ -582,6 +878,9 @@ fn shape_line(
                     });
                 }
                 cursor_x += g.x_advance;
+                if let Some(spacing) = run.format.character_spacing {
+                    cursor_x += spacing;
+                }
                 if codepoint == ' ' {
                     justify_stops.push(cursor_x);
                 }
@@ -589,6 +888,17 @@ fn shape_line(
         }
 
         let seg_end_x = cursor_x;
+        if is_office_math && seg_end_x > seg_start_x {
+            let pad = 2.0;
+            decorations.push(super::types::TextDecoration {
+                x: seg_start_x - pad,
+                y: baseline_y - line_ascent - pad,
+                width: seg_end_x - seg_start_x + pad * 2.0,
+                height: line_ascent + line_descent + pad * 2.0,
+                color: tw_model::MATH_FRAME_ARGB,
+                kind: super::types::DecorationKind::MathFrame,
+            });
+        }
         if run.format.highlight.is_some() {
             decorations.push(super::types::TextDecoration {
                 x: seg_start_x,
@@ -599,15 +909,41 @@ fn shape_line(
                 kind: super::types::DecorationKind::Highlight,
             });
         }
-        if run.format.underline.is_some_and(|u| u != tw_model::UnderlineStyle::None) {
-            decorations.push(super::types::TextDecoration {
-                x: seg_start_x,
-                y: baseline_y + (line_descent * 0.25),
-                width: seg_end_x - seg_start_x,
-                height: (size * 0.05).max(1.0),
-                color,
-                kind: super::types::DecorationKind::Underline,
-            });
+        if let Some(style) = run.format.underline {
+            if style != tw_model::UnderlineStyle::None {
+                let thickness = (size * 0.05).max(1.0);
+                let base_y = baseline_y + (line_descent * 0.25);
+                match style {
+                    tw_model::UnderlineStyle::Double => {
+                        decorations.push(super::types::TextDecoration {
+                            x: seg_start_x,
+                            y: base_y,
+                            width: seg_end_x - seg_start_x,
+                            height: thickness,
+                            color,
+                            kind: super::types::DecorationKind::DoubleUnderline,
+                        });
+                        decorations.push(super::types::TextDecoration {
+                            x: seg_start_x,
+                            y: base_y + thickness + 1.0,
+                            width: seg_end_x - seg_start_x,
+                            height: thickness,
+                            color,
+                            kind: super::types::DecorationKind::DoubleUnderline,
+                        });
+                    }
+                    _ => {
+                        decorations.push(super::types::TextDecoration {
+                            x: seg_start_x,
+                            y: base_y,
+                            width: seg_end_x - seg_start_x,
+                            height: thickness,
+                            color,
+                            kind: super::types::DecorationKind::Underline,
+                        });
+                    }
+                }
+            }
         }
         if run.format.strikethrough == Some(true) || is_deleted {
             decorations.push(super::types::TextDecoration {
@@ -640,6 +976,7 @@ fn shape_line(
         list_marker: None,
         justify_stops,
         decorations,
+        decorative: false,
     };
     (line, width)
 }
@@ -648,17 +985,21 @@ fn run_segments_for_range(
     para: &Paragraph,
     start_byte: usize,
     end_byte: usize,
+    field_context: Option<FieldEvalContext>,
 ) -> Vec<(String, tw_model::Run, usize)> {
     let mut segments = Vec::new();
     let mut byte_cursor = 0usize;
 
     for run in &para.runs {
-        let run_text = run.text();
+        let run_text = run_layout_text(run, field_context.as_ref());
         let run_start = byte_cursor;
         let run_end = byte_cursor + run_text.len();
         byte_cursor = run_end;
 
         if run_end <= start_byte || run_start >= end_byte {
+            continue;
+        }
+        if run.format.hidden == Some(true) {
             continue;
         }
 
@@ -698,6 +1039,7 @@ fn apply_alignment(lines: &mut [super::types::TextLine], max_width: f32, alignme
                 0.0
             }
             Alignment::Justify => 0.0,
+            _ => 0.0,
         };
         if offset.abs() < f32::EPSILON {
             continue;

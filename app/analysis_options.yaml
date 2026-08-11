@@ -9,6 +9,17 @@
 # packages, and plugins designed to encourage good coding practices.
 include: package:flutter_lints/flutter.yaml
 
+analyzer:
+  exclude:
+    - lib/bridge/wasm_interop_web.dart
+    - lib/bridge/wasm_engine_web.dart
+    - lib/bridge/document_engine_web.dart
+    - lib/bridge/engine_bootstrap_web.dart
+    - lib/bridge/wasm_engine_bootstrap_web.dart
+    - lib/bridge/web_font_bootstrap.dart
+    - lib/bridge/file_bytes_web.dart
+    - lib/bridge/document_session_store_web.dart
+
 linter:
   # The lint rules applied to this project can be customized in the
   # section below to disable rules from the `package:flutter_lints/flutter.yaml`

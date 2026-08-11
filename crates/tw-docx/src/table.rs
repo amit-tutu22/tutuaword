@@ -1,12 +1,15 @@
+use std::collections::HashMap;
+
 use tw_model::{
-    Block, BorderSpec, Color, Document, ImageBlock, Paragraph, Table, TableCell, TableRow,
-    VerticalAlign, NodeId, TableFormat,
+    Block, BorderSpec, Color, Document, ImageBlock, ImageData, Paragraph, Table, TableCell,
+    TableRow, VerticalAlign, NodeId, TableFormat,
 };
 
 use crate::paragraph::parse_paragraph;
 use crate::xml_util::{
-    read_attr_value, read_int_attr, split_elements, twips_to_points,
+    read_attr_value, read_int_attr, read_own_attr, split_elements, twips_to_points,
 };
+use crate::DocxPackage;
 
 const FALLBACK_COLUMN_WIDTH: f32 = 100.0;
 
@@ -319,7 +322,350 @@ pub fn parse_image_block(para_xml: &str, media: &dyn MediaResolver) -> Option<Im
     if block.anchor.is_some() {
         block.wrap = tw_model::TextWrap::Behind;
     }
+    // Word stores alt text on wp:docPr/@descr (preferred) or pic:cNvPr/@descr.
+    block.alt_text = read_attr_value(para_xml, "wp:docPr", "descr")
+        .or_else(|| read_attr_value(para_xml, "pic:cNvPr", "descr"))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     Some(block)
+}
+
+/// Inline image inside a run (`w:r` / `w:drawing`).
+pub fn parse_inline_image(run_xml: &str, media: &dyn MediaResolver) -> Option<tw_model::InlineImageRef> {
+    let rel_id = picture_relationship_id(run_xml)?;
+    let width = read_attr_value(run_xml, "wp:extent", "cx")
+        .and_then(|v| v.parse::<f32>().ok())
+        .map(|emu| emu / EMU_PER_POINT)
+        .unwrap_or(48.0);
+    let height = read_attr_value(run_xml, "wp:extent", "cy")
+        .and_then(|v| v.parse::<f32>().ok())
+        .map(|emu| emu / EMU_PER_POINT)
+        .unwrap_or(48.0);
+    let image = media.resolve(&rel_id).unwrap_or_else(|| tw_model::ImageData {
+        asset_id: rel_id.clone(),
+        mime_type: "image/png".into(),
+        width_px: width as u32,
+        height_px: height as u32,
+        bytes: Vec::new(),
+    });
+    Some(tw_model::InlineImageRef {
+        image,
+        display_width: width,
+        display_height: height,
+    })
+}
+
+/// Block-level shape when drawing is not an image blip.
+pub fn parse_shape_block(
+    para_xml: &str,
+    media: &dyn MediaResolver,
+    package: &DocxPackage,
+) -> Option<tw_model::ShapeBlock> {
+    if !para_xml.contains("<w:drawing") && !para_xml.contains("<w:pict") {
+        return None;
+    }
+    if picture_relationship_id(para_xml).is_some() {
+        return None;
+    }
+    let width = read_attr_value(para_xml, "wp:extent", "cx")
+        .and_then(|v| v.parse::<f32>().ok())
+        .map(|emu| emu / EMU_PER_POINT)
+        .unwrap_or(100.0);
+    let height = read_attr_value(para_xml, "wp:extent", "cy")
+        .and_then(|v| v.parse::<f32>().ok())
+        .map(|emu| emu / EMU_PER_POINT)
+        .unwrap_or(50.0);
+    let shape_type = if para_xml.contains("drawingml/2006/chart")
+        || para_xml.contains("<c:chart")
+        || para_xml.contains("c:chart ")
+    {
+        tw_model::ShapeKind::Chart
+    } else if para_xml.contains("drawingml/2006/diagram")
+        || para_xml.contains("<dgm:relIds")
+        || para_xml.contains("dgm:relIds")
+    {
+        tw_model::ShapeKind::Diagram
+    } else if para_xml.contains("wps:wsp") || para_xml.contains("wordprocessingShape") {
+        tw_model::ShapeKind::TextBox
+    } else if para_xml.contains("prst=\"ellipse\"") {
+        tw_model::ShapeKind::Ellipse
+    } else if para_xml.contains("<v:line") || para_xml.contains("prst=\"line\"") {
+        tw_model::ShapeKind::Line
+    } else if para_xml.contains("<v:rect") {
+        tw_model::ShapeKind::Rectangle
+    } else {
+        tw_model::ShapeKind::Rectangle
+    };
+    let preview_image = match shape_type {
+        tw_model::ShapeKind::Diagram => resolve_diagram_preview(para_xml, media, package),
+        tw_model::ShapeKind::Chart => resolve_chart_preview(para_xml, media, package),
+        _ => None,
+    };
+    let (chart_part, chart_data) = if shape_type == tw_model::ShapeKind::Chart {
+        let part = crate::chart::resolve_chart_part_path(para_xml, package);
+        let data = part
+            .as_ref()
+            .and_then(|path| package.parts.get(path))
+            .and_then(|bytes| crate::chart::parse_chart_data(&String::from_utf8_lossy(bytes)));
+        (part, data)
+    } else {
+        (None, None)
+    };
+    let (diagram_data_part, diagram_layout_part) = if shape_type == tw_model::ShapeKind::Diagram {
+        let data = crate::diagram::resolve_diagram_data_part(para_xml, package);
+        let layout = crate::diagram::resolve_diagram_layout_part(para_xml, package);
+        (data, layout)
+    } else {
+        (None, None)
+    };
+    Some(tw_model::ShapeBlock {
+        id: NodeId::new(),
+        shape: tw_model::ShapeData {
+            shape_type,
+            width,
+            height,
+        },
+        wrap: tw_model::TextWrap::Square,
+        style: tw_model::ShapeStyle::placeholder(),
+        paragraphs: extract_shape_paragraphs(para_xml),
+        preview_image,
+        chart_data,
+        chart_part,
+        diagram_kind: Default::default(),
+        diagram_data_part,
+        diagram_layout_part,
+    })
+}
+
+fn extract_shape_paragraphs(para_xml: &str) -> Vec<tw_model::Paragraph> {
+    let text = crate::xml_util::extract_plain_text(para_xml);
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    vec![tw_model::Paragraph::with_text(trimmed)]
+}
+
+/// Resolve a PNG/JPEG/EMF preview linked from a SmartArt diagram (F12.S2).
+fn resolve_diagram_preview(
+    para_xml: &str,
+    media: &dyn MediaResolver,
+    package: &DocxPackage,
+) -> Option<ImageData> {
+    if let Some(rel_id) = picture_relationship_id(para_xml) {
+        if let Some(image) = media.resolve(&rel_id).filter(|img| !img.bytes.is_empty()) {
+            return Some(image);
+        }
+    }
+
+    let drawing_rel = read_attr_value(para_xml, "dgm:relIds", "r:dr")?;
+    let doc_rels = package
+        .parts
+        .get("word/_rels/document.xml.rels")
+        .map(|bytes| parse_relationships(&String::from_utf8_lossy(bytes)))
+        .unwrap_or_default();
+    let drawing_target = doc_rels.get(&drawing_rel)?;
+    let drawing_part = normalize_part_path("word", drawing_target);
+    let drawing_xml = package.parts.get(&drawing_part)?;
+    let drawing_text = String::from_utf8_lossy(drawing_xml);
+    let blip_rel = picture_relationship_id(&drawing_text)?;
+
+    let rels_part = part_rels_part_name(&drawing_part);
+    resolve_part_image(package, &rels_part, &blip_rel)
+        .or_else(|| media.resolve(&blip_rel))
+}
+
+/// Resolve a PNG/JPEG/EMF preview linked from a chart (F13.S2).
+fn resolve_chart_preview(
+    para_xml: &str,
+    media: &dyn MediaResolver,
+    package: &DocxPackage,
+) -> Option<ImageData> {
+    if let Some(rel_id) = picture_relationship_id(para_xml) {
+        if let Some(image) = media.resolve(&rel_id).filter(|img| !img.bytes.is_empty()) {
+            return Some(image);
+        }
+    }
+
+    let chart_rel = read_attr_value(para_xml, "c:chart", "r:id")?;
+    let doc_rels = package
+        .parts
+        .get("word/_rels/document.xml.rels")
+        .map(|bytes| parse_relationships(&String::from_utf8_lossy(bytes)))
+        .unwrap_or_default();
+    let chart_target = doc_rels.get(&chart_rel)?;
+    let chart_part = normalize_part_path("word", chart_target);
+    let chart_xml = package.parts.get(&chart_part)?;
+    let chart_text = String::from_utf8_lossy(chart_xml);
+    let chart_rels_part = part_rels_part_name(&chart_part);
+
+    if let Some(blip_rel) = picture_relationship_id(&chart_text) {
+        if let Some(image) = resolve_part_image(package, &chart_rels_part, &blip_rel) {
+            return Some(image);
+        }
+        if let Some(image) = media.resolve(&blip_rel).filter(|img| !img.bytes.is_empty()) {
+            return Some(image);
+        }
+    }
+
+    if let Some(user_shapes_rel) = read_attr_value(&chart_text, "c:userShapes", "r:id") {
+        if let Some(image) =
+            resolve_drawing_preview_from_rels(package, &chart_rels_part, &user_shapes_rel)
+        {
+            return Some(image);
+        }
+    }
+
+    resolve_first_media_in_rels(package, &chart_rels_part, chart_part.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("word"))
+}
+
+fn part_rels_part_name(part: &str) -> String {
+    // word/charts/chart1.xml -> word/charts/_rels/chart1.xml.rels
+    if let Some((dir, file)) = part.rsplit_once('/') {
+        format!("{dir}/_rels/{file}.rels")
+    } else {
+        format!("_rels/{part}.rels")
+    }
+}
+
+fn resolve_drawing_preview_from_rels(
+    package: &DocxPackage,
+    rels_part: &str,
+    relationship_id: &str,
+) -> Option<ImageData> {
+    let rels_bytes = package.parts.get(rels_part)?;
+    let rels = parse_relationships(&String::from_utf8_lossy(rels_bytes));
+    let target = rels.get(relationship_id)?;
+    let part_dir = rels_part
+        .rsplit_once("/_rels/")
+        .map(|(dir, _)| dir)
+        .unwrap_or("word");
+    let drawing_part = normalize_part_path(part_dir, target);
+    let drawing_xml = package.parts.get(&drawing_part)?;
+    let drawing_text = String::from_utf8_lossy(drawing_xml);
+    let blip_rel = picture_relationship_id(&drawing_text)?;
+    let drawing_rels = part_rels_part_name(&drawing_part);
+    resolve_part_image(package, &drawing_rels, &blip_rel)
+}
+
+fn resolve_first_media_in_rels(
+    package: &DocxPackage,
+    rels_part: &str,
+    part_dir: &str,
+) -> Option<ImageData> {
+    let rels_bytes = package.parts.get(rels_part)?;
+    let rels_text = String::from_utf8_lossy(rels_bytes);
+    for element in crate::xml_util::split_elements(&rels_text, "Relationship") {
+        let Some(target) = crate::xml_util::read_own_attr(element, "Target") else {
+            continue;
+        };
+        if !is_media_relationship_target(target) {
+            continue;
+        }
+        let media_part = normalize_part_path(part_dir, target);
+        let bytes = package.parts.get(&media_part)?;
+        if bytes.is_empty() {
+            continue;
+        }
+        return Some(ImageData {
+            asset_id: media_part.clone(),
+            mime_type: mime_for_part(&media_part).to_string(),
+            width_px: 0,
+            height_px: 0,
+            bytes: bytes.clone(),
+        });
+    }
+    None
+}
+
+fn is_media_relationship_target(target: &str) -> bool {
+    target.contains("media/")
+        || target.ends_with(".png")
+        || target.ends_with(".jpg")
+        || target.ends_with(".jpeg")
+        || target.ends_with(".gif")
+        || target.ends_with(".bmp")
+        || target.ends_with(".webp")
+        || target.ends_with(".tif")
+        || target.ends_with(".tiff")
+        || target.ends_with(".emf")
+        || target.ends_with(".wmf")
+}
+
+fn normalize_part_path(base: &str, target: &str) -> String {
+    let mut path = base.to_string();
+    for segment in target.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                if let Some(idx) = path.rfind('/') {
+                    path.truncate(idx);
+                }
+            }
+            part => {
+                if !path.is_empty() {
+                    path.push('/');
+                }
+                path.push_str(part);
+            }
+        }
+    }
+    path
+}
+
+fn resolve_part_image(
+    package: &DocxPackage,
+    rels_part: &str,
+    relationship_id: &str,
+) -> Option<ImageData> {
+    let rels_bytes = package.parts.get(rels_part)?;
+    let rels = parse_relationships(&String::from_utf8_lossy(rels_bytes));
+    let target = rels.get(relationship_id)?;
+    let part_dir = rels_part
+        .rsplit_once("/_rels/")
+        .map(|(dir, _)| dir)
+        .unwrap_or("word");
+    let media_part = normalize_part_path(part_dir, target);
+    let bytes = package.parts.get(&media_part)?;
+    if bytes.is_empty() {
+        return None;
+    }
+    Some(ImageData {
+        asset_id: media_part.clone(),
+        mime_type: mime_for_part(&media_part).to_string(),
+        width_px: 0,
+        height_px: 0,
+        bytes: bytes.clone(),
+    })
+}
+
+fn parse_relationships(xml: &str) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for element in split_elements(xml, "Relationship") {
+        let (Some(id), Some(target)) = (
+            read_own_attr(element, "Id"),
+            read_own_attr(element, "Target"),
+        ) else {
+            continue;
+        };
+        map.insert(id.to_string(), target.to_string());
+    }
+    map
+}
+
+fn mime_for_part(part_name: &str) -> &'static str {
+    match part_name.rsplit('.').next().map(str::to_ascii_lowercase).as_deref() {
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("bmp") => "image/bmp",
+        Some("webp") => "image/webp",
+        Some("tif") | Some("tiff") => "image/tiff",
+        Some("emf") => "image/x-emf",
+        Some("wmf") => "image/x-wmf",
+        Some("svg") => "image/svg+xml",
+        _ => "application/octet-stream",
+    }
 }
 
 /// Finds the relationship id of the image a drawing displays, if it displays

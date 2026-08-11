@@ -1,6 +1,6 @@
 # Document Model
 
-> **Implementation status:** The tree below includes types not yet built in code (`Comment`, `Bookmark`, `RunContent::Field`, `Block::ShapeBlock`, typed header/footer maps). See [Long-Tail Gaps](../long-tail-gaps.md) §4 for current vs planned model.
+> **Implementation status:** R2.1 (2026-08-06) added `RunContent` variants (`Hyperlink`, `Field`, `InlineImage`, `FootnoteRef`, `CommentRef`, `Bookmark`), `Block::ShapeBlock`, typed `Section.headers`/`Section.footers` maps, and `#[non_exhaustive]` on public enums. Placeholder layout/render is OK; full fidelity deferred to R3.3. See [Long-Tail Gaps](../long-tail-gaps.md) §4 for comment threads and edit commands still deferred.
 
 The document model (`tw-model`) is the single source of truth for all document content and structure. Every other subsystem reads from it; only `tw-edit` mutates it.
 

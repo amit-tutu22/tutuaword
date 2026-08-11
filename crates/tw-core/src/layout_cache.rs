@@ -1,17 +1,19 @@
 use parking_lot::RwLock;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tw_edit::{DocPosition, DocRange};
+use tw_edit::{run_char_len_by_id, text_in_range, DocPosition, DocRange};
 use tw_layout::{HitTestResult, LayoutEngine, LineMap};
 use tw_model::{CharFormat, Document, NodeId, ParaFormat};
-use tw_text::TextBuffer;
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct LayoutCache {
     line_maps: HashMap<u32, LineMap>,
+    page_epochs: HashMap<u32, u64>,
+    pending_pages: HashSet<u32>,
+    layout_epoch: u64,
     page_count: u32,
-    document: Document,
-    buffer: TextBuffer,
+    document: Arc<Document>,
+    document_version: u64,
 }
 
 impl LayoutCache {
@@ -25,15 +27,81 @@ impl LayoutCache {
         }
     }
 
-    pub fn update_from_session(
+    pub fn update_from_session(&mut self, engine: &LayoutEngine, document: Arc<Document>) {
+        self.layout_epoch += 1;
+        self.document_version = self.layout_epoch;
+        self.update_from_engine(engine);
+        self.page_epochs.clear();
+        self.pending_pages.clear();
+        for page in 0..self.page_count {
+            self.page_epochs.insert(page, self.layout_epoch);
+        }
+        self.document = document;
+    }
+
+    /// Incremental layout update: refresh relayouted pages and record whether the
+    /// engine still owes a forward reflow for the pages after them.
+    pub fn update_from_session_incremental(
         &mut self,
         engine: &LayoutEngine,
-        document: &Document,
-        buffer: &TextBuffer,
+        document: Arc<Document>,
+        epoch: u64,
+        page_count: u32,
+        pending_forward_reflow: bool,
     ) {
-        self.update_from_engine(engine);
-        self.document = document.clone();
-        self.buffer = buffer.clone();
+        self.layout_epoch = epoch;
+        self.document_version = epoch;
+        self.page_count = page_count.max(1);
+        self.document = document;
+
+        self.line_maps.retain(|page, _| *page < page_count);
+        self.page_epochs.retain(|page, _| *page < page_count);
+
+        let mut relayout_end = engine.last_relayout_start_page() as u32;
+        for &page in engine.dirty_pages() {
+            if page >= page_count {
+                continue;
+            }
+            if let Some(map) = engine.line_map(page) {
+                self.line_maps.insert(page, map.clone());
+                self.page_epochs.insert(page, epoch);
+            }
+            relayout_end = relayout_end.max(page + 1);
+        }
+
+        // Pages past the reflow window still carry pre-edit geometry until the
+        // background pass reaches them; hit testing must not trust them. The floor
+        // comes from the engine rather than this pass's `relayout_end`: a converged
+        // pass rebuilds only a short prefix but does not re-invalidate the pages an
+        // earlier capped pass already brought up to date.
+        self.pending_pages.clear();
+        if pending_forward_reflow {
+            let stale_from = engine
+                .pending_reflow_page()
+                .map_or(relayout_end, |page| page as u32);
+            self.pending_pages.extend(stale_from..page_count);
+        }
+    }
+
+    pub fn document(&self) -> &Document {
+        &self.document
+    }
+
+    /// Cheap Arc handoff for read-only snapshot consumers.
+    pub fn document_snapshot(&self) -> Arc<Document> {
+        Arc::clone(&self.document)
+    }
+
+    pub fn document_version(&self) -> u64 {
+        self.document_version
+    }
+
+    pub fn is_page_stale(&self, page: u32) -> bool {
+        self.pending_pages.contains(&page)
+    }
+
+    pub fn page_epoch(&self, page: u32) -> Option<u64> {
+        self.page_epochs.get(&page).copied()
     }
 
     pub fn text_in_range(
@@ -53,15 +121,14 @@ impl LayoutCache {
                 char_offset: end_offset,
             },
         };
-        tw_edit::text_in_range(&self.document, &self.buffer, &range).ok()
+        text_in_range(&self.document, &range).ok()
     }
 
     /// Resolved character and paragraph format at a caret position.
     pub fn format_at(&self, run_id: NodeId) -> Option<(CharFormat, ParaFormat, Option<String>)> {
-        let (si, bi, ri) = self.document.find_run_location(run_id)?;
-        let block = self.document.sections.get(si)?.blocks.get(bi)?;
-        let para = block.paragraph()?;
-        let run = para.runs.get(ri)?;
+        let loc = self.document.find_run_location(run_id)?;
+        let para = self.document.paragraph_at_loc(loc)?;
+        let run = para.runs.get(loc.run_index)?;
         let char_format = self
             .document
             .styles
@@ -80,44 +147,107 @@ impl LayoutCache {
         Some((char_format, para_format, style_name))
     }
 
+    pub fn page_for_paragraph(&self, paragraph_id: NodeId) -> u32 {
+        for page in 0..self.page_count {
+            if let Some(map) = self.line_maps.get(&page) {
+                if map
+                    .lines
+                    .iter()
+                    .any(|line| line.paragraph_id == paragraph_id)
+                {
+                    return page;
+                }
+            }
+        }
+        0
+    }
+
+    pub fn document_outline_with_pages(&self) -> Vec<(tw_model::OutlineEntry, u32)> {
+        tw_model::document_outline(&self.document)
+            .into_iter()
+            .map(|entry| {
+                let page = self.page_for_paragraph(entry.paragraph_id);
+                (entry, page)
+            })
+            .collect()
+    }
+
+    pub fn document_captions_with_pages(&self) -> Vec<(tw_model::CaptionEntry, u32)> {
+        tw_model::document_captions(&self.document)
+            .into_iter()
+            .map(|entry| {
+                let page = self.page_for_paragraph(entry.paragraph_id);
+                (entry, page)
+            })
+            .collect()
+    }
+
+    pub fn bookmarks_with_pages(&self) -> Vec<(tw_model::BookmarkNavEntry, u32)> {
+        tw_model::document_bookmarks(&self.document)
+            .into_iter()
+            .map(|entry| {
+                let page = self.page_for_paragraph(entry.paragraph_id);
+                (entry, page)
+            })
+            .collect()
+    }
+
     pub fn hit_test(&self, page: u32, x: f32, y: f32) -> Option<HitTestResult> {
+        if self.is_page_stale(page) {
+            return None;
+        }
         if let Some(map) = self.line_maps.get(&page) {
             if let Some(mut result) = map.hit_test(x, y) {
                 result.page = page;
                 return Some(result);
             }
             if map.lines.is_empty() {
-                return self.document_tail_hit(page);
+                return self.empty_page_tail_hit(page);
             }
         }
         None
+    }
+
+    /// Last editable position in the document (for select-all / paste-at-end).
+    pub fn document_tail_hit(&self, page: u32) -> Option<HitTestResult> {
+        let run_id = last_text_run(&self.document)?;
+        let char_offset = run_char_len_by_id(&self.document, run_id);
+        Some(HitTestResult {
+            page,
+            run_id,
+            char_offset,
+        })
     }
 
     /// When a page has no laid-out lines, anchor at the end of the document so
     /// the user can keep typing; the requested page is recorded for caret display.
-    fn document_tail_hit(&self, page: u32) -> Option<HitTestResult> {
-        for p in (0..self.page_count).rev() {
-            let Some(map) = self.line_maps.get(&p) else {
-                continue;
-            };
-            if let Some(hit) = map.tail_hit(page) {
-                return Some(hit);
-            }
-        }
-        None
+    fn empty_page_tail_hit(&self, page: u32) -> Option<HitTestResult> {
+        self.document_tail_hit(page)
     }
 
     pub fn caret_geometry(&self, page: u32, x: f32, y: f32) -> Option<(f32, f32, f32)> {
         let map = self.line_maps.get(&page)?;
-        for line in &map.lines {
-            if y >= line.y - line.ascent && y <= line.y + line.descent {
-                for &(x_start, x_end, _, _) in &line.run_map {
-                    if x >= x_start && x <= x_end {
-                        return Some((x, line.y, line.ascent + line.descent));
-                    }
+        // Mirror LineMap::hit_test: consider every Y-matching line before falling
+        // back, so table cells that share a baseline resolve to the right column.
+        let y_matches: Vec<_> = map
+            .lines
+            .iter()
+            .filter(|line| y >= line.y - line.ascent && y <= line.y + line.descent)
+            .collect();
+        for line in &y_matches {
+            for &(x_start, x_end, _, _) in &line.run_map {
+                let end = if x_end <= x_start {
+                    x_start + 4.0
+                } else {
+                    x_end
+                };
+                if x >= x_start && x <= end {
+                    return Some((x, line.y, line.ascent + line.descent));
                 }
-                return Some((line.x, line.y, line.ascent + line.descent));
             }
+        }
+        if let Some(line) = pick_line_for_x_cache(&y_matches, x) {
+            return Some((line.x, line.y, line.ascent + line.descent));
         }
         map.lines.first().map(|line| (line.x, line.y, line.ascent + line.descent))
     }
@@ -162,6 +292,65 @@ impl LayoutCache {
     pub fn page_count(&self) -> u32 {
         self.page_count.max(1)
     }
+
+    /// Width of the first laid-out line on a page, if layout has run.
+    pub fn first_line_width(&self, page: u32) -> f32 {
+        self.line_maps
+            .get(&page)
+            .and_then(|map| map.lines.first())
+            .map(|line| line.width)
+            .unwrap_or(0.0)
+    }
+}
+
+impl Default for LayoutCache {
+    fn default() -> Self {
+        Self {
+            line_maps: HashMap::new(),
+            page_epochs: HashMap::new(),
+            pending_pages: HashSet::new(),
+            layout_epoch: 0,
+            page_count: 0,
+            document: Arc::new(Document::default()),
+            document_version: 0,
+        }
+    }
+}
+
+fn last_text_run(doc: &Document) -> Option<NodeId> {
+    for section in doc.sections.iter().rev() {
+        for block in section.blocks.iter().rev() {
+            let para = block.paragraph()?;
+            let run = para.runs.last()?;
+            return Some(run.id);
+        }
+    }
+    None
+}
+
+/// Same ownership rule as `tw_layout::LineMap` blank-area hit testing.
+fn pick_line_for_x_cache<'a>(
+    lines: &[&'a tw_layout::TextLine],
+    x: f32,
+) -> Option<&'a tw_layout::TextLine> {
+    if lines.is_empty() {
+        return None;
+    }
+    if lines.len() == 1 {
+        return Some(lines[0]);
+    }
+    let mut best: Option<&tw_layout::TextLine> = None;
+    for line in lines {
+        if line.x <= x + 0.5 {
+            best = Some(*line);
+        }
+    }
+    best.or_else(|| {
+        lines
+            .iter()
+            .min_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal))
+            .copied()
+    })
 }
 
 pub type SharedLayoutCache = Arc<RwLock<LayoutCache>>;

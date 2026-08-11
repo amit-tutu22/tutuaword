@@ -1,0 +1,285 @@
+use chrono::{DateTime, Datelike, Timelike, Utc};
+
+use crate::nodes::{Run, RunContent};
+use crate::vocabulary::{
+    form_checkbox_display, merge_field_placeholder, FieldData, FieldType, FormFieldMeta,
+};
+
+/// Layout-time context for evaluating dynamic field runs.
+#[derive(Debug, Clone, Copy)]
+pub struct FieldEvalContext {
+    /// One-based page number for the band being laid out.
+    pub page_number: u32,
+    /// Total pages in the document (best single-pass estimate during layout).
+    pub num_pages: u32,
+    /// Fixed clock for DATE/TIME fields (tests); `None` uses UTC now.
+    pub fixed_datetime: Option<DateTime<Utc>>,
+    /// Precomputed `=SUM(ABOVE)` for the active table cell (F09.S5).
+    pub table_sum_above: Option<f64>,
+}
+
+impl FieldEvalContext {
+    pub fn for_page(page_index: u32, num_pages: u32) -> Self {
+        Self {
+            page_number: page_index.saturating_add(1),
+            num_pages: num_pages.max(1),
+            fixed_datetime: None,
+            table_sum_above: None,
+        }
+    }
+
+    pub fn with_table_sum_above(mut self, sum: f64) -> Self {
+        self.table_sum_above = Some(sum);
+        self
+    }
+
+    pub fn with_fixed_datetime(mut self, dt: DateTime<Utc>) -> Self {
+        self.fixed_datetime = Some(dt);
+        self
+    }
+}
+
+pub fn field_instruction(field_type: &FieldType) -> String {
+    match field_type {
+        FieldType::Page => " PAGE ".to_string(),
+        FieldType::NumPages => " NUMPAGES ".to_string(),
+        FieldType::Date => r#" DATE \@ "MMMM d, yyyy" "#.to_string(),
+        FieldType::Time => r#" TIME \@ "h:mm am/pm" "#.to_string(),
+        FieldType::Filename => " FILENAME ".to_string(),
+        FieldType::Author => " AUTHOR ".to_string(),
+        FieldType::Title => " TITLE ".to_string(),
+        FieldType::CrossRef => " REF ".to_string(),
+        FieldType::TableSumAbove => " =SUM(ABOVE) ".to_string(),
+        FieldType::FormText => " FORMTEXT ".to_string(),
+        FieldType::FormCheckbox => " FORMCHECKBOX ".to_string(),
+        FieldType::MergeField => " MERGEFIELD ".to_string(),
+        FieldType::NextRecord => " NEXT ".to_string(),
+        FieldType::MergeIf => " IF ".to_string(),
+        FieldType::TableOfContents => r#" TOC \o "1-3" \h \z \u "#.to_string(),
+        FieldType::TableOfFigures => r#" TOC \c "Figure" "#.to_string(),
+        FieldType::Other(instr) => instr.clone(),
+    }
+}
+
+/// Build a plain-text form field (F26.S1).
+pub fn form_text_field_data(name: Option<String>, default_text: impl Into<String>) -> FieldData {
+    let text = default_text.into();
+    FieldData {
+        field_type: FieldType::FormText,
+        instruction: Some(field_instruction(&FieldType::FormText)),
+        display_text: Some(text.clone()),
+        form: Some(FormFieldMeta {
+            name,
+            checked: None,
+            default_text: Some(text),
+        }),
+        merge_name: None,
+    }
+}
+
+/// Build a checkbox form field (F26.S1).
+pub fn form_checkbox_field_data(name: Option<String>, checked: bool) -> FieldData {
+    FieldData {
+        field_type: FieldType::FormCheckbox,
+        instruction: Some(field_instruction(&FieldType::FormCheckbox)),
+        display_text: Some(form_checkbox_display(checked)),
+        form: Some(FormFieldMeta {
+            name,
+            checked: Some(checked),
+            default_text: None,
+        }),
+        merge_name: None,
+    }
+}
+
+/// Build a mail-merge field (`«Name»` unbound display) (F26.S2).
+/// Build a table-of-contents field run (`TOC \o "1-3" …`).
+pub fn toc_field_data(display_title: impl Into<String>) -> FieldData {
+    FieldData {
+        field_type: FieldType::TableOfContents,
+        instruction: Some(field_instruction(&FieldType::TableOfContents)),
+        display_text: Some(display_title.into()),
+        form: None,
+        merge_name: None,
+    }
+}
+
+/// Build a table-of-figures field run (`TOC \c "Figure"`).
+pub fn tof_field_data(display_title: impl Into<String>) -> FieldData {
+    FieldData {
+        field_type: FieldType::TableOfFigures,
+        instruction: Some(field_instruction(&FieldType::TableOfFigures)),
+        display_text: Some(display_title.into()),
+        form: None,
+        merge_name: None,
+    }
+}
+
+pub fn merge_field_data(name: impl Into<String>) -> FieldData {
+    let name = name.into();
+    FieldData {
+        field_type: FieldType::MergeField,
+        instruction: Some(format!(" MERGEFIELD {name} ")),
+        display_text: Some(merge_field_placeholder(&name)),
+        form: None,
+        merge_name: Some(name),
+    }
+}
+
+pub fn evaluate_field(field: &FieldData, ctx: &FieldEvalContext) -> String {
+    match field.field_type {
+        FieldType::Page => ctx.page_number.to_string(),
+        FieldType::NumPages => ctx.num_pages.to_string(),
+        FieldType::Date => format_date(ctx),
+        FieldType::Time => format_time(ctx),
+        FieldType::Filename | FieldType::Author | FieldType::Title | FieldType::CrossRef => field
+            .display_text
+            .clone()
+            .unwrap_or_else(|| "[field]".to_string()),
+        FieldType::TableSumAbove => ctx
+            .table_sum_above
+            .map(format_sum)
+            .unwrap_or_else(|| "0".to_string()),
+        FieldType::FormText => field
+            .form
+            .as_ref()
+            .and_then(|f| f.default_text.clone())
+            .or_else(|| field.display_text.clone())
+            .unwrap_or_default(),
+        FieldType::FormCheckbox => {
+            let checked = field
+                .form
+                .as_ref()
+                .and_then(|f| f.checked)
+                .unwrap_or(false);
+            form_checkbox_display(checked)
+        }
+        FieldType::MergeField => field.display_text.clone().unwrap_or_else(|| {
+            field
+                .merge_name
+                .as_deref()
+                .map(merge_field_placeholder)
+                .unwrap_or_else(|| "«»".to_string())
+        }),
+        FieldType::NextRecord => "<<Next Record>>".to_string(),
+        FieldType::MergeIf => field
+            .display_text
+            .clone()
+            .unwrap_or_else(|| "<<IF>>".to_string()),
+        FieldType::TableOfContents | FieldType::TableOfFigures => field
+            .display_text
+            .clone()
+            .unwrap_or_default(),
+        FieldType::Other(_) => field
+            .display_text
+            .clone()
+            .unwrap_or_else(|| "[field]".to_string()),
+    }
+}
+
+pub fn run_layout_text(run: &Run, ctx: Option<&FieldEvalContext>) -> String {
+    match &run.content {
+        RunContent::Field(field) => ctx
+            .map(|c| evaluate_field(field, c))
+            .unwrap_or_else(|| {
+                field
+                    .display_text
+                    .clone()
+                    .unwrap_or_else(|| "[field]".to_string())
+            }),
+        RunContent::OfficeMath { xml } => {
+            let preview = crate::extract_omml_preview_text(xml);
+            if preview.is_empty() {
+                "?".to_string()
+            } else {
+                preview
+            }
+        }
+        RunContent::FootnoteRef(note) => note
+            .display_number
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| note.note_id.to_string()),
+        RunContent::EndnoteRef(note) => {
+            let n = note
+                .display_number
+                .unwrap_or_else(|| note.note_id.max(1) as u32);
+            roman_numeral(n)
+        }
+        RunContent::CitationRef(cite) => cite
+            .display_text
+            .clone()
+            .unwrap_or_else(|| format!("[{}]", cite.source_key)),
+        RunContent::CommentRef(c) => c
+            .display_number
+            .map(|n| format!("[C{n}]"))
+            .unwrap_or_else(|| format!("[C{}]", c.comment_id)),
+        _ => run.text().to_string(),
+    }
+}
+
+pub fn paragraph_layout_text(para: &crate::Paragraph, ctx: Option<&FieldEvalContext>) -> String {
+    para.runs
+        .iter()
+        .filter(|r| r.format.hidden != Some(true))
+        .map(|r| run_layout_text(r, ctx))
+        .collect()
+}
+
+fn format_date(ctx: &FieldEvalContext) -> String {
+    let dt = ctx.fixed_datetime.unwrap_or_else(Utc::now);
+    let month = dt.format("%B").to_string();
+    format!("{} {}, {}", month, dt.day(), dt.year())
+}
+
+fn format_time(ctx: &FieldEvalContext) -> String {
+    let dt = ctx.fixed_datetime.unwrap_or_else(Utc::now);
+    let hour = dt.hour();
+    let minute = dt.minute();
+    let (h12, ampm) = if hour == 0 {
+        (12, "am")
+    } else if hour < 12 {
+        (hour, "am")
+    } else if hour == 12 {
+        (12, "pm")
+    } else {
+        (hour - 12, "pm")
+    };
+    format!("{h12}:{minute:02} {ampm}")
+}
+
+fn format_sum(value: f64) -> String {
+    if (value - value.round()).abs() < f64::EPSILON {
+        format!("{}", value.round() as i64)
+    } else {
+        format!("{value:.2}")
+    }
+}
+
+fn roman_numeral(mut n: u32) -> String {
+    if n == 0 {
+        return "i".to_string();
+    }
+    const VALUES: [(u32, &str); 13] = [
+        (1000, "m"),
+        (900, "cm"),
+        (500, "d"),
+        (400, "cd"),
+        (100, "c"),
+        (90, "xc"),
+        (50, "l"),
+        (40, "xl"),
+        (10, "x"),
+        (9, "ix"),
+        (5, "v"),
+        (4, "iv"),
+        (1, "i"),
+    ];
+    let mut out = String::new();
+    for (value, symbol) in VALUES {
+        while n >= value {
+            out.push_str(symbol);
+            n -= value;
+        }
+    }
+    out
+}

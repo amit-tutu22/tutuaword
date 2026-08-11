@@ -2,7 +2,6 @@ use std::io::Cursor;
 
 use thiserror::Error;
 use tw_model::Document;
-use tw_native::NativeFormat;
 use zip::ZipArchive;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -37,6 +36,12 @@ pub enum ImportError {
     Html(#[from] tw_html::HtmlError),
     #[error("markdown error: {0}")]
     Markdown(#[from] tw_markdown::MarkdownError),
+    #[error("document is password-protected")]
+    PasswordProtected,
+    #[error("incorrect password")]
+    IncorrectPassword,
+    #[error("document decryption is unsupported: {0}")]
+    DecryptUnsupported(String),
 }
 
 /// File extensions supported for import (Microsoft Word-compatible set).
@@ -52,6 +57,14 @@ pub fn extension_from_path(path: &str) -> Option<String> {
 }
 
 pub fn detect_format(data: &[u8], path_hint: Option<&str>) -> DetectedFormat {
+    // Autosave and other callers may pass twdoc bytes with a .docx path hint.
+    // Trust zip contents for the native bundle before the extension.
+    if data.starts_with(b"PK\x03\x04") {
+        if let Some(DetectedFormat::Twdoc) = detect_zip_format(data) {
+            return DetectedFormat::Twdoc;
+        }
+    }
+
     if let Some(ext) = path_hint.and_then(extension_from_path) {
         if let Some(format) = format_from_extension(&ext) {
             return format;
@@ -65,6 +78,10 @@ pub fn detect_format(data: &[u8], path_hint: Option<&str>) -> DetectedFormat {
         return DetectedFormat::Rtf;
     }
     if data.starts_with(b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1") {
+        // Encrypted OOXML shares the OLE magic with legacy .doc — check first.
+        if tw_docx::is_password_protected(data).unwrap_or(false) {
+            return DetectedFormat::Docx;
+        }
         return DetectedFormat::LegacyDoc;
     }
 
@@ -107,6 +124,8 @@ fn detect_zip_format(data: &[u8]) -> Option<DetectedFormat> {
     let mut has_content_json = false;
     let mut has_document_xml = false;
     let mut has_odt_content = false;
+    let mut has_encrypted_package = false;
+    let mut has_encryption_info = false;
     let count = archive.len();
     for i in 0..count {
         let name = archive.by_index(i).ok()?.name().to_string();
@@ -116,6 +135,10 @@ fn detect_zip_format(data: &[u8]) -> Option<DetectedFormat> {
             has_document_xml = true;
         } else if name == "content.xml" {
             has_odt_content = true;
+        } else if name == "EncryptedPackage" {
+            has_encrypted_package = true;
+        } else if name.eq_ignore_ascii_case("encryptioninfo") {
+            has_encryption_info = true;
         }
     }
     if has_content_json {
@@ -124,6 +147,8 @@ fn detect_zip_format(data: &[u8]) -> Option<DetectedFormat> {
         Some(DetectedFormat::Docx)
     } else if has_odt_content {
         Some(DetectedFormat::Odt)
+    } else if has_encrypted_package || has_encryption_info {
+        Some(DetectedFormat::Docx)
     } else {
         None
     }
@@ -142,6 +167,13 @@ mod tests {
     fn detects_legacy_doc() {
         let ole = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
         assert_eq!(detect_format(&ole, None), DetectedFormat::LegacyDoc);
+    }
+
+    #[test]
+    fn detects_encrypted_ole_ooxml_as_docx() {
+        let mut ole = b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1".to_vec();
+        ole.extend_from_slice(b"....EncryptionInfo....EncryptedPackage....");
+        assert_eq!(detect_format(&ole, Some("locked.docx")), DetectedFormat::Docx);
     }
 
     #[test]
@@ -201,6 +233,26 @@ mod tests {
             zip.finish().unwrap();
         }
         assert_eq!(detect_format(&odt, None), DetectedFormat::Odt);
+    }
+
+    #[test]
+    fn detects_twdoc_bytes_before_docx_path_hint() {
+        use std::io::Write;
+        use zip::write::SimpleFileOptions;
+        use zip::ZipWriter;
+
+        let mut twdoc = Vec::new();
+        {
+            let mut zip = ZipWriter::new(std::io::Cursor::new(&mut twdoc));
+            let options = SimpleFileOptions::default();
+            zip.start_file("content.json", options).unwrap();
+            zip.write_all(br#"{"sections":[]}"#).unwrap();
+            zip.finish().unwrap();
+        }
+        assert_eq!(
+            detect_format(&twdoc, Some("report.docx")),
+            DetectedFormat::Twdoc
+        );
     }
 
     #[test]

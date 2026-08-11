@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tutuaword/bridge/mock_native_engine.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
-import 'package:tutuaword/main.dart';
+import 'package:tutuaword/editor/editor_screen.dart';
 import 'package:tutuaword/ui/info_bar.dart';
 import 'package:tutuaword/ui/ribbon.dart';
 import 'package:tutuaword/ui/ribbon_tabs/design_tab.dart';
 import 'package:tutuaword/ui/ribbon_tabs/home_tab.dart';
+import 'package:tutuaword/ui/ribbon_tabs/mailings_tab.dart';
+import 'package:tutuaword/ui/ribbon_tabs/references_tab.dart';
 import 'package:tutuaword/ui/ribbon_tabs/review_tab.dart';
 import 'package:tutuaword/ui/ribbon_tabs/view_tab.dart';
 import 'package:tutuaword/ui/ribbon_widgets.dart';
@@ -26,7 +29,8 @@ void main() {
     late EditorController controller;
 
     setUp(() {
-      controller = EditorController();
+      controller = EditorController.forTest();
+      controller.ensureGlyphCaret();
     });
 
     tearDown(() {
@@ -34,7 +38,7 @@ void main() {
     });
 
     testWidgets('EditorScreen renders title bar, ribbon, canvas, and status bar', (tester) async {
-      await pumpWide(tester, const EditorScreen());
+      await pumpWide(tester, EditorScreen(controller: controller));
 
       expect(find.byType(WordTitleBar), findsOneWidget);
       expect(find.byType(WordRibbon), findsOneWidget);
@@ -56,10 +60,54 @@ void main() {
       );
     });
 
+    testWidgets('Title bar Home icon switches to Home ribbon tab', (tester) async {
+      final ribbonKey = GlobalKey<WordRibbonState>();
+      await pumpWide(
+        tester,
+        Column(
+          children: [
+            WordTitleBar(
+              controller: controller,
+              onHomePressed: () =>
+                  ribbonKey.currentState?.selectTab(RibbonTab.home),
+            ),
+            WordRibbon(key: ribbonKey, controller: controller),
+          ],
+        ),
+      );
+
+      await tester.tap(find.text('Insert'));
+      await tester.pump();
+      expect(find.byType(HomeTab), findsNothing);
+
+      await tester.tap(find.byIcon(Icons.home_outlined));
+      await tester.pump();
+      expect(find.byType(HomeTab), findsOneWidget);
+    });
+
     testWidgets('Title bar displays default document title', (tester) async {
       await pumpWide(tester, WordTitleBar(controller: controller));
 
       expect(find.text('Document1'), findsOneWidget);
+    });
+
+    testWidgets('Title bar Open control is enabled for mobile import', (tester) async {
+      await pumpWide(tester, WordTitleBar(controller: controller));
+
+      final openIcon = find.byIcon(Icons.folder_open_outlined);
+      expect(openIcon, findsOneWidget);
+      // Tooltip wraps the gesture target; long-press surfaces the label.
+      await tester.longPress(openIcon);
+      await tester.pumpAndSettle();
+      expect(find.text('Open'), findsOneWidget);
+    });
+
+    testWidgets('Title bar centers document name on the full bar width', (tester) async {
+      await pumpWide(tester, WordTitleBar(controller: controller));
+
+      final title = tester.getCenter(find.text('Document1'));
+      final bar = tester.getRect(find.byType(WordTitleBar));
+      expect(title.dx, closeTo(bar.center.dx, 1.0));
     });
   });
 
@@ -67,7 +115,8 @@ void main() {
     late EditorController controller;
 
     setUp(() {
-      controller = EditorController();
+      controller = EditorController.forTest();
+      controller.ensureGlyphCaret();
     });
 
     tearDown(() {
@@ -110,14 +159,14 @@ void main() {
 
       await pumpWide(tester, ViewTab(controller: controller));
 
-      await tester.tap(find.text('Navigation\nPane'));
+      await tester.tap(find.byKey(const Key('view_show_navigation_pane')));
       await tester.pump();
 
       expect(controller.showNavigationPane, isTrue);
     });
 
     testWidgets('Design tab renders theme gallery cards', (tester) async {
-      await pumpWide(tester, const DesignTab());
+      await pumpWide(tester, DesignTab(controller: controller));
 
       expect(find.text('Office'), findsOneWidget);
       expect(find.text('Document Formatting'), findsOneWidget);
@@ -135,6 +184,7 @@ void main() {
 
       await tester.tap(find.text('Arial').last);
       await tester.pumpAndSettle();
+      await controller.ensureLayoutReady();
 
       expect(controller.fontFamily, 'Arial');
     });
@@ -150,8 +200,42 @@ void main() {
 
       await tester.tap(find.text('14').last);
       await tester.pumpAndSettle();
+      await controller.ensureLayoutReady();
 
       expect(controller.fontSize, 14);
+    });
+
+    testWidgets('Home tab font size dropdown displays picked size in ribbon', (tester) async {
+      await pumpWide(tester, HomeTab(controller: controller));
+
+      await tester.tap(find.text('11'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('14').last);
+      await tester.pumpAndSettle();
+      await controller.ensureLayoutReady();
+
+      expect(controller.fontSize, 14);
+      expect(find.text('14'), findsOneWidget);
+      expect(find.text('11'), findsNothing);
+    });
+
+    testWidgets('Home tab exposes F03.S4 font effect toggles', (tester) async {
+      await pumpWide(tester, HomeTab(controller: controller));
+
+      expect(find.byTooltip('All Caps'), findsOneWidget);
+      expect(find.byTooltip('Small Caps'), findsOneWidget);
+      expect(find.byTooltip('Hidden'), findsOneWidget);
+      expect(find.byTooltip('Ligatures'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('All Caps'));
+      await tester.pump();
+      await controller.ensureLayoutReady();
+      expect(controller.allCaps, isTrue);
+
+      await tester.tap(find.byTooltip('Hidden'));
+      await tester.pump();
+      await controller.ensureLayoutReady();
+      expect(controller.hidden, isTrue);
     });
 
     testWidgets('Home tab italic and underline toggles update controller', (tester) async {
@@ -159,10 +243,12 @@ void main() {
 
       await tester.tap(find.byIcon(Icons.format_italic));
       await tester.pump();
+      await controller.ensureLayoutReady();
       expect(controller.italic, isTrue);
 
       await tester.tap(find.byIcon(Icons.format_underline));
       await tester.pump();
+      await controller.ensureLayoutReady();
       expect(controller.underline, isTrue);
     });
 
@@ -190,22 +276,89 @@ void main() {
       expect(controller.zoom, greaterThan(1.0));
     });
 
-    testWidgets('Design tab disabled controls show Coming soon tooltip', (tester) async {
-      await pumpWide(tester, const DesignTab());
+    testWidgets('Design tab has no Coming soon placeholders', (tester) async {
+      await pumpWide(tester, DesignTab(controller: controller));
 
-      final tooltip = find.byTooltip(kComingSoonTooltip);
-      expect(tooltip, findsWidgets);
-
-      await tester.longPress(find.text('Office'));
-      await tester.pumpAndSettle();
-      expect(find.text(kComingSoonTooltip), findsOneWidget);
+      expect(find.byTooltip(kComingSoonTooltip), findsNothing);
     });
 
-    testWidgets('Review tab shows Export PDF and accept/reject placeholders', (tester) async {
+    testWidgets('Review tab shows Export PDF and accept/reject actions', (tester) async {
       await pumpWide(tester, ReviewTab(controller: controller));
 
       expect(find.text('Export\nPDF'), findsOneWidget);
-      expect(find.byTooltip(kTrackChangeReviewTooltip), findsWidgets);
+      expect(find.byTooltip(kTrackChangeAcceptTooltip), findsOneWidget);
+      expect(find.byTooltip(kTrackChangeRejectTooltip), findsOneWidget);
+    });
+
+    testWidgets('Review tab Accept All and Reject All update mock document', (tester) async {
+      final engine = MockDocumentEngine(initialText: '');
+      final tc = EditorController.forTest(engine: engine);
+      addTearDown(tc.dispose);
+      tc.toggleTrackChanges();
+      await engine.tryInsertTextAsync(engine.defaultRunId, 0, 'Tracked');
+
+      await pumpWide(tester, ReviewTab(controller: tc));
+      expect(find.byKey(const Key('accept_all_revisions')), findsOneWidget);
+      expect(find.byKey(const Key('reject_all_revisions')), findsOneWidget);
+
+      tc.acceptAllRevisions();
+      expect(tc.statusText, contains('Accepted all revisions'));
+
+      await engine.tryInsertTextAsync(engine.defaultRunId, 0, 'Again');
+      tc.rejectAllRevisions();
+      expect(tc.statusText, contains('Rejected all revisions'));
+    });
+
+    testWidgets('Mailings tab wires Next Record field insert', (tester) async {
+      await pumpWide(tester, MailingsTab(controller: controller));
+      expect(find.byKey(const Key('insert_next_record')), findsOneWidget);
+    });
+
+    testWidgets('References tab shows endnote and table of figures', (tester) async {
+      await pumpWide(tester, ReferencesTab(controller: controller));
+
+      expect(find.byKey(const Key('insert_endnote')), findsOneWidget);
+      expect(find.byKey(const Key('insert_table_of_figures')), findsOneWidget);
+      expect(find.byKey(const Key('insert_table_of_contents')), findsOneWidget);
+    });
+
+    testWidgets('Review tab shows smart assist controls', (tester) async {
+      await pumpWide(tester, ReviewTab(controller: controller));
+
+      expect(find.byKey(const Key('review_consistency')), findsOneWidget);
+      expect(find.byKey(const Key('review_audience_rewrite')), findsOneWidget);
+      expect(find.byKey(const Key('review_auto_alt_text')), findsOneWidget);
+    });
+
+    testWidgets('I-F01-S3-print-preview-toggle from View tab', (tester) async {
+      await pumpWide(tester, ViewTab(controller: controller));
+
+      expect(controller.printPreview, isFalse);
+      await tester.tap(find.text('Print\nPreview'));
+      await tester.pump();
+      expect(controller.printPreview, isTrue);
+      expect(controller.statusText, contains('Print preview'));
+
+      await tester.tap(find.text('Print\nLayout'));
+      await tester.pump();
+      expect(controller.printPreview, isFalse);
+      expect(controller.statusText, contains('Print layout'));
+    });
+
+    testWidgets('View tab Read Mode and Split are wired', (tester) async {
+      await pumpWide(tester, ViewTab(controller: controller));
+
+      await tester.tap(find.text('Read\nMode'));
+      await tester.pump();
+      expect(controller.isReadMode, isTrue);
+
+      await tester.tap(find.text('Print\nLayout'));
+      await tester.pump();
+      expect(controller.isReadMode, isFalse);
+
+      await tester.tap(find.text('Split'));
+      await tester.pump();
+      expect(controller.splitView, isTrue);
     });
 
     testWidgets('Switching tabs via ribbon strip updates visible content', (tester) async {

@@ -12,7 +12,7 @@ Not every OOXML element can be fully parsed into our model and regenerated ident
 | **B** | Render + Preserve | Parse to model | Correct | Partial | Preserved via passthrough | Styles, themes, numbering, headers/footers |
 | **C** | Preserve Only | Store verbatim | Placeholder or skip | None | Preserved verbatim | Macros, ActiveX, ink, custom XML |
 
-**Goal:** 95%+ of real-world documents render correctly. Tier A elements round-trip losslessly. Tier B elements render correctly and survive save. Tier C elements are never lost.
+**Goal:** Per-category Word visual pass rates plus lossless Tier A round-trip and Tier B/C passthrough survival — see the fidelity SLA in [risk-mitigation.md](../risk-mitigation.md). Avoid a single “95%/99%” slogan until Word baselines and corpus gates exist.
 
 ## Package Passthrough Strategy
 
@@ -159,7 +159,7 @@ We use Word's existing `w14:paraId` where available, and add our own `tw:nodeId`
 | App properties | `docProps/app.xml` | A | 3 | Page count, word count |
 | Custom properties | `docProps/custom.xml` | C | — | Preserve verbatim |
 | Custom XML | `customXml/*` | C | — | Preserve verbatim |
-| VBA macros | `word/vbaProject.bin` | C | — | Preserve verbatim; never execute |
+| VBA macros | `word/vbaProject.bin` | C | — | Preserve verbatim on passthrough; never execute |
 
 ## Element-Level Mapping
 
@@ -266,7 +266,7 @@ Default: **Max fidelity** when saving an imported DOCX. **Word 2016+** when savi
 
 These are accepted limitations, documented for user expectations:
 
-1. **VBA macros** — preserved but never executed
+1. **VBA macros** — preserved on passthrough export; never executed
 2. **ActiveX controls** — preserved but not rendered or interactive
 3. **SmartArt** — preserved; rendered as placeholder bounding box
 4. **Embedded Excel charts** — preserved; rendered as static image if available

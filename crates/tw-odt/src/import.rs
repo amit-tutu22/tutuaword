@@ -36,19 +36,33 @@ fn parse_content_xml(xml: &str) -> Document {
     let mut doc = Document::new();
     let mut blocks = Vec::new();
 
-    for chunk in xml.split("<text:p").skip(1) {
-        let end = chunk.find("</text:p>").unwrap_or(chunk.len());
-        let para_xml = &chunk[..end];
+    // Walk opening tags so `<text:h>` and `<text:p>` both become paragraphs.
+    let mut rest = xml;
+    while let Some(rel) = find_block_open(rest) {
+        let (tag, after_open) = rel;
+        let (close, heading_level) = match tag {
+            "h" => ("</text:h>", parse_outline_level(after_open)),
+            _ => ("</text:p>", None),
+        };
+        let end = after_open.find(close).unwrap_or(after_open.len());
+        let para_xml = &after_open[..end];
+        rest = after_open.get(end + close.len()..).unwrap_or("");
+
         let mut runs = Vec::new();
         for span in para_xml.split("<text:span").skip(1) {
             let span_end = span.find("</text:span>").unwrap_or(span.len());
-            let text = extract_text_content(&span[..span_end]);
+            let span_xml = &span[..span_end];
+            let text = extract_text_content(span_xml);
             if text.is_empty() {
                 continue;
             }
             let mut run = Run::new_text(text);
-            if span.contains("Bold") || span.contains("bold") {
+            let style_hint = span_xml.to_ascii_lowercase();
+            if style_hint.contains("bold") || style_hint.contains("font-weight=\"bold\"") {
                 run.format.bold = Some(true);
+            }
+            if style_hint.contains("italic") || style_hint.contains("font-style=\"italic\"") {
+                run.format.italic = Some(true);
             }
             runs.push(run);
         }
@@ -61,6 +75,12 @@ fn parse_content_xml(xml: &str) -> Document {
         if !runs.is_empty() {
             let mut para = Paragraph::new();
             para.runs = runs;
+            if let Some(level) = heading_level {
+                let name = format!("Heading {level}");
+                if let Some(id) = doc.styles.find_style_by_name(&name).map(|s| s.id) {
+                    para.style_id = Some(id);
+                }
+            }
             blocks.push(Block::Paragraph(para));
         }
     }
@@ -75,15 +95,45 @@ fn parse_content_xml(xml: &str) -> Document {
     doc
 }
 
+fn find_block_open(xml: &str) -> Option<(&'static str, &str)> {
+    let p = xml.find("<text:p");
+    let h = xml.find("<text:h");
+    match (p, h) {
+        (Some(pi), Some(hi)) if hi < pi => {
+            let after = xml.get(hi + "<text:h".len()..)?;
+            Some(("h", after))
+        }
+        (Some(pi), _) => {
+            let after = xml.get(pi + "<text:p".len()..)?;
+            Some(("p", after))
+        }
+        (None, Some(hi)) => {
+            let after = xml.get(hi + "<text:h".len()..)?;
+            Some(("h", after))
+        }
+        _ => None,
+    }
+}
+
+fn parse_outline_level(after_open: &str) -> Option<u8> {
+    let marker = "text:outline-level=\"";
+    let start = after_open.find(marker)? + marker.len();
+    let end = after_open[start..].find('"')? + start;
+    after_open[start..end].parse().ok()
+}
+
 fn extract_text_content(xml: &str) -> String {
     let mut out = String::new();
     let mut rest = xml;
     while let Some(start) = rest.find('>') {
         let after = &rest[start + 1..];
         if let Some(end) = after.find('<') {
-            out.push_str(&decode_xml_entities(after[..end].trim()));
+            // Preserve significant spaces inside spans (e.g. " body").
+            out.push_str(&decode_xml_entities(&after[..end]));
             rest = &after[end..];
         } else {
+            // Final text node with no following tag (typical for a span slice).
+            out.push_str(&decode_xml_entities(after));
             break;
         }
     }
