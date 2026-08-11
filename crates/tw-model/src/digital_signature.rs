@@ -302,6 +302,10 @@ fn hash_run(hasher: &mut Sha256, run: &Run) {
             hasher.update(b"fnr");
             feed_str(hasher, "n", &note.note_id.to_string());
         }
+        RunContent::EndnoteRef(note) => {
+            hasher.update(b"enr");
+            feed_str(hasher, "n", &note.note_id.to_string());
+        }
         RunContent::CitationRef(cite) => {
             hasher.update(b"cit");
             feed_str(hasher, "k", &cite.source_key);

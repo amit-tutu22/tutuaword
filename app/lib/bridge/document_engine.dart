@@ -6,6 +6,7 @@ import 'package:tutuaword/bridge/find_format_filter.dart';
 import 'package:tutuaword/bridge/find_match.dart';
 import 'package:tutuaword/bridge/engine_types.dart';
 import 'package:tutuaword/bridge/print_layout_settings.dart';
+import 'package:tutuaword/bridge/spell_issue.dart';
 import 'package:tutuaword/editor/doc_range.dart';
 
 /// Minimal engine surface used by editor controllers (FFI or mock).
@@ -172,8 +173,33 @@ abstract class DocumentEngine {
     required String runId,
     required int offset,
     required String fieldType,
+    String? mergeName,
+  });
+  Future<bool> applySpellReplacementAsync({
+    required int plainStart,
+    required int plainEnd,
+    required String replacement,
+  });
+  Future<Uint8List?> exportSelectionDocxAsync({
+    required String startRunId,
+    required int startOffset,
+    required String endRunId,
+    required int endOffset,
+  });
+  String? getCommentsJson();
+  Future<bool> replyToCommentAsync({
+    required int commentId,
+    required String bodyText,
+  });
+  Future<bool> resolveCommentAsync({
+    required int commentId,
+    required bool resolved,
   });
   Future<bool> insertFootnoteAsync({
+    required String runId,
+    required int offset,
+  });
+  Future<bool> insertEndnoteAsync({
     required String runId,
     required int offset,
   });
@@ -183,6 +209,7 @@ abstract class DocumentEngine {
     String bodyText = '',
   });
   Future<bool> insertTableOfContentsAsync({String? caretRunId});
+  Future<bool> insertTableOfFiguresAsync({String? caretRunId});
   Future<bool> addBibliographySourceAsync({
     required String key,
     required String author,
@@ -328,6 +355,7 @@ abstract class DocumentEngine {
   Future<bool> redoEditAsync();
 
   List<String>? spellCheckMisspellings();
+  List<SpellIssue>? spellCheckIssues();
   List<String>? grammarCheckIssues();
   List<FindMatch>? findMatches(
     String query,

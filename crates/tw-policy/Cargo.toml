@@ -1,0 +1,9 @@
+[package]
+name = "tw-policy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Enterprise policy hooks for automation, plugins, and AI (Layer 8)"
+
+[dependencies]
+serde = { workspace = true }

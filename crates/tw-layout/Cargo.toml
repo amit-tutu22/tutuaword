@@ -11,3 +11,5 @@ tw-shape = { path = "../tw-shape" }
 unicode-linebreak = { workspace = true }
 
 [dev-dependencies]
+tw-docx = { path = "../tw-docx" }
+tw-edit = { path = "../tw-edit" }

@@ -277,6 +277,9 @@ pub enum Command {
         run_id: NodeId,
         offset: usize,
         field_type: tw_model::FieldType,
+        /// Merge-field name for [`FieldType::MergeIf`] (F26.S2).
+        #[serde(default)]
+        merge_name: Option<String>,
     },
     /// Insert a plain-text or checkbox form field (F26.S1).
     InsertFormField {
@@ -309,16 +312,36 @@ pub enum Command {
         run_id: NodeId,
         offset: usize,
     },
+    /// Insert an endnote reference at the caret — F16.S1 extension.
+    InsertEndnote {
+        run_id: NodeId,
+        offset: usize,
+    },
     /// Insert a comment anchor at the caret — F17.S3.
     InsertComment {
         run_id: NodeId,
         offset: usize,
         body_text: String,
     },
+    /// Append a reply to an existing comment thread — L3/L5.
+    ReplyToComment {
+        comment_id: i32,
+        body_text: String,
+    },
+    /// Mark a comment thread resolved or reopen it — L3/L5.
+    ResolveComment {
+        comment_id: i32,
+        resolved: bool,
+    },
     /// Materialize a table of contents after a block — F16.S2.
     InsertTableOfContents {
         after_block_id: NodeId,
         /// Page numbers parallel to [`tw_model::document_outline`] at apply time.
+        page_numbers: Vec<u32>,
+    },
+    /// Materialize a table of figures after a block.
+    InsertTableOfFigures {
+        after_block_id: NodeId,
         page_numbers: Vec<u32>,
     },
     /// Register a bibliography source by citation key — F16.S3.
@@ -1334,11 +1357,23 @@ impl Command {
             Command::InsertFootnote { .. } => Err(EditError::InverseNotSupported {
                 command: "InsertFootnote",
             }),
+            Command::InsertEndnote { .. } => Err(EditError::InverseNotSupported {
+                command: "InsertEndnote",
+            }),
             Command::InsertComment { .. } => Err(EditError::InverseNotSupported {
                 command: "InsertComment",
             }),
+            Command::ReplyToComment { .. } => Err(EditError::InverseNotSupported {
+                command: "ReplyToComment",
+            }),
+            Command::ResolveComment { .. } => Err(EditError::InverseNotSupported {
+                command: "ResolveComment",
+            }),
             Command::InsertTableOfContents { .. } => Err(EditError::InverseNotSupported {
                 command: "InsertTableOfContents",
+            }),
+            Command::InsertTableOfFigures { .. } => Err(EditError::InverseNotSupported {
+                command: "InsertTableOfFigures",
             }),
             Command::AddBibliographySource { .. } => Err(EditError::InverseNotSupported {
                 command: "AddBibliographySource",

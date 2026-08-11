@@ -15,6 +15,7 @@ import 'package:tutuaword/bridge/find_format_filter.dart';
 import 'package:tutuaword/bridge/find_match.dart';
 import 'package:tutuaword/bridge/native_event_router.dart';
 import 'package:tutuaword/bridge/print_layout_settings.dart';
+import 'package:tutuaword/bridge/spell_issue.dart';
 import 'package:tutuaword/editor/doc_range.dart';
 
 typedef TwEventCallbackNative = Void Function(Uint32, Uint64, Pointer<Uint8>, IntPtr);
@@ -184,14 +185,31 @@ typedef TwHeaderFooterSeedRunNative = Int32 Function(
 typedef TwHeaderFooterSeedRunDart = int Function(
     Pointer<Utf8>, int, int, Pointer<Pointer<Uint8>>, Pointer<IntPtr>);
 typedef TwInsertFieldNative = Int32 Function(
-    Pointer<Utf8>, Int32, Pointer<Utf8>);
-typedef TwInsertFieldDart = int Function(Pointer<Utf8>, int, Pointer<Utf8>);
+    Pointer<Utf8>, Int32, Pointer<Utf8>, Pointer<Utf8>);
+typedef TwInsertFieldDart = int Function(
+    Pointer<Utf8>, int, Pointer<Utf8>, Pointer<Utf8>);
 typedef TwInsertFootnoteNative = Int32 Function(Pointer<Utf8>, Int32);
 typedef TwInsertFootnoteDart = int Function(Pointer<Utf8>, int);
+typedef TwInsertEndnoteNative = Int32 Function(Pointer<Utf8>, Int32);
+typedef TwInsertEndnoteDart = int Function(Pointer<Utf8>, int);
 typedef TwInsertCommentNative = Int32 Function(Pointer<Utf8>, Int32, Pointer<Utf8>);
 typedef TwInsertCommentDart = int Function(Pointer<Utf8>, int, Pointer<Utf8>);
+typedef TwApplySpellReplacementNative = Int32 Function(Uint32, Uint32, Pointer<Utf8>);
+typedef TwApplySpellReplacementDart = int Function(int, int, Pointer<Utf8>);
+typedef TwExportSelectionDocxNative = Int32 Function(
+    Pointer<Utf8>, Uint32, Pointer<Utf8>, Uint32, Pointer<Pointer<Uint8>>, Pointer<IntPtr>);
+typedef TwExportSelectionDocxDart = int Function(
+    Pointer<Utf8>, int, Pointer<Utf8>, int, Pointer<Pointer<Uint8>>, Pointer<IntPtr>);
+typedef TwGetCommentsJsonNative = Int32 Function(Pointer<Pointer<Uint8>>, Pointer<IntPtr>);
+typedef TwGetCommentsJsonDart = int Function(Pointer<Pointer<Uint8>>, Pointer<IntPtr>);
+typedef TwReplyToCommentNative = Int32 Function(Int32, Pointer<Utf8>);
+typedef TwReplyToCommentDart = int Function(int, Pointer<Utf8>);
+typedef TwResolveCommentNative = Int32 Function(Int32, Int32);
+typedef TwResolveCommentDart = int Function(int, int);
 typedef TwInsertTableOfContentsNative = Int32 Function(Pointer<Utf8>);
 typedef TwInsertTableOfContentsDart = int Function(Pointer<Utf8>);
+typedef TwInsertTableOfFiguresNative = Int32 Function(Pointer<Utf8>);
+typedef TwInsertTableOfFiguresDart = int Function(Pointer<Utf8>);
 typedef TwAddBibliographySourceNative = Int32 Function(
   Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
 typedef TwAddBibliographySourceDart = int Function(
@@ -784,8 +802,15 @@ class NativeEngine {
   late final TwHeaderFooterSeedRunDart headerFooterSeedRun;
   late final TwInsertFieldDart insertField;
   late final TwInsertFootnoteDart insertFootnote;
+  late final TwInsertEndnoteDart insertEndnote;
   late final TwInsertCommentDart insertComment;
+  TwApplySpellReplacementDart? applySpellReplacementNative;
+  TwExportSelectionDocxDart? exportSelectionDocxNative;
+  TwGetCommentsJsonDart? getCommentsJsonNative;
+  TwReplyToCommentDart? replyToCommentNative;
+  TwResolveCommentDart? resolveCommentNative;
   late final TwInsertTableOfContentsDart insertTableOfContents;
+  late final TwInsertTableOfFiguresDart insertTableOfFigures;
   late final TwAddBibliographySourceDart addBibliographySource;
   late final TwInsertCitationDart insertCitation;
   late final TwInsertBibliographyDart insertBibliography;
@@ -1031,11 +1056,30 @@ class NativeEngine {
           lib.lookupFunction<TwInsertFieldNative, TwInsertFieldDart>('tw_insert_field');
       engine.insertFootnote = lib.lookupFunction<TwInsertFootnoteNative, TwInsertFootnoteDart>(
           'tw_insert_footnote');
+      engine.insertEndnote = lib.lookupFunction<TwInsertEndnoteNative, TwInsertEndnoteDart>(
+          'tw_insert_endnote');
       engine.insertComment = lib.lookupFunction<TwInsertCommentNative, TwInsertCommentDart>(
           'tw_insert_comment');
+      try {
+        engine.applySpellReplacementNative = lib.lookupFunction<TwApplySpellReplacementNative,
+            TwApplySpellReplacementDart>('tw_apply_spell_replacement');
+        engine.exportSelectionDocxNative = lib.lookupFunction<TwExportSelectionDocxNative,
+            TwExportSelectionDocxDart>('tw_export_selection_docx');
+        engine.getCommentsJsonNative = lib.lookupFunction<TwGetCommentsJsonNative,
+            TwGetCommentsJsonDart>('tw_get_comments_json');
+        engine.replyToCommentNative = lib.lookupFunction<TwReplyToCommentNative,
+            TwReplyToCommentDart>('tw_reply_to_comment');
+        engine.resolveCommentNative = lib.lookupFunction<TwResolveCommentNative,
+            TwResolveCommentDart>('tw_resolve_comment');
+      } catch (_) {
+        // New symbols require a rebuilt libtw_ffi; optional until then.
+      }
       engine.insertTableOfContents = lib
           .lookupFunction<TwInsertTableOfContentsNative, TwInsertTableOfContentsDart>(
               'tw_insert_table_of_contents');
+      engine.insertTableOfFigures = lib
+          .lookupFunction<TwInsertTableOfFiguresNative, TwInsertTableOfFiguresDart>(
+              'tw_insert_table_of_figures');
       engine.addBibliographySource = lib.lookupFunction<TwAddBibliographySourceNative,
           TwAddBibliographySourceDart>('tw_add_bibliography_source');
       engine.insertCitation = lib.lookupFunction<TwInsertCitationNative, TwInsertCitationDart>(
@@ -2395,15 +2439,114 @@ extension NativeEngineOps on NativeEngine {
     required String runId,
     required int offset,
     required String fieldType,
+    String? mergeName,
   }) async {
     final runPtr = runId.toNativeUtf8();
     final typePtr = fieldType.toNativeUtf8();
+    final mergePtr = mergeName?.toNativeUtf8() ?? nullptr;
     try {
-      return enqueueEdit(() => insertField(runPtr, offset, typePtr));
+      return enqueueEdit(
+        () => insertField(runPtr, offset, typePtr, mergePtr),
+      );
     } finally {
       calloc.free(runPtr);
       calloc.free(typePtr);
+      if (mergePtr != nullptr) calloc.free(mergePtr);
     }
+  }
+
+  Future<bool> applySpellReplacementAsync({
+    required int plainStart,
+    required int plainEnd,
+    required String replacement,
+  }) async {
+    final fn = applySpellReplacementNative;
+    if (fn == null) return false;
+    final textPtr = replacement.toNativeUtf8();
+    try {
+      return enqueueEdit(() => fn(plainStart, plainEnd, textPtr));
+    } finally {
+      calloc.free(textPtr);
+    }
+  }
+
+  Future<Uint8List?> exportSelectionDocxAsync({
+    required String startRunId,
+    required int startOffset,
+    required String endRunId,
+    required int endOffset,
+  }) async {
+    final fn = exportSelectionDocxNative;
+    if (fn == null) return null;
+    final startPtr = startRunId.toNativeUtf8();
+    final endPtr = endRunId.toNativeUtf8();
+    final outPtr = calloc<Pointer<Uint8>>();
+    final outLen = calloc<IntPtr>();
+    try {
+      final code = fn(
+        startPtr,
+        startOffset,
+        endPtr,
+        endOffset,
+        outPtr,
+        outLen,
+      );
+      if (code != 0) return null;
+      final len = outLen.value;
+      final ptr = outPtr.value;
+      if (ptr == nullptr || len == 0) return null;
+      final bytes = ptr.cast<Uint8>().asTypedList(len);
+      final copy = Uint8List.fromList(bytes);
+      freeBuffer(ptr, len);
+      return copy;
+    } finally {
+      calloc.free(startPtr);
+      calloc.free(endPtr);
+      calloc.free(outPtr);
+      calloc.free(outLen);
+    }
+  }
+
+  String? getCommentsJson() {
+    final fn = getCommentsJsonNative;
+    if (fn == null) return null;
+    final outPtr = calloc<Pointer<Uint8>>();
+    final outLen = calloc<IntPtr>();
+    try {
+      if (fn(outPtr, outLen) != 0) return null;
+      final len = outLen.value;
+      final ptr = outPtr.value;
+      if (ptr == nullptr || len == 0) return '[]';
+      final text = ptr.cast<Utf8>().toDartString(length: len);
+      freeBuffer(ptr, len);
+      return text;
+    } finally {
+      calloc.free(outPtr);
+      calloc.free(outLen);
+    }
+  }
+
+  Future<bool> replyToCommentAsync({
+    required int commentId,
+    required String bodyText,
+  }) async {
+    final fn = replyToCommentNative;
+    if (fn == null) return false;
+    final bodyPtr = bodyText.toNativeUtf8();
+    try {
+      return enqueueEdit(() => fn(commentId, bodyPtr));
+    } finally {
+      calloc.free(bodyPtr);
+    }
+  }
+
+  Future<bool> resolveCommentAsync({
+    required int commentId,
+    required bool resolved,
+  }) async {
+    final fn = resolveCommentNative;
+    if (fn == null) return false;
+    return enqueueEdit(() => fn(commentId, resolved ? 1 : 0));
   }
 
   Future<bool> insertFootnoteAsync({
@@ -2413,6 +2556,18 @@ extension NativeEngineOps on NativeEngine {
     final runPtr = runId.toNativeUtf8();
     try {
       return enqueueEdit(() => insertFootnote(runPtr, offset));
+    } finally {
+      calloc.free(runPtr);
+    }
+  }
+
+  Future<bool> insertEndnoteAsync({
+    required String runId,
+    required int offset,
+  }) async {
+    final runPtr = runId.toNativeUtf8();
+    try {
+      return enqueueEdit(() => insertEndnote(runPtr, offset));
     } finally {
       calloc.free(runPtr);
     }
@@ -2437,6 +2592,15 @@ extension NativeEngineOps on NativeEngine {
     final caretPtr = caretRunId?.toNativeUtf8() ?? nullptr;
     try {
       return enqueueEdit(() => insertTableOfContents(caretPtr));
+    } finally {
+      if (caretRunId != null) calloc.free(caretPtr);
+    }
+  }
+
+  Future<bool> insertTableOfFiguresAsync({String? caretRunId}) async {
+    final caretPtr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return enqueueEdit(() => insertTableOfFigures(caretPtr));
     } finally {
       if (caretRunId != null) calloc.free(caretPtr);
     }
@@ -3260,6 +3424,11 @@ extension NativeEngineOps on NativeEngine {
   /// Blocks the calling isolate — see [openDocumentBytes]; the whole-document
   /// spell pass runs before `tw_spell_check_document` returns.
   List<String>? spellCheckMisspellings() {
+    final issues = spellCheckIssues();
+    return issues?.map((issue) => issue.word).toList();
+  }
+
+  List<SpellIssue>? spellCheckIssues() {
     final outPtr = calloc<Pointer<Uint8>>();
     final outLen = calloc<IntPtr>();
     try {
@@ -3271,7 +3440,14 @@ extension NativeEngineOps on NativeEngine {
       final text = ptr.cast<Utf8>().toDartString(length: len);
       freeBuffer(ptr, len);
       if (text.isEmpty) return [];
-      return text.split('\n');
+      if (text.trimLeft().startsWith('[')) {
+        return SpellIssue.parseJsonList(text);
+      }
+      return text
+          .split('\n')
+          .where((w) => w.isNotEmpty)
+          .map((word) => SpellIssue(word: word))
+          .toList();
     } finally {
       calloc.free(outPtr);
       calloc.free(outLen);

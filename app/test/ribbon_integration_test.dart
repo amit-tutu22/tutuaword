@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tutuaword/bridge/mock_native_engine.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
 import 'package:tutuaword/editor/editor_screen.dart';
 import 'package:tutuaword/ui/info_bar.dart';
 import 'package:tutuaword/ui/ribbon.dart';
 import 'package:tutuaword/ui/ribbon_tabs/design_tab.dart';
 import 'package:tutuaword/ui/ribbon_tabs/home_tab.dart';
+import 'package:tutuaword/ui/ribbon_tabs/mailings_tab.dart';
+import 'package:tutuaword/ui/ribbon_tabs/references_tab.dart';
 import 'package:tutuaword/ui/ribbon_tabs/review_tab.dart';
 import 'package:tutuaword/ui/ribbon_tabs/view_tab.dart';
 import 'package:tutuaword/ui/ribbon_widgets.dart';
@@ -273,15 +276,10 @@ void main() {
       expect(controller.zoom, greaterThan(1.0));
     });
 
-    testWidgets('Design tab disabled controls show Coming soon tooltip', (tester) async {
+    testWidgets('Design tab has no Coming soon placeholders', (tester) async {
       await pumpWide(tester, DesignTab(controller: controller));
 
-      // Theme gallery overflow chevron is still a placeholder.
-      final chevron = find.byIcon(Icons.chevron_right);
-      expect(chevron, findsOneWidget);
-      await tester.longPress(chevron);
-      await tester.pumpAndSettle();
-      expect(find.text(kComingSoonTooltip), findsOneWidget);
+      expect(find.byTooltip(kComingSoonTooltip), findsNothing);
     });
 
     testWidgets('Review tab shows Export PDF and accept/reject actions', (tester) async {
@@ -290,6 +288,46 @@ void main() {
       expect(find.text('Export\nPDF'), findsOneWidget);
       expect(find.byTooltip(kTrackChangeAcceptTooltip), findsOneWidget);
       expect(find.byTooltip(kTrackChangeRejectTooltip), findsOneWidget);
+    });
+
+    testWidgets('Review tab Accept All and Reject All update mock document', (tester) async {
+      final engine = MockDocumentEngine(initialText: '');
+      final tc = EditorController.forTest(engine: engine);
+      addTearDown(tc.dispose);
+      tc.toggleTrackChanges();
+      await engine.tryInsertTextAsync(engine.defaultRunId, 0, 'Tracked');
+
+      await pumpWide(tester, ReviewTab(controller: tc));
+      expect(find.byKey(const Key('accept_all_revisions')), findsOneWidget);
+      expect(find.byKey(const Key('reject_all_revisions')), findsOneWidget);
+
+      tc.acceptAllRevisions();
+      expect(tc.statusText, contains('Accepted all revisions'));
+
+      await engine.tryInsertTextAsync(engine.defaultRunId, 0, 'Again');
+      tc.rejectAllRevisions();
+      expect(tc.statusText, contains('Rejected all revisions'));
+    });
+
+    testWidgets('Mailings tab wires Next Record field insert', (tester) async {
+      await pumpWide(tester, MailingsTab(controller: controller));
+      expect(find.byKey(const Key('insert_next_record')), findsOneWidget);
+    });
+
+    testWidgets('References tab shows endnote and table of figures', (tester) async {
+      await pumpWide(tester, ReferencesTab(controller: controller));
+
+      expect(find.byKey(const Key('insert_endnote')), findsOneWidget);
+      expect(find.byKey(const Key('insert_table_of_figures')), findsOneWidget);
+      expect(find.byKey(const Key('insert_table_of_contents')), findsOneWidget);
+    });
+
+    testWidgets('Review tab shows smart assist controls', (tester) async {
+      await pumpWide(tester, ReviewTab(controller: controller));
+
+      expect(find.byKey(const Key('review_consistency')), findsOneWidget);
+      expect(find.byKey(const Key('review_audience_rewrite')), findsOneWidget);
+      expect(find.byKey(const Key('review_auto_alt_text')), findsOneWidget);
     });
 
     testWidgets('I-F01-S3-print-preview-toggle from View tab', (tester) async {

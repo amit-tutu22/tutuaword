@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:archive/archive.dart';
 import 'package:flutter/material.dart';
 import 'package:tutuaword/bridge/document_engine.dart';
+import 'package:tutuaword/bridge/spell_issue.dart';
 import 'package:tutuaword/bridge/document_io.dart';
 import 'package:tutuaword/bridge/document_properties.dart';
 import 'package:tutuaword/bridge/engine_types.dart';
@@ -951,7 +952,14 @@ class MockDocumentEngine implements DocumentEngine {
   }
 
   @override
-  Future<bool> tryPasteDocxAsync(String runId, int offset, Uint8List bytes) async => false;
+  Future<bool> tryPasteDocxAsync(String runId, int offset, Uint8List bytes) async {
+    final text = _plainTextFromDocx(bytes);
+    if (text == null || text.isEmpty) return false;
+    _pushUndo();
+    _insert(runId, offset, text);
+    _version++;
+    return true;
+  }
 
   @override
   Future<bool> deleteRangeAsync(String runId, int start, int end) async {
@@ -1249,6 +1257,8 @@ class MockDocumentEngine implements DocumentEngine {
 
   int _footnoteCount = 0;
   int _commentCount = 0;
+  final List<Map<String, dynamic>> _commentThreads = [];
+  Uint8List? _lastExportedSelectionDocx;
 
   static String _superscriptNumber(int n) {
     const supers = ['⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹'];
@@ -1267,6 +1277,55 @@ class MockDocumentEngine implements DocumentEngine {
     return true;
   }
 
+  int _endnoteCount = 0;
+
+  @override
+  Future<bool> insertEndnoteAsync({
+    required String runId,
+    required int offset,
+  }) async {
+    _pushUndo();
+    _endnoteCount++;
+    _insert(runId, offset, _romanNumeral(_endnoteCount));
+    _version++;
+    return true;
+  }
+
+  String _romanNumeral(int n) {
+    const values = [
+      (1000, 'm'),
+      (900, 'cm'),
+      (500, 'd'),
+      (400, 'cd'),
+      (100, 'c'),
+      (90, 'xc'),
+      (50, 'l'),
+      (40, 'xl'),
+      (10, 'x'),
+      (9, 'ix'),
+      (5, 'v'),
+      (4, 'iv'),
+      (1, 'i'),
+    ];
+    var remaining = n;
+    final buf = StringBuffer();
+    for (final (value, symbol) in values) {
+      while (remaining >= value) {
+        buf.write(symbol);
+        remaining -= value;
+      }
+    }
+    return buf.isEmpty ? 'i' : buf.toString();
+  }
+
+  @override
+  Future<bool> insertTableOfFiguresAsync({String? caretRunId}) async {
+    _pushUndo();
+    _text = '$_text\nTable of Figures\nFigure 1 Example\t1';
+    _version++;
+    return true;
+  }
+
   @override
   Future<bool> insertCommentAsync({
     required String runId,
@@ -1275,9 +1334,166 @@ class MockDocumentEngine implements DocumentEngine {
   }) async {
     _pushUndo();
     _commentCount++;
+    _commentThreads.add({
+      'comment_id': _commentCount - 1,
+      'resolved': false,
+      'messages': [
+        {
+          'author': 'Author',
+          'body': [
+            {
+              'runs': [
+                {'text': bodyText.isEmpty ? 'Comment' : bodyText},
+              ],
+            },
+          ],
+        },
+      ],
+    });
     _insert(runId, offset, '[C$_commentCount]');
     _version++;
     return true;
+  }
+
+  @override
+  Future<bool> applySpellReplacementAsync({
+    required int plainStart,
+    required int plainEnd,
+    required String replacement,
+  }) async {
+    final text = _fullDocumentText();
+    if (plainStart < 0 || plainEnd > text.length || plainStart >= plainEnd) {
+      return false;
+    }
+    _pushUndo();
+    final updated = text.replaceRange(plainStart, plainEnd, replacement);
+    _setFullDocumentText(updated);
+    _version++;
+    return true;
+  }
+
+  @override
+  Future<Uint8List?> exportSelectionDocxAsync({
+    required String startRunId,
+    required int startOffset,
+    required String endRunId,
+    required int endOffset,
+  }) async {
+    final selected = _selectedText(startRunId, startOffset, endRunId, endOffset);
+    if (selected.isEmpty) return null;
+    _lastExportedSelectionDocx = _minimalDocxBytes(selected);
+    return _lastExportedSelectionDocx;
+  }
+
+  @override
+  String? getCommentsJson() {
+    if (_commentThreads.isEmpty) return '[]';
+    return jsonEncode(_commentThreads);
+  }
+
+  @override
+  Future<bool> replyToCommentAsync({
+    required int commentId,
+    required String bodyText,
+  }) async {
+    final thread = _commentThreads.cast<Map<String, dynamic>?>().firstWhere(
+          (t) => t?['comment_id'] == commentId,
+          orElse: () => null,
+        );
+    if (thread == null) return false;
+    (thread['messages'] as List).add({
+      'author': 'Author',
+      'body': [
+        {
+          'runs': [
+            {'text': bodyText},
+          ],
+        },
+      ],
+    });
+    _version++;
+    return true;
+  }
+
+  @override
+  Future<bool> resolveCommentAsync({
+    required int commentId,
+    required bool resolved,
+  }) async {
+    for (final thread in _commentThreads) {
+      if (thread['comment_id'] == commentId) {
+        thread['resolved'] = resolved;
+        _version++;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  String _fullDocumentText() => _text;
+
+  void _setFullDocumentText(String text) {
+    _text = text;
+  }
+
+  String _selectedText(
+    String startRunId,
+    int startOffset,
+    String endRunId,
+    int endOffset,
+  ) {
+    if (startRunId == endRunId) {
+      final buf = _bufferForRun(startRunId);
+      final start = startOffset.clamp(0, buf.length);
+      final end = endOffset.clamp(start, buf.length);
+      return buf.substring(start, end);
+    }
+    return selectedTextFromRuns(startRunId, startOffset, endRunId, endOffset);
+  }
+
+  String selectedTextFromRuns(
+    String startRunId,
+    int startOffset,
+    String endRunId,
+    int endOffset,
+  ) {
+    final start = _bufferForRun(startRunId);
+    final end = _bufferForRun(endRunId);
+    return '${start.substring(startOffset.clamp(0, start.length))}${end.substring(0, endOffset.clamp(0, end.length))}';
+  }
+
+  Uint8List _minimalDocxBytes(String text) {
+    final escaped = text
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;');
+    final documentXml =
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:body><w:p><w:r><w:t>$escaped</w:t></w:r></w:p></w:body></w:document>';
+    final contentTypes =
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Override PartName="/word/document.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+        '</Types>';
+    final archive = Archive()
+      ..addFile(ArchiveFile('[Content_Types].xml', contentTypes.length, contentTypes.codeUnits))
+      ..addFile(ArchiveFile('word/document.xml', documentXml.length, documentXml.codeUnits));
+    return Uint8List.fromList(ZipEncoder().encode(archive)!);
+  }
+
+  String? _plainTextFromDocx(Uint8List bytes) {
+    try {
+      final archive = ZipDecoder().decodeBytes(bytes);
+      final doc = archive.findFile('word/document.xml');
+      if (doc == null) return null;
+      final xml = utf8.decode(doc.content as List<int>);
+      final matches = RegExp(r'<w:t[^>]*>([^<]*)</w:t>').allMatches(xml);
+      return matches.map((m) => m.group(1) ?? '').join();
+    } catch (_) {
+      return null;
+    }
   }
 
   @override
@@ -1551,11 +1767,14 @@ class MockDocumentEngine implements DocumentEngine {
     required String runId,
     required int offset,
     required String fieldType,
+    String? mergeName,
   }) async {
     _pushUndo();
     final display = switch (fieldType.toLowerCase()) {
       'page' => '1',
       'date' => 'January 1, 2026',
+      'next' => '<<Next Record>>',
+      'if' => mergeName == null ? '<<IF>>' : '<<IF $mergeName>>',
       _ => '[field]',
     };
     if (offset == 0 && _bufferForRun(runId).isEmpty) {
@@ -2136,13 +2355,24 @@ class MockDocumentEngine implements DocumentEngine {
 
   @override
   List<String>? spellCheckMisspellings() {
-    final found = <String>[];
+    final issues = spellCheckIssues();
+    return issues?.map((issue) => issue.word).toList();
+  }
+
+  @override
+  List<SpellIssue>? spellCheckIssues() {
+    final found = <SpellIssue>[];
     final seen = <String>{};
     for (final match in RegExp(r"[A-Za-z']+").allMatches(_text)) {
       final word = match.group(0)!;
       final lower = word.toLowerCase();
       if (!_spellWords.contains(lower) && seen.add(word)) {
-        found.add(word);
+        final suggestions = switch (lower) {
+          'teh' => const ['the'],
+          'recieved' => const ['received'],
+          _ => const <String>[],
+        };
+        found.add(SpellIssue(word: word, suggestions: suggestions));
       }
     }
     return found;
@@ -2598,6 +2828,15 @@ class _MockBuiltinStyles {
         'alignment': 'Center',
         'space_before': 3.0,
         'space_after': 3.0,
+      },
+    ),
+    'No Spacing': _ResolvedStyle(
+      charFormat: {..._baseChar, 'font_size': 12.0, 'bold': false, 'italic': false},
+      paraFormat: {
+        ..._basePara,
+        'space_before': 0.0,
+        'space_after': 0.0,
+        'line_spacing': 1.0,
       },
     ),
   };

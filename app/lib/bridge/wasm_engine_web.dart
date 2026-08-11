@@ -11,6 +11,7 @@ import 'package:tutuaword/bridge/find_format_filter.dart';
 import 'package:tutuaword/bridge/find_match.dart';
 import 'package:tutuaword/bridge/native_event_router.dart';
 import 'package:tutuaword/bridge/print_layout_settings.dart';
+import 'package:tutuaword/bridge/spell_issue.dart';
 import 'package:tutuaword/bridge/wasm_interop.dart';
 import 'package:tutuaword/editor/doc_range.dart';
 
@@ -810,14 +811,54 @@ class WasmEngine {
     required String runId,
     required int offset,
     required String fieldType,
+    String? mergeName,
   }) =>
-      enqueueEdit(() => _enqueueNamed('insert_field', [runId, offset, fieldType]));
+      enqueueEdit(() => _enqueueNamed('insert_field', [
+            runId,
+            offset,
+            mergeName == null ? fieldType : 'if:$mergeName',
+          ]));
+
+  Future<bool> applySpellReplacementAsync({
+    required int plainStart,
+    required int plainEnd,
+    required String replacement,
+  }) async =>
+      false;
+
+  Future<Uint8List?> exportSelectionDocxAsync({
+    required String startRunId,
+    required int startOffset,
+    required String endRunId,
+    required int endOffset,
+  }) async =>
+      null;
+
+  String? getCommentsJson() => '[]';
+
+  Future<bool> replyToCommentAsync({
+    required int commentId,
+    required String bodyText,
+  }) async =>
+      false;
+
+  Future<bool> resolveCommentAsync({
+    required int commentId,
+    required bool resolved,
+  }) async =>
+      false;
 
   Future<bool> insertFootnoteAsync({
     required String runId,
     required int offset,
   }) =>
       enqueueEdit(() => _enqueueNamed('insert_footnote', [runId, offset]));
+
+  Future<bool> insertEndnoteAsync({
+    required String runId,
+    required int offset,
+  }) =>
+      enqueueEdit(() => _enqueueNamed('insert_endnote', [runId, offset]));
 
   Future<bool> insertCommentAsync({
     required String runId,
@@ -830,6 +871,9 @@ class WasmEngine {
 
   Future<bool> insertTableOfContentsAsync({String? caretRunId}) =>
       enqueueEdit(() => _enqueueNamed('insert_table_of_contents', [caretRunId ?? '']));
+
+  Future<bool> insertTableOfFiguresAsync({String? caretRunId}) =>
+      enqueueEdit(() => _enqueueNamed('insert_table_of_figures', [caretRunId ?? '']));
 
   Future<bool> addBibliographySourceAsync({
     required String key,
@@ -1139,10 +1183,22 @@ class WasmEngine {
   Future<bool> redoEditAsync() => enqueueEdit(() => _enqueueNamed('redo', []));
 
   List<String>? spellCheckMisspellings() {
+    final issues = spellCheckIssues();
+    return issues?.map((issue) => issue.word).toList();
+  }
+
+  List<SpellIssue>? spellCheckIssues() {
     try {
       final text = _invoke('spell_check', []) as String;
       if (text.isEmpty) return [];
-      return text.split('\n');
+      if (text.trimLeft().startsWith('[')) {
+        return SpellIssue.parseJsonList(text);
+      }
+      return text
+          .split('\n')
+          .where((w) => w.isNotEmpty)
+          .map((word) => SpellIssue(word: word))
+          .toList();
     } catch (_) {
       return null;
     }

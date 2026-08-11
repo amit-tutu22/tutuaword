@@ -57,7 +57,31 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 | **W4** | F11, F12, F13, F14 | Shapes/charts/equations/SmartArt (preserve-first) |
 | **W5** | F28, F20, F21, F22, F26, F27 | AI, collab, a11y, security, plugins, cloud |
 
-**Explicit non-goals:** binary `.doc` import (convert externally); VBA macro execution (preserve only).
+**Explicit non-goals:** binary `.doc` import (convert externally); VBA macro **execution** (preserve `vbaProject.bin` on passthrough only).
+
+### Nine-layer Word parity stack
+
+Delivery follows a strict dependency order (details in [roadmap.md](roadmap.md)):
+
+| Layer | Features (F01–F28) | Status |
+|-------|-------------------|--------|
+| L1 DOCX | F23 | S1 shipped; endnote/ToF OOXML + fldSimple RT done (R+1 field-code ToF tracked) |
+| L2 Layout | F07, F08 | S1–S2 partial; CI baseline fingerprints seeded (Word PNG gate open) |
+| L3 Editing | F02–F06, F12, F18, F26.S2 | S0–S2 strong; clipboard DOCX + mail NEXT/IF (R+2) |
+| L4 Tables/images | F09, F10 | Complete with nested-table pagination polish |
+| L5 Review | F17, F28, F22.S4 | UAT polish complete (spell apply, TC ribbon, comments pane) |
+| L6 Automation API | **F26.S4** (new) | Planned post-L5 UAT |
+| L7 Macro preservation | F26 + ADR-0008 | Passthrough shipped; corpus audit |
+| L8 Enterprise | F22.S5 | IRM deferred |
+| L9 VBA execution | — | **Deferred** — see [ADR-0012](adr/0012-vba-execution-strategy.md) |
+
+**Note:** F26.S1–S3 (form fields, mail merge, WASM plugins) ≠ F26.S4 (public document automation API). F26 does **not** mean VBA execution.
+
+### Current release scope (UAT)
+
+**Deferred to next release (online / new engine):** **F20 Collaboration**, **F27 Cloud** only. See [ui-functionality-audit.md](ui-functionality-audit.md) “Next release” table.
+
+**Shipped in this release:** Endnote, Table of Figures, Envelopes/Labels, mail Rules (Next Record + IF field), PDF structural bold/italic fonts, spell suggestions UX, smart AI features (consistency checker, audience rewrite, auto alt-text).
 
 ---
 
@@ -90,7 +114,7 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 | F23 File Formats | W0 | P1–P3 | S1–S2 | `tw-docx`, `tw-odt`, `tw-html`, `tw-pdf` |
 | F24 Templates | W3 | P3 | S1 | `tw-model/theme`, template gallery |
 | F25 Printing | W3 | P2 | S2 | `tw-pdf`, platform print |
-| F26 Macros & Automation | W5 | P6 | — | `tw-plugin`, mail merge |
+| F26 Macros & Automation | W5 | P6 | L6–L7 | `tw-plugin`, `tw-automation`, `tw-policy`, mail merge |
 | F27 Cloud | W5 | P5–P6 | S4 | sync service |
 | F28 AI | W5 | P4 | — | `tw-ai`, ADR-0010 |
 
@@ -123,7 +147,7 @@ Build in **waves** so drawing/cloud features do not block the edit loop.
 | F23 File Formats | **Complete** | S1–S4; binary `.doc` / EPUB deferred |
 | F24 Templates | **Complete** | S1–S4 |
 | F25 Printing | **Complete** | S1–S4 |
-| F26 Macros & Automation | **Complete** | S1–S3 |
+| F26 Macros & Automation | **Complete** | S1–S4 |
 | F27 Cloud | **Missing** | S1–S4 not started |
 | F28 AI | **Complete** | S1–S6 |
 
@@ -1680,7 +1704,7 @@ Platform backends: web `speechSynthesis`, macOS `NSSpeechSynthesizer` (`tutuawor
 
 **Scope:** Plugin support, mail merge, form fields.
 
-**Out of scope:** VBA / scripting API execution — preserve `vbaProject.bin` only.
+**Out of scope:** VBA / scripting API **execution** — preserve `vbaProject.bin` via OPC passthrough (ADR-0008).
 
 ### Baseline status: **Complete** — F26.S1–S3 form fields + mail merge + WASM plugin host ✅.
 
@@ -1752,6 +1776,22 @@ Platform backends: web `speechSynthesis`, macOS `NSSpeechSynthesizer` (`tutuawor
 | `S-F26-S3-plugin-registry-churn` | Stress | 200 Flutter registry install/invoke | ✅ `f26_s3_plugins_test.dart` |
 
 **Exit:** Sample WASM plugin reads document / inserts text via host imports; capability denial when `document.edit` not granted; Plugins dialog manages lifecycle.
+
+### F26.S4 — Document automation API (Layer 6) ✅
+
+**Deliverables:** Versioned JSON automation envelope (`schema_version: 1`); `tw-automation` crate + `tw-automation-cli` headless binary; policy hooks via `tw-policy`; subset: new/open DOCX, dispatch Command JSON, plain text, export DOCX/PDF.
+
+**Out of scope:** VBA/COM parity — programmatic Commands only.
+
+| Test ID | Type | Spec | Status |
+|---------|------|------|--------|
+| `U-F26-S4-envelope-roundtrip` | Unit | JSON envelope serde | ✅ `tw-automation/src/schema.rs` |
+| `U-F26-S4-dispatch-insert-text` | Unit | Headless insert + plain text | ✅ `tw-automation/src/lib.rs` |
+| `U-F26-S4-policy-blocks-pdf` | Unit | Policy denies export PDF | ✅ `tw-automation/src/lib.rs` |
+| `U-F26-S4-policy-plugin-filter` | Unit | Denied plugin capabilities | ✅ `tw-policy/src/lib.rs` |
+| `I-F26-S4-cli-new-document` | Integration | CLI runs `new_document` envelope | Manual / CI optional |
+
+**Exit:** External integrators can automate open → edit → export without Flutter; schema version frozen at 1 until breaking change review.
 
 ---
 

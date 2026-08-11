@@ -13,9 +13,12 @@ use tw_edit::{
     bullet_list_command_for_caret,
     continue_numbering_command_for_caret, delete_table_column_command_for_caret,
     delete_table_row_command_for_caret, ensure_header_footer_command_for,
-    heading1_command_for_caret, insert_field_command_for, insert_footnote_command_for,
+    heading1_command_for_caret, insert_field_command_for, insert_field_command_with_merge,
+    insert_footnote_command_for,
+    insert_endnote_command_for,
     insert_comment_command_for,
-    insert_table_of_contents_command_for,
+    reply_to_comment_command_for, resolve_comment_command_for,
+    insert_table_of_contents_command_for, insert_table_of_figures_command_for,
     insert_bibliography_command_for, insert_bookmark_command_for,
     insert_hyperlink_command_for,
     insert_cross_reference_command_for, insert_index_command_for,
@@ -1082,8 +1085,26 @@ impl Session {
         run_id: NodeId,
         offset: usize,
         field_type: FieldType,
+        merge_name: Option<String>,
     ) -> Option<u64> {
-        self.apply(insert_field_command_for(run_id, offset, field_type))
+        self.apply(insert_field_command_with_merge(
+            run_id,
+            offset,
+            field_type,
+            merge_name,
+        ))
+    }
+
+    pub fn export_selection_docx(&self, range: tw_edit::DocRange) -> Option<u64> {
+        self.send_command(BridgeCommand::ExportSelectionDocx { range })
+    }
+
+    pub fn reply_to_comment(&self, comment_id: i32, body_text: String) -> Option<u64> {
+        self.apply(reply_to_comment_command_for(comment_id, body_text))
+    }
+
+    pub fn resolve_comment(&self, comment_id: i32, resolved: bool) -> Option<u64> {
+        self.apply(resolve_comment_command_for(comment_id, resolved))
     }
 
     pub fn insert_form_field_at(
@@ -1138,6 +1159,10 @@ impl Session {
         self.apply(insert_footnote_command_for(run_id, offset))
     }
 
+    pub fn insert_endnote_at(&self, run_id: NodeId, offset: usize) -> Option<u64> {
+        self.apply(insert_endnote_command_for(run_id, offset))
+    }
+
     pub fn insert_comment_at(
         &self,
         run_id: NodeId,
@@ -1160,6 +1185,23 @@ impl Session {
             .collect();
         let command =
             insert_table_of_contents_command_for(doc, caret_run_id, page_numbers)?;
+        drop(cache);
+        self.apply(command)
+    }
+
+    pub fn insert_table_of_figures_at(
+        &self,
+        caret_run_id: Option<NodeId>,
+    ) -> Option<u64> {
+        let cache = self.layout_cache.read();
+        let doc = cache.document();
+        let page_numbers: Vec<u32> = cache
+            .document_captions_with_pages()
+            .into_iter()
+            .map(|(_, page)| page.max(1))
+            .collect();
+        let command =
+            insert_table_of_figures_command_for(doc, caret_run_id, page_numbers)?;
         drop(cache);
         self.apply(command)
     }

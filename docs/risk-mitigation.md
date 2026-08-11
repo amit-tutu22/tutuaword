@@ -6,6 +6,26 @@ Related: [roadmap.md](roadmap.md), [phase-plan.md](phase-plan.md), [feature-phas
 
 ---
 
+## Nine-layer stack ↔ S0–S5 crosswalk
+
+Canonical delivery order (see [roadmap.md](roadmap.md)):
+
+| Layer | Delivery stages | Primary risk gates |
+|-------|-----------------|-------------------|
+| L1 DOCX compatibility | S1 continuous | Corpus import, Tier A round-trip, passthrough survival |
+| L2 Layout | S1–S2 | Word screenshot baselines; HF/sections/floats |
+| L3 Editing | S0–S2 | Command inverse; clipboard DOCX fragments |
+| L4 Tables / images | S1–S2 | Nested tables, gridSpan/vMerge, PNG/JPEG/SVG |
+| L5 Review | S2–S3 | TC ladder (c); spell suggestions; comment UI |
+| L6 Automation API | After L5 UAT | F26.S4 schema semver; headless CLI |
+| L7 Macro preservation | Tier C with L1 | VBA parts survive edit + save; never execute |
+| L8 Enterprise policies | P6 / post-L6 | IRM passthrough; policy hooks on API/plugins/AI |
+| L9 VBA execution | **Deferred** | Strategy D (preserve-only) until explicit business need |
+
+**Rules:** S0–S5 describe *Word fidelity* staging (layers 1–5). Layers 6–9 are product surfaces that depend on S1–S2 stability but are not substitutes for DOCX/layout gates.
+
+---
+
 ## Fidelity SLA (one bar)
 
 | Metric | Target | How measured |

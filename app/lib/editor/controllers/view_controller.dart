@@ -113,8 +113,9 @@ class ViewController extends ChangeNotifier {
   /// Fit a single page in the current viewport.
   void zoomToOnePage({required double pageWidth, required double pageHeight}) {
     _pageColumns = 1;
-    final pad = 48.0;
-    final byWidth = (_viewportWidth - pad) / pageWidth;
+    const pad = 48.0;
+    const gap = 24.0;
+    final byWidth = (_viewportWidth - pad) / (pageWidth + gap);
     final byHeight = (_viewportHeight - pad) / pageHeight;
     setZoom(byWidth < byHeight ? byWidth : byHeight);
   }
@@ -122,9 +123,10 @@ class ViewController extends ChangeNotifier {
   /// Fit two pages side-by-side in the current viewport.
   void zoomToMultiplePages({required double pageWidth, required double pageHeight}) {
     _pageColumns = 2;
-    final pad = 64.0;
-    final gap = 24.0;
-    final byWidth = (_viewportWidth - pad) / (pageWidth * 2 + gap);
+    const pad = 64.0;
+    const gap = 24.0;
+    // Each page adds horizontal padding of [gap]; two columns → 2× gap total.
+    final byWidth = (_viewportWidth - pad) / (pageWidth * 2 + gap * 2);
     final byHeight = (_viewportHeight - pad) / pageHeight;
     setZoom(byWidth < byHeight ? byWidth : byHeight);
   }

@@ -2,7 +2,7 @@
 
 This document is the single source of truth for **Flutter ribbon, menu, and status-bar wiring** — what actually works today, what is partially wired, and what is an intentional placeholder. Use it to catch controls that *look* enabled but do nothing (the font/size dropdown bug class).
 
-**Last reviewed:** 2026-08-07  
+**Last reviewed:** 2026-08-10  
 **Scope:** `app/lib/ui/**`, `app/lib/editor/editor_controller.dart`, `app/lib/editor/controllers/**`, `app/lib/editor/editor_menu.dart`
 
 Related: [Long-Tail Gaps](long-tail-gaps.md) covers deferred **Rust/backend** work; this doc covers **UI ↔ engine** wiring.
@@ -14,11 +14,34 @@ Related: [Long-Tail Gaps](long-tail-gaps.md) covers deferred **Rust/backend** wo
 | Category | Approx. count | Risk |
 |----------|---------------|------|
 | **P0 — Broken / misleading** (looks enabled, fails silently) | 0 | — |
-| **P1 — Partial** (write OK, read/sync missing; or engine exists, UI not wired) | ~2 | Low |
-| **P2 — Intentional placeholders** (disabled / grayed) | ~66 | Low |
-| **Working end-to-end** | ~50 controls | — |
+| **P1 — Partial** (write OK, read/sync missing; or engine exists, UI not wired) | ~1 | Low |
+| **P2 — Intentional placeholders** (disabled / grayed) | ~5 | Low |
+| **Working end-to-end** | ~90 controls | — |
 
-P0 remains **0**: `rg 'onPressed: \(\) \{\}' app/lib` and `rg 'onSelected: \(\) \{\}' app/lib` both return no matches.
+P0 remains **0**: `rg 'onPressed: \(\) \{\}' app/lib` and `rg 'onSelected: \(\) \{\}' app/lib` both return no matches. Primary ribbon tabs have **no hard-coded `onPressed: null` stubs**; remaining disabled controls are **contextual** (e.g. image tools without selection, Finish Mail Merge without data).
+
+### Next release (deferred from current UAT)
+
+| Area | Notes |
+|------|-------|
+| **F20 Collaboration** | CRDT / live co-editing — requires online |
+| **F27 Cloud** | Sync, backup, share links |
+
+**Shipped this release:** Endnote, Table of Figures, Envelopes/Labels, mail Rules (Next Record + IF field), PDF structural bold/italic fonts, spell suggestions UX, smart AI features (consistency checker, audience rewrite, auto alt-text). **VBA:** macro parts preserved on DOCX passthrough; execution not supported.
+
+### UAT scope by parity layer
+
+| Layer | UAT-ready? | Notes |
+|-------|------------|-------|
+| L1 DOCX | Yes (scoped) | Real DOCX open/edit/save; corpus gates; VBA preserve |
+| L2 Layout | Partial | Core pagination OK; Word baseline parity not claimed |
+| L3 Editing | Yes | Typing, format, undo, most ribbon edits |
+| L4 Tables/images | Yes (scoped) | Insert/merge/common wrap; EMF/OLE placeholders |
+| L5 Review | Yes (scoped) | Spell + suggestions with chip apply, TC accept/reject/all, comments pane |
+| L6 Automation API | No | Internal FFI only until F26.S4 |
+| L7 Macro preservation | Yes (test) | Preserve on save; no execution |
+| L8 Enterprise | No | IRM / tenant policy deferred |
+| L9 VBA execution | No | Explicit non-goal |
 
 ---
 
@@ -78,27 +101,25 @@ It is invoked from:
 |---------|--------|-------|
 | Paste | **Working** | Engine paste via DocRange caret |
 | Cut / Copy | **Working** | DocRange + engine in glyph mode (R2.4) |
-| Format Painter | P2 | Wired — pickup / paint next selection |
+| Format Painter | Working | Pickup / paint next selection |
 | Font family dropdown | **Working** | Menu + `setFontFamily` (fixed 2026-08-05) |
 | Font size dropdown | **Working** | Menu + `setFontSize` |
 | Increase / decrease font | Working | |
-| Change case | P2 | Disabled |
+| Change case | Working | Menu → `applyChangeCase` |
 | Clear formatting | **Working** | `clearFormatting` → `clearFormatAsync` + `syncFromCaret` |
 | Bold / Italic / Underline | **Working** | Apply + read sync via `syncFromCaret` |
 | Strikethrough / Sub / Super | **Working** | Apply + read sync via `syncFromCaret` |
 | All caps / Small caps / Hidden / Ligatures | **Working** | Apply + read sync via `syncFromCaret` |
-| Font color / Highlight | **Working** | `ribbon_color_picker.dart` (`RibbonColorButton`, `WordColorPalettePanel`) → `setFontColor` / `setHighlight` / `clearHighlight` |
+| Font color / Highlight | **Working** | `ribbon_color_picker.dart` |
 | Bullets / Numbering | Working | |
-| Decrease / increase indent | **Working** | `decreaseIndent` / `increaseIndent` → `_applyParaFormatJson`; also Tab / Shift+Tab in `glyph_editor_surface.dart` |
-| Sort | P2 | Disabled |
-| Show ¶ (eye) | P2 | Wired — toggle formatting marks |
-| Align L/C/R/Justify | **Working** | Apply + read sync on caret move (not immediately after apply — see anti-pattern 3) |
-| Line spacing / Shading & borders | P2 | Disabled |
-| Style: Normal | **Working** | `applyNormalStyle` wired |
-| Style: No Spacing | P2 | Disabled |
-| Style: Heading 1 | Working | |
-| Styles gallery chevron / pane | P2 | Disabled |
-| Add-ins | P2 | Wired — opens Plugins manager (F26.S3) |
+| Decrease / increase indent | **Working** | `decreaseIndent` / `increaseIndent` |
+| Sort | Working | Menu → `sortParagraphs` |
+| Show ¶ (eye) | Working | Toggle formatting marks |
+| Align L/C/R/Justify | **Working** | Apply + read sync on caret move |
+| Line spacing / Shading & borders | Working | Home ribbon dialogs |
+| Style: Normal / No Spacing / Headings | Working | `applyParagraphStyle` |
+| Styles Pane | Working | `toggleStyleInspector` |
+| Add-ins | Working | Opens Plugins manager (F26.S3) |
 
 ### Insert (`insert_tab.dart`)
 
@@ -111,19 +132,47 @@ It is invoked from:
 | Change / Rotate / Caption / Compress picture | Working | Enabled when an image is selected (tooltip: select first) |
 | Shapes, Header, Footer, Page Number, Text Box, Symbol | Working | See feature phases; audit row was stale |
 
-### Design / Layout / References / Mailings
+### Design (`design_tab.dart`)
 
-These tabs receive **no** `EditorController` (`ribbon.dart`). Entire tabs are visual shells; all controls use `onPressed: null` (correctly grayed). **P2** until tabs accept controller + engine commands.
+| Control | Status | Notes |
+|---------|--------|-------|
+| Themes gallery | Working | `applyDocumentTheme` |
+| Watermark / Page Color / Page Borders | Working | |
+
+### Layout (`layout_tab.dart`)
+
+| Control | Status | Notes |
+|---------|--------|-------|
+| Page Setup / Breaks / Table / Wrap | Working | |
+| Indent −/+ | Working | `decreaseIndent` / `increaseIndent` |
+| Space Before / After | Working | Nudge +6 pt via `increaseSpaceBefore` / `increaseSpaceAfter` |
+| Tabs | Working | `showTabStopsDialog` |
+
+### References (`references_tab.dart`)
+
+| Control | Status | Notes |
+|---------|--------|-------|
+| TOC / Footnote / Citation / Bibliography / Bookmark / Cross-ref / Index | Working | |
+| Insert Caption | Working | `insertSelectedImageCaption` when image selected |
+
+### Mailings (`mailings_tab.dart`)
+
+| Control | Status | Notes |
+|---------|--------|-------|
+| Start / Finish Mail Merge / Insert Merge Field | Working | Finish disabled until CSV loaded |
 
 ### Review (`review_tab.dart`)
 
 | Control | Status | Notes |
 |---------|--------|-------|
-| Spelling & Grammar | Working | `spellCheckDocument` |
+| Spelling & Grammar | Working | `proofDocument` |
 | Track Changes | Working | Toggle flag |
-| Accept / Reject | P1 | Wired to `acceptAllRevisions` / `rejectAllRevisions`; per-change nav still open |
-| Export PDF | Working | `controller.exportPdf` (also in File menu) |
-| Translate, Thesaurus, Language, New Comment, Compare, Restrict Editing | P2 | Disabled |
+| Accept / Reject / Next / Previous | Working | Per-change at caret + navigation |
+| Export PDF | Working | `controller.exportPdf` |
+| Translate / Thesaurus / Language | Working | AI translate + thesaurus + proofing language dialog |
+| New Comment | Working | Dialog → `insertComment` |
+| Compare | Working | File picker → `compareWithDocumentPicker` |
+| Restrict Editing | Working | `toggleRestrictEditing` |
 
 ### View (`view_tab.dart`) + Status bar (`status_bar.dart`)
 
@@ -142,9 +191,8 @@ These tabs receive **no** `EditorController` (`ribbon.dart`). Entire tabs are vi
 |---------|--------|-------|
 | Save | Working | |
 | Undo / Redo | Working | |
-| Print | Working | `togglePrintPreview` |
-| Home (QAT) | P2 | Disabled (`onPressed: null`) |
-| Search / More | P2 | Disabled |
+| Print | Working | |
+| Search (Find) | Working | `openFindPane` |
 
 ### macOS menu (`editor_menu.dart`)
 
@@ -164,10 +212,9 @@ Backend capability exists (or partially exists) but Flutter has no caller:
 
 | Feature | Rust / FFI | Flutter |
 |---------|------------|---------|
-| Per-change track-change navigation | Accept/reject **all** only | Review buttons accept/reject all; no next/previous change |
-| Line spacing, shading, borders | `tw_apply_para_format` covers alignment + indent only | Ribbon buttons disabled |
+| Proofing language → engine spell dict | Partial | UI status + translate default only |
 
-Closed since the last review: page break (`tw_insert_page_break` + Insert tab), paragraph indent (`tw_apply_para_format` + ribbon and Tab/Shift+Tab), PDF export (File menu + Review tab), format-at-caret read (`fetchCaretFormat` → `syncFromCaret`).
+Closed since the last review: page break, paragraph indent, PDF export, format-at-caret read, Design/Layout/References/Mailings wiring, View modes, Cover Page, Change Case, Sort, Compare file picker, comment dialog.
 
 See [Long-Tail Gaps](long-tail-gaps.md) for PDF fonts, Hunspell, plugins, AI, etc.
 
@@ -245,10 +292,10 @@ rg 'onPressed: null' app/lib/ui
 |------|------|
 | `app/lib/ui/ribbon_tabs/home_tab.dart` | Home ribbon |
 | `app/lib/ui/ribbon_tabs/insert_tab.dart` | Insert ribbon |
-| `app/lib/ui/ribbon_tabs/design_tab.dart` | Design shell |
-| `app/lib/ui/ribbon_tabs/layout_tab.dart` | Layout shell |
-| `app/lib/ui/ribbon_tabs/references_tab.dart` | References shell |
-| `app/lib/ui/ribbon_tabs/mailings_tab.dart` | Mailings shell |
+| `app/lib/ui/ribbon_tabs/design_tab.dart` | Design ribbon |
+| `app/lib/ui/ribbon_tabs/layout_tab.dart` | Layout ribbon |
+| `app/lib/ui/ribbon_tabs/references_tab.dart` | References ribbon |
+| `app/lib/ui/ribbon_tabs/mailings_tab.dart` | Mailings ribbon |
 | `app/lib/ui/ribbon_tabs/review_tab.dart` | Review ribbon |
 | `app/lib/ui/ribbon_tabs/view_tab.dart` | View ribbon |
 | `app/lib/ui/ribbon_widgets.dart` | `RibbonDropdown`, buttons, style cards |
@@ -272,4 +319,4 @@ rg 'onPressed: null' app/lib/ui
 | 2026-08-05 | Phase B: Caret format sync; clear formatting; indent; page break FFI |
 | 2026-08-05 | Phase C: Coming soon tooltips on placeholders; PDF export UI; track-change accept/reject documented in Long-Tail Gaps |
 | 2026-08-07 | Accuracy pass against code + green suites (Rust 401, Flutter 179): R2.4 controller decomposition (`FormattingController.syncFromCaret`) closes the write-only ribbon gap; F03.S2 font color / highlight landed via `ribbon_color_picker.dart`; clear formatting, indent, and page break confirmed wired. Anti-patterns 1–3 marked resolved; P1 count corrected ~22 → ~2 |
-| 2026-08-07 | `_applyParaFormatJson` now calls `syncFromCaret()` after apply, so alignment and indent read back immediately instead of staying optimistic until the next caret move |
+| 2026-08-10 | Release closeout: wired Layout indent/spacing, Home Change Case/Sort/No Spacing, Review Comment/Compare, References Caption; removed Endnote/ToF/Envelopes/Labels/Rules/chevrons/More; F20/F27 marked next release |

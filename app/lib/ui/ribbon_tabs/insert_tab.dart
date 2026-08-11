@@ -287,7 +287,12 @@ class InsertTab extends StatelessWidget {
             showDivider: false,
             child: Row(
               children: [
-                RibbonLargeButton(icon: Icons.text_fields, label: 'Text\nBox', onPressed: null),
+                RibbonLargeButton(
+                  key: const Key('insert_text_box_text_group'),
+                  icon: Icons.text_fields,
+                  label: 'Text\nBox',
+                  onPressed: () => controller.insertTextBox(),
+                ),
                 Builder(
                   builder: (context) => RibbonLargeButton(
                     key: const Key('insert_form_field'),

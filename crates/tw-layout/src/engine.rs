@@ -1325,7 +1325,7 @@ impl LayoutEngine {
         // identical to the previous pass, so whatever was stale before still is and
         // whatever was valid before still is.
 
-        self.last_layout = DocumentLayout { pages };
+        self.last_layout = DocumentLayout { pages: append_endnotes_to_last_page(pages, doc, &mut self.shaper, &mut self.atlas, tab_interval) };
         self.last_layout.clone()
     }
 
@@ -1634,6 +1634,122 @@ fn footnote_ids_on_page(page_boxes: &[LayoutBox], doc: &Document) -> Vec<i32> {
         }
     }
     ids
+}
+
+fn append_endnotes_to_last_page(
+    mut pages: Vec<PageLayout>,
+    doc: &Document,
+    shaper: &mut TextShaper,
+    atlas: &mut GlyphAtlas,
+    tab_interval: f32,
+) -> Vec<PageLayout> {
+    if doc.endnotes.is_empty() {
+        return pages;
+    }
+    let page_count = pages.len() as u32;
+    let Some(last_index) = pages.len().checked_sub(1) else {
+        return pages;
+    };
+    let page_index = pages[last_index].page_index;
+    let Some(last) = pages.get_mut(last_index) else {
+        return pages;
+    };
+    let format = doc
+        .sections
+        .last()
+        .map(|s| s.format.clone())
+        .unwrap_or_default();
+    let x = format.margin_left;
+    let content_width = format.page_width - format.margin_left - format.margin_right;
+    let margin_color = tw_model::Color::BLACK.to_argb();
+    let field_ctx = FieldEvalContext::for_page(page_index, page_count);
+
+    let mut y = format.page_height - format.margin_bottom;
+    let separator_color = tw_model::Color {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 255,
+    }
+    .to_argb();
+    last.boxes.push(LayoutBox::Rect {
+        x,
+        y,
+        width: content_width * 0.2,
+        height: 1.0,
+        color: separator_color,
+    });
+    y += 8.0;
+
+    let mut number = 1u32;
+    for endnote in &doc.endnotes {
+        let mut prefixed_blocks = endnote.blocks.clone();
+        if let Some(Block::Paragraph(para)) = prefixed_blocks.first_mut() {
+            let mut first = para.clone();
+            let prefix = format!("{} ", roman_numeral(number));
+            if let Some(run) = first.runs.first_mut() {
+                if let RunContent::Text(text) = &mut run.content {
+                    if !text.starts_with(&prefix) {
+                        text.insert_str(0, &prefix);
+                    }
+                }
+            }
+            prefixed_blocks[0] = Block::Paragraph(first);
+        }
+        number += 1;
+
+        let band = layout_margin_blocks(
+            doc,
+            &prefixed_blocks,
+            shaper,
+            atlas,
+            x,
+            y,
+            content_width,
+            tab_interval,
+            margin_color,
+            field_ctx,
+        );
+        for item in band {
+            if let LayoutBox::TextLine(line) = item {
+                y = line.y + line.ascent + line.descent + 4.0;
+                last.boxes.push(LayoutBox::TextLine(line));
+            }
+        }
+        y += 4.0;
+    }
+
+    pages
+}
+
+fn roman_numeral(mut n: u32) -> String {
+    const VALUES: [(u32, &str); 13] = [
+        (1000, "m"),
+        (900, "cm"),
+        (500, "d"),
+        (400, "cd"),
+        (100, "c"),
+        (90, "xc"),
+        (50, "l"),
+        (40, "xl"),
+        (10, "x"),
+        (9, "ix"),
+        (5, "v"),
+        (4, "iv"),
+        (1, "i"),
+    ];
+    let mut out = String::new();
+    for (value, symbol) in VALUES {
+        while n >= value {
+            out.push_str(symbol);
+            n -= value;
+        }
+    }
+    if out.is_empty() {
+        "i".into()
+    } else {
+        out
+    }
 }
 
 /// Right-margin markers for comment anchors (F17.S3).
@@ -2363,6 +2479,7 @@ fn split_paragraph_at_page_breaks(para: &tw_model::Paragraph) -> Vec<ParagraphSe
             }
             RunContent::InlineImage(_)
             | RunContent::FootnoteRef(_)
+            | RunContent::EndnoteRef(_)
             | RunContent::CitationRef(_)
             | RunContent::CommentRef(_)
             | RunContent::Bookmark(_)

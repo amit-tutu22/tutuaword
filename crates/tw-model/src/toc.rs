@@ -1,6 +1,7 @@
 //! Table of contents paragraph materialization (F16.S2).
 
 use crate::format::{ParaFormat, TabAlignment, TabStop};
+use crate::field::toc_field_data;
 use crate::nodes::{Block, Paragraph, Run, RunContent};
 use crate::outline::OutlineEntry;
 
@@ -16,8 +17,14 @@ pub const TOC_TAB_POSITION: f32 = 468.0;
 pub fn build_toc_blocks(entries: &[(OutlineEntry, u32)]) -> Vec<Block> {
     let mut blocks = Vec::with_capacity(entries.len() + 1);
 
-    let mut title = Paragraph::with_text(TOC_TITLE);
+    let mut title = Paragraph::new();
     title.format.space_after = Some(12.0);
+    title.runs = vec![Run {
+        id: crate::NodeId::new(),
+        format: Default::default(),
+        content: RunContent::Field(toc_field_data(TOC_TITLE)),
+        revision: None,
+    }];
     blocks.push(Block::Paragraph(title));
 
     for (entry, page) in entries {

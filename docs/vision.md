@@ -39,7 +39,7 @@ These are out of scope for the first 12 months:
 - **Spreadsheet engine.** Tables are in scope; a full Excel-compatible spreadsheet is not.
 - **Presentation engine.** PowerPoint export is a future feature; slide editing is not.
 - **Legacy `.doc` (binary) format.** Only OOXML (`.docx`) and open formats (ODT, Markdown, HTML, RTF) are supported initially.
-- **Macro/VBA support.** No execution of embedded macros or VBA scripts.
+- **Macro/VBA support.** No execution of embedded macros or VBA scripts; `vbaProject.bin` and related parts are **preserved** on DOCX import/export (Tier C passthrough).
 - **ActiveX controls.** Legacy embedded controls are preserved verbatim but not executed.
 - **100% Word feature parity.** The goal is 99% formatting compatibility on common document types, not replication of every legacy feature Word has accumulated over 30 years.
 

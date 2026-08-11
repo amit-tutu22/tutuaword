@@ -24,7 +24,7 @@ class ReviewTab extends StatelessWidget {
                   key: const Key('spell_check'),
                   icon: Icons.spellcheck,
                   label: 'Spelling &\nGrammar',
-                  onPressed: () => controller.proofDocument(),
+                  onPressed: () => controller.proofDocument(context),
                 ),
                 RibbonLargeButton(
                   key: const Key('check_accessibility'),
@@ -79,11 +79,21 @@ class ReviewTab extends StatelessWidget {
           ),
           RibbonGroup(
             label: 'Comments',
-            child: RibbonLargeButton(
-              key: const Key('insert_comment'),
-              icon: Icons.comment_outlined,
-              label: 'New\nComment',
-              onPressed: () => controller.insertComment(context),
+            child: Row(
+              children: [
+                RibbonLargeButton(
+                  key: const Key('insert_comment'),
+                  icon: Icons.comment_outlined,
+                  label: 'New\nComment',
+                  onPressed: () => controller.insertComment(context),
+                ),
+                RibbonLargeButton(
+                  key: const Key('comments_pane'),
+                  icon: Icons.forum_outlined,
+                  label: 'Comments\nPane',
+                  onPressed: () => controller.showCommentsPane(context),
+                ),
+              ],
             ),
           ),
           RibbonGroup(
@@ -124,6 +134,20 @@ class ReviewTab extends StatelessWidget {
                   tooltip: kTrackChangePreviousTooltip,
                   onPressed: controller.gotoPreviousRevision,
                 ),
+                RibbonIconButton(
+                  key: const Key('accept_all_revisions'),
+                  icon: Icons.done_all,
+                  label: 'Accept\nAll',
+                  tooltip: 'Accept all tracked changes',
+                  onPressed: controller.acceptAllRevisions,
+                ),
+                RibbonIconButton(
+                  key: const Key('reject_all_revisions'),
+                  icon: Icons.clear_all,
+                  label: 'Reject\nAll',
+                  tooltip: 'Reject all tracked changes',
+                  onPressed: controller.rejectAllRevisions,
+                ),
               ],
             ),
           ),
@@ -131,6 +155,37 @@ class ReviewTab extends StatelessWidget {
             label: 'AI',
             child: Row(
               children: [
+                Builder(
+                  builder: (context) => RibbonLargeButton(
+                    key: const Key('review_consistency'),
+                    icon: Icons.fact_check_outlined,
+                    label: 'Consistency',
+                    tooltip: 'Find inconsistent terms',
+                    onPressed: () => controller.openConsistencyChecker(context),
+                  ),
+                ),
+                Builder(
+                  builder: (context) => RibbonLargeButton(
+                    key: const Key('review_audience_rewrite'),
+                    icon: Icons.groups_outlined,
+                    label: 'Audience\nRewrite',
+                    tooltip: 'Rewrite selection for an audience',
+                    onPressed: () => controller.rewriteForAudience(context),
+                  ),
+                ),
+                Builder(
+                  builder: (context) => RibbonLargeButton(
+                    key: const Key('review_auto_alt_text'),
+                    icon: Icons.image_outlined,
+                    label: 'Auto\nAlt Text',
+                    tooltip: controller.hasSelectedImage
+                        ? 'Generate alt text for selected image'
+                        : 'Select a picture first',
+                    onPressed: controller.hasSelectedImage
+                        ? () => controller.generateAutoAltText(context)
+                        : null,
+                  ),
+                ),
                 Builder(
                   builder: (context) => RibbonLargeButton(
                     key: const Key('ai_rewrite'),
@@ -214,11 +269,14 @@ class ReviewTab extends StatelessWidget {
             showDivider: false,
             child: Row(
               children: [
-                RibbonIconButton(
-                  key: const Key('compare_documents'),
-                  icon: Icons.compare,
-                  label: 'Compare',
-                  onPressed: () => controller.compareWithText(controller.documentText),
+                Builder(
+                  builder: (context) => RibbonIconButton(
+                    key: const Key('compare_documents'),
+                    icon: Icons.compare,
+                    label: 'Compare',
+                    tooltip: 'Compare with another document',
+                    onPressed: () => controller.compareWithDocumentPicker(context),
+                  ),
                 ),
                 RibbonIconButton(
                   key: const Key('restrict_editing'),

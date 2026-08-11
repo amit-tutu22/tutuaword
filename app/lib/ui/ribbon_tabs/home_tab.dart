@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:tutuaword/editor/change_case.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
 import 'package:tutuaword/ui/ribbon_color_picker.dart';
 import 'package:tutuaword/ui/ribbon_widgets.dart';
@@ -8,6 +9,42 @@ class HomeTab extends StatelessWidget {
   const HomeTab({super.key, required this.controller});
 
   final EditorController controller;
+
+  Future<void> _openChangeCaseMenu(BuildContext context) async {
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    await showRibbonPresetMenu(
+      context,
+      box,
+      kChangeCaseMenuLabels.map((e) => e.$2).toList(),
+      (label) {
+        final kind = kChangeCaseMenuLabels
+            .firstWhere((e) => e.$2 == label)
+            .$1;
+        controller.applyChangeCase(kind);
+      },
+      minWidth: 180,
+      maxWidth: 220,
+    );
+  }
+
+  Future<void> _openSortMenu(BuildContext context) async {
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    await showRibbonPresetMenu(
+      context,
+      box,
+      const ['Sort A → Z', 'Sort Z → A'],
+      (label) {
+        if (label.startsWith('Sort A')) {
+          controller.sortParagraphs(ascending: true);
+        } else {
+          controller.sortParagraphs(ascending: false);
+        }
+      },
+      minWidth: 140,
+    );
+  }
 
   static const _builtinGalleryStyles = <(String, TextStyle)>[
     ('Normal', TextStyle(fontSize: 9)),
@@ -96,7 +133,14 @@ class HomeTab extends StatelessWidget {
                     const SizedBox(width: 4),
                     RibbonIconButton(icon: Icons.text_increase, onPressed: controller.increaseFontSize),
                     RibbonIconButton(icon: Icons.text_decrease, onPressed: controller.decreaseFontSize),
-                    RibbonIconButton(icon: Icons.change_circle_outlined, onPressed: null),
+                    Builder(
+                      builder: (context) => RibbonIconButton(
+                        key: const Key('change_case'),
+                        icon: Icons.change_circle_outlined,
+                        tooltip: 'Change Case',
+                        onPressed: () => _openChangeCaseMenu(context),
+                      ),
+                    ),
                     RibbonIconButton(
                       icon: Icons.format_clear,
                       tooltip: 'Clear Formatting',
@@ -231,7 +275,14 @@ class HomeTab extends StatelessWidget {
                       tooltip: 'Increase Indent',
                       onPressed: controller.increaseIndent,
                     ),
-                    RibbonIconButton(icon: Icons.sort, onPressed: null),
+                    Builder(
+                      builder: (context) => RibbonIconButton(
+                        key: const Key('sort_paragraphs'),
+                        icon: Icons.sort,
+                        tooltip: 'Sort paragraphs',
+                        onPressed: () => _openSortMenu(context),
+                      ),
+                    ),
                     RibbonToggleButton(
                       key: const Key('show_formatting_marks'),
                       icon: Icons.visibility,
@@ -305,13 +356,13 @@ class HomeTab extends StatelessWidget {
                         StyleGalleryCard(
                           label: 'No Spacing',
                           previewStyle: const TextStyle(fontSize: 9, height: 1.0),
-                          onPressed: null,
+                          selected: controller.activeParagraphStyle == 'No Spacing',
+                          onPressed: () => controller.applyParagraphStyle('No Spacing'),
                         ),
                       ],
                     ),
                   ),
                 ),
-                RibbonIconButton(icon: Icons.chevron_right, onPressed: null),
                 RibbonTextButton(
                   label: 'Styles\nPane',
                   onPressed: controller.toggleStyleInspector,

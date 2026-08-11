@@ -122,18 +122,21 @@ pub fn layout_table_slice(
                     }
                     tw_model::Block::Table(nested) => {
                         let nested_max = (text_width - CELL_PADDING).max(1.0);
-                        let nested_layout = layout_table(
+                        let remaining = (y + max_height - cursor_y).max(MIN_ROW_HEIGHT);
+                        let nested_slice = layout_table_slice(
                             shaper,
                             atlas,
                             nested,
+                            0,
                             col_x + CELL_PADDING,
                             cursor_y,
                             nested_max,
+                            remaining,
                             default_color,
                             tab_interval,
                         );
-                        cursor_y += nested_layout.height + CELL_PADDING;
-                        nested_tables.push(nested_layout);
+                        cursor_y += nested_slice.layout.height + CELL_PADDING;
+                        nested_tables.push(nested_slice.layout);
                     }
                     _ => {}
                 }

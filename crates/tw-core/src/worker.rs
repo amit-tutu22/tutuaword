@@ -173,6 +173,10 @@ pub enum BridgeCommand {
         offset: usize,
         bytes: Vec<u8>,
     },
+    /// Export the given body range as a standalone DOCX fragment (L3 clipboard).
+    ExportSelectionDocx {
+        range: tw_edit::DocRange,
+    },
     Shutdown,
 }
 
@@ -201,6 +205,8 @@ pub enum BridgeEvent {
     SpellCheckResult {
         request_id: u64,
         misspellings: Vec<String>,
+        /// Parallel suggestions per misspelling (F17.S1 UX).
+        spell_issues: Vec<(String, usize, usize, Vec<String>)>,
     },
     GrammarCheckResult {
         request_id: u64,
@@ -614,12 +620,17 @@ impl WorkerCore {
             }
             BridgeCommand::SpellCheckDocument => {
                 let checker = tw_spell::SpellChecker::english();
-                let text = document_plain_text(&self.session.document);
+                let text = tw_edit::body_plain_text(&self.session.document);
                 let issues = checker.check_text(&text);
-                let words: Vec<String> = issues.into_iter().map(|i| i.word).collect();
+                let spell_issues: Vec<(String, usize, usize, Vec<String>)> = issues
+                    .iter()
+                    .map(|i| (i.word.clone(), i.start, i.end, i.suggestions.clone()))
+                    .collect();
+                let words: Vec<String> = spell_issues.iter().map(|(w, _, _, _)| w.clone()).collect();
                 self.events.send(BridgeEvent::SpellCheckResult {
                     request_id: req_id,
                     misspellings: words,
+                    spell_issues,
                 });
             }
             BridgeCommand::GrammarCheckDocument => {
@@ -718,6 +729,33 @@ impl WorkerCore {
                     });
                 }
             },
+            BridgeCommand::ExportSelectionDocx { range } => {
+                match tw_edit::document_from_range(&self.session.document, &range) {
+                    Ok(subset) => {
+                        let package = tw_docx::DocxPackage::default();
+                        match tw_docx::export(&subset, &package) {
+                            Ok(data) => {
+                                self.events.send(BridgeEvent::DocumentSaved {
+                                    request_id: req_id,
+                                    data,
+                                });
+                            }
+                            Err(e) => {
+                                self.events.send(BridgeEvent::Error {
+                                    request_id: req_id,
+                                    message: e.to_string(),
+                                });
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        self.events.send(BridgeEvent::Error {
+                            request_id: req_id,
+                            message: e.to_string(),
+                        });
+                    }
+                }
+            }
             BridgeCommand::ApplyEdit { command } => {
                 if self.session.document.settings.read_only {
                     self.events.send(BridgeEvent::Error {

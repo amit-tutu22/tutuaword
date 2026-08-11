@@ -121,6 +121,23 @@ pub fn export_docx(doc: &Document, package: &DocxPackage) -> Result<Vec<u8>, Doc
         ensure_footnotes_relationship(&mut pkg);
     }
 
+    if !doc.endnotes.is_empty() {
+        let endnotes_xml = serialize_endnotes_xml(
+            doc,
+            &pkg,
+            &mut media,
+            &charts,
+            &diagrams,
+            &hyperlinks,
+            &mut RevisionIdAllocator::new(),
+        );
+        pkg.parts
+            .insert("word/endnotes.xml".into(), endnotes_xml.into_bytes());
+        pkg.mark_modified("word/endnotes.xml".into());
+        ensure_endnotes_content_type(&mut pkg);
+        ensure_endnotes_relationship(&mut pkg);
+    }
+
     if !doc.bibliography_sources.is_empty() {
         let bibliography_xml = crate::bibliography::serialize_bibliography_xml(&doc.bibliography_sources);
         pkg.parts.insert(
@@ -267,6 +284,46 @@ fn ensure_footnotes_relationship(pkg: &mut DocxPackage) {
     let mut xml = String::from_utf8_lossy(&bytes).into_owned();
     if !xml.contains("footnotes.xml") {
         let rel = r#"<Relationship Id="rIdFootnotes" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes" Target="footnotes.xml"/>"#;
+        if let Some(end) = xml.rfind("</Relationships>") {
+            xml.insert_str(end, rel);
+        } else {
+            xml = format!("<Relationships>{rel}</Relationships>");
+        }
+        pkg.parts.insert(part.into(), xml.into_bytes());
+        pkg.mark_modified(part.into());
+    }
+}
+
+fn ensure_endnotes_content_type(pkg: &mut DocxPackage) {
+    let part = "[Content_Types].xml";
+    let bytes = pkg
+        .parts
+        .get(part)
+        .cloned()
+        .unwrap_or_else(|| MINIMAL_CONTENT_TYPES.to_vec());
+    let mut xml = String::from_utf8_lossy(&bytes).into_owned();
+    let override_tag = r#"<Override PartName="/word/endnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml"/>"#;
+    if !xml.contains("/word/endnotes.xml") {
+        if let Some(end) = xml.rfind("</Types>") {
+            xml.insert_str(end, override_tag);
+        } else {
+            xml.push_str(override_tag);
+        }
+        pkg.parts.insert(part.into(), xml.into_bytes());
+        pkg.mark_modified(part.into());
+    }
+}
+
+fn ensure_endnotes_relationship(pkg: &mut DocxPackage) {
+    let part = "word/_rels/document.xml.rels";
+    let bytes = pkg
+        .parts
+        .get(part)
+        .cloned()
+        .unwrap_or_else(|| b"<Relationships/>".to_vec());
+    let mut xml = String::from_utf8_lossy(&bytes).into_owned();
+    if !xml.contains("endnotes.xml") {
+        let rel = r#"<Relationship Id="rIdEndnotes" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/endnotes" Target="endnotes.xml"/>"#;
         if let Some(end) = xml.rfind("</Relationships>") {
             xml.insert_str(end, rel);
         } else {
@@ -595,6 +652,37 @@ fn serialize_footnotes_xml(
         xml.push_str("</w:footnote>");
     }
     xml.push_str("</w:footnotes>");
+    xml
+}
+
+fn serialize_endnotes_xml(
+    doc: &Document,
+    package: &DocxPackage,
+    media: &mut MediaWriter,
+    charts: &crate::chart::ChartWriter,
+    diagrams: &crate::diagram::DiagramWriter,
+    hyperlinks: &crate::hyperlink::HyperlinkRels,
+    revision_ids: &mut RevisionIdAllocator,
+) -> String {
+    let mut xml = String::from(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:endnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"#,
+    );
+    xml.push_str(
+        r#"<w:endnote w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:endnote>"#,
+    );
+    xml.push_str(
+        r#"<w:endnote w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:endnote>"#,
+    );
+    for endnote in &doc.endnotes {
+        xml.push_str(&format!(r#"<w:endnote w:id="{}">"#, endnote.id));
+        for block in &endnote.blocks {
+            xml.push_str(&serialize_block(
+                block, doc, package, media, charts, diagrams, hyperlinks, revision_ids,
+            ));
+        }
+        xml.push_str("</w:endnote>");
+    }
+    xml.push_str("</w:endnotes>");
     xml
 }
 
@@ -961,6 +1049,9 @@ fn serialize_run(
         RunContent::InlineImage(_) => "<w:t>[image]</w:t>".to_string(),
         RunContent::FootnoteRef(note) => {
             format!(r#"<w:footnoteReference w:id="{}"/>"#, note.note_id)
+        }
+        RunContent::EndnoteRef(note) => {
+            format!(r#"<w:endnoteReference w:id="{}"/>"#, note.note_id)
         }
         RunContent::CitationRef(cite) => {
             let instr = format!(" CITATION {} \\l 1033 ", cite.source_key);

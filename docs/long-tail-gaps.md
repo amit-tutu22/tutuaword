@@ -15,12 +15,12 @@ Core editing (DOCX import/export fidelity, glyph-mode formatting, layout correct
 | Area | Status | Blocks core editing? | Target phase |
 |------|--------|----------------------|--------------|
 | [PDF font embedding](#1-pdf-font-embedding-tw-pdf) | Partial — real glyph positions, fixed Helvetica 12pt | No | Phase 2 |
-| [Hunspell spell check](#2-hunspell-spell-check-tw-spell) | Stub — embedded word list, no suggestions | No | Phase 3 |
+| [Hunspell spell check](#2-hunspell-spell-check-tw-spell) | MVP — embedded list + suggestions; chip apply wired | No | Phase 3 |
 | [HTML / Markdown parsers](#3-html--markdown-parsers) | MVP — basic text formatting only | No | Phase 3 |
-| [Hyperlinks and comments](#4-hyperlinks-and-comments-tw-model) | Partial — R2.1 model vocabulary + DOCX import; edit/UI deferred | No | Phase 5 |
+| [Hyperlinks and comments](#4-hyperlinks-and-comments-tw-model) | Partial — model + DOCX RT + insert/reply/resolve pane | No | Phase 5 |
 | [Plugin WASM sandbox](#5-plugin-wasm-sandbox-tw-plugin) | Spec + traits only | No | Phase 6 |
 | [Production AI providers](#6-production-ai-providers-tw-ai) | Router + mocks only | No | Phase 4 |
-| [Track-change accept/reject UI](#7-track-change-acceptreject-ui) | Accept/Reject all wired; per-change nav still open | No | Phase 2 |
+| [Track-change accept/reject UI](#7-track-change-acceptreject-ui) | Accept/Reject all + caret nav wired in Review ribbon | No | Phase 2 |
 
 ---
 
@@ -70,7 +70,7 @@ The six areas in this document were always **long-tail** — valuable for fideli
 
 - No glyph subsetting (file size); widths use `/DW 1000` with per-glyph `Tm` positioning.
 - PDF bookmarks, metadata, hyperlinks ([file-formats.md](architecture/file-formats.md)) still open.
-- Standard-14 family mapping for structural bold/italic still approximate (Helvetica only).
+- Standard-14 **Helvetica-Bold / Helvetica-Oblique** mapping for structural bold/italic runs (next-release polish).
 
 ### Key files
 
@@ -84,7 +84,7 @@ The six areas in this document were always **long-tail** — valuable for fideli
 ### Future work
 
 1. Subset embedded faces to used GIDs.
-2. Map structural export to Helvetica-Bold/Oblique by run style.
+2. ~~Map structural export to Helvetica-Bold/Oblique by run style.~~ Done (structural path).
 3. PDF outline / link annotations.
 
 ---
@@ -93,37 +93,20 @@ The six areas in this document were always **long-tail** — valuable for fideli
 
 ### Current state (as built)
 
-- [`crates/tw-spell/src/lib.rs`](../crates/tw-spell/src/lib.rs) uses an in-memory `HashSet<String>`.
-- Dictionary: ~384 tokens from [`crates/tw-spell/data/en_core.txt`](../crates/tw-spell/data/en_core.txt) plus hardcoded Indic-Latin tokens (`namaste`, city names, etc.).
-- Public API:
-  - `SpellChecker::english()` / `with_extra_words()`
-  - `is_correct(word) -> bool`
-  - `check_text(text) -> Vec<SpellIssue>` with byte `start`/`end` offsets
-- **No `suggest()` or correction API.**
-- Sole dependency: `unicode-segmentation` for word-boundary tokenization.
-- Worker integration: `SpellChecker::english().check_text()` on plain document text; bridge event returns **misspelling words only** (offsets and suggestions not forwarded to Flutter).
+- [`crates/tw-spell/src/lib.rs`](../crates/tw-spell/src/lib.rs) uses an in-memory `HashSet<String>` plus edit-distance **`suggest()`** for replacements.
+- Dictionary: ~384 tokens from [`crates/tw-spell/data/en_core.txt`](../crates/tw-spell/data/en_core.txt) plus hardcoded Indic-Latin tokens.
+- Worker integration returns **`SpellCheckResult` JSON** with offsets and suggestions to Flutter.
+- Review tab **spell suggestions dialog** (`spell_suggestions_dialog.dart`) lets users pick replacements.
 
-### Gap vs spec
+### Remaining gap vs spec
 
-- [`docs/roadmap.md`](roadmap.md) Phase 3: **Hunspell, English + Indic languages**.
-- [`docs/glossary.md`](glossary.md) and testing strategy assume real dictionaries.
-- Review tab spell-check UI cannot offer replacements.
-
-### Key files
-
-| File | Role |
-|------|------|
-| `crates/tw-spell/src/lib.rs` | Checker implementation |
-| `crates/tw-spell/data/en_core.txt` | Embedded mini corpus |
-| `crates/tw-core/src/worker.rs` | `SpellCheckDocument` → `BridgeEvent::SpellCheckResult` |
-| `app/lib/ui/ribbon_tabs/review_tab.dart` | Spell UI (partial) |
+- Full **Hunspell** `.aff`/`.dic` backends for English + Indic (roadmap Phase 3).
+- Grammar checking beyond spell.
 
 ### Future work
 
 1. Add Hunspell backend (`hunspell-rs` or similar); ship `.aff`/`.dic` under `crates/tw-spell/data/`.
-2. Add `suggest(&self, word: &str, limit: usize) -> Vec<String>`.
-3. Lazy-load dictionaries on first check; keep embedded list as offline fallback.
-4. Extend FFI to return JSON `{ word, start, end, suggestions[] }`; surface in Review tab.
+2. Lazy-load dictionaries on first check; keep embedded list as offline fallback.
 
 ### Exit criteria (documentation target)
 

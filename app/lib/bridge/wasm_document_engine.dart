@@ -7,6 +7,7 @@ import 'package:tutuaword/bridge/engine_types.dart';
 import 'package:tutuaword/bridge/find_format_filter.dart';
 import 'package:tutuaword/bridge/find_match.dart';
 import 'package:tutuaword/bridge/print_layout_settings.dart';
+import 'package:tutuaword/bridge/spell_issue.dart';
 import 'package:tutuaword/bridge/wasm_engine_web.dart';
 import 'package:tutuaword/editor/doc_range.dart';
 
@@ -336,8 +337,57 @@ class WasmDocumentEngine implements DocumentEngine {
     required String runId,
     required int offset,
     required String fieldType,
+    String? mergeName,
   }) =>
-      _inner.insertFieldAsync(runId: runId, offset: offset, fieldType: fieldType);
+      _inner.insertFieldAsync(
+        runId: runId,
+        offset: offset,
+        fieldType: fieldType,
+        mergeName: mergeName,
+      );
+
+  @override
+  Future<bool> applySpellReplacementAsync({
+    required int plainStart,
+    required int plainEnd,
+    required String replacement,
+  }) =>
+      _inner.applySpellReplacementAsync(
+        plainStart: plainStart,
+        plainEnd: plainEnd,
+        replacement: replacement,
+      );
+
+  @override
+  Future<Uint8List?> exportSelectionDocxAsync({
+    required String startRunId,
+    required int startOffset,
+    required String endRunId,
+    required int endOffset,
+  }) =>
+      _inner.exportSelectionDocxAsync(
+        startRunId: startRunId,
+        startOffset: startOffset,
+        endRunId: endRunId,
+        endOffset: endOffset,
+      );
+
+  @override
+  String? getCommentsJson() => _inner.getCommentsJson();
+
+  @override
+  Future<bool> replyToCommentAsync({
+    required int commentId,
+    required String bodyText,
+  }) =>
+      _inner.replyToCommentAsync(commentId: commentId, bodyText: bodyText);
+
+  @override
+  Future<bool> resolveCommentAsync({
+    required int commentId,
+    required bool resolved,
+  }) =>
+      _inner.resolveCommentAsync(commentId: commentId, resolved: resolved);
 
   @override
   Future<bool> insertFootnoteAsync({
@@ -345,6 +395,13 @@ class WasmDocumentEngine implements DocumentEngine {
     required int offset,
   }) =>
       _inner.insertFootnoteAsync(runId: runId, offset: offset);
+
+  @override
+  Future<bool> insertEndnoteAsync({
+    required String runId,
+    required int offset,
+  }) =>
+      _inner.insertEndnoteAsync(runId: runId, offset: offset);
 
   @override
   Future<bool> insertCommentAsync({
@@ -361,6 +418,10 @@ class WasmDocumentEngine implements DocumentEngine {
   @override
   Future<bool> insertTableOfContentsAsync({String? caretRunId}) =>
       _inner.insertTableOfContentsAsync(caretRunId: caretRunId);
+
+  @override
+  Future<bool> insertTableOfFiguresAsync({String? caretRunId}) =>
+      _inner.insertTableOfFiguresAsync(caretRunId: caretRunId);
 
   @override
   Future<bool> addBibliographySourceAsync({
@@ -712,6 +773,9 @@ class WasmDocumentEngine implements DocumentEngine {
 
   @override
   List<String>? spellCheckMisspellings() => _inner.spellCheckMisspellings();
+
+  @override
+  List<SpellIssue>? spellCheckIssues() => _inner.spellCheckIssues();
 
   @override
   List<String>? grammarCheckIssues() => _inner.grammarCheckIssues();

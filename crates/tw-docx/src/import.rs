@@ -138,6 +138,7 @@ pub fn import_docx_with_password(
             &mut retention,
         );
         apply_footnotes(&mut doc, &package, &media, &mut retention);
+        apply_endnotes(&mut doc, &package, &media, &mut retention);
         apply_comments(&mut doc, &package, &mut retention);
         apply_bibliography(&mut doc, &package, &mut retention);
         apply_signatures(&mut doc, &package, &mut retention);
@@ -647,6 +648,57 @@ fn apply_footnotes(
         retention.record_retained("footnotesPart");
         doc.renumber_footnotes();
     }
+}
+
+fn apply_endnotes(
+    doc: &mut Document,
+    package: &DocxPackage,
+    media: &dyn MediaResolver,
+    retention: &mut ImportRetentionReport,
+) {
+    let Some(xml_bytes) = package.parts.get("word/endnotes.xml") else {
+        return;
+    };
+    let xml = String::from_utf8_lossy(xml_bytes);
+    retention.record_encountered("endnotesPart");
+    for element in split_elements(&xml, "w:endnote") {
+        if element.contains("w:type=\"separator\"")
+            || element.contains("w:type=\"continuationSeparator\"")
+        {
+            continue;
+        }
+        let note_id = read_own_attr(element, "w:id")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        if note_id <= 0 {
+            continue;
+        }
+        let mut discard = crate::preserve::PreservedParagraphMap::new();
+        let mut discard_shapes = crate::preserve::PreservedShapeMap::new();
+        let (blocks, _) = parse_body_blocks(
+            extract_endnote_body(element),
+            doc,
+            media,
+            package,
+            retention,
+            &mut discard,
+            &mut discard_shapes,
+        );
+        doc.endnotes.push(Footnote { id: note_id, blocks });
+    }
+    if !doc.endnotes.is_empty() {
+        retention.record_retained("endnotesPart");
+        doc.renumber_endnotes();
+    }
+}
+
+fn extract_endnote_body(xml: &str) -> &str {
+    if let Some(start) = xml.find('>') {
+        if let Some(end) = xml.rfind("</w:endnote>") {
+            return &xml[start + 1..end];
+        }
+    }
+    ""
 }
 
 fn apply_comments(doc: &mut Document, package: &DocxPackage, retention: &mut ImportRetentionReport) {

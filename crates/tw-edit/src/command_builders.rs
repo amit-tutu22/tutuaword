@@ -549,15 +549,43 @@ pub fn insert_field_command_for(
     offset: usize,
     field_type: tw_model::FieldType,
 ) -> Command {
+    insert_field_command_with_merge(run_id, offset, field_type, None)
+}
+
+pub fn insert_field_command_with_merge(
+    run_id: NodeId,
+    offset: usize,
+    field_type: tw_model::FieldType,
+    merge_name: Option<String>,
+) -> Command {
     Command::InsertField {
         run_id,
         offset,
         field_type,
+        merge_name,
+    }
+}
+
+pub fn reply_to_comment_command_for(comment_id: i32, body_text: impl Into<String>) -> Command {
+    Command::ReplyToComment {
+        comment_id,
+        body_text: body_text.into(),
+    }
+}
+
+pub fn resolve_comment_command_for(comment_id: i32, resolved: bool) -> Command {
+    Command::ResolveComment {
+        comment_id,
+        resolved,
     }
 }
 
 pub fn insert_footnote_command_for(run_id: NodeId, offset: usize) -> Command {
     Command::InsertFootnote { run_id, offset }
+}
+
+pub fn insert_endnote_command_for(run_id: NodeId, offset: usize) -> Command {
+    Command::InsertEndnote { run_id, offset }
 }
 
 pub fn insert_comment_command_for(
@@ -601,6 +629,17 @@ pub fn insert_table_of_contents_command_for(
     page_numbers: Vec<u32>,
 ) -> Option<Command> {
     Some(Command::InsertTableOfContents {
+        after_block_id: block_id_from_caret(doc, caret_run_id)?,
+        page_numbers,
+    })
+}
+
+pub fn insert_table_of_figures_command_for(
+    doc: &Document,
+    caret_run_id: Option<NodeId>,
+    page_numbers: Vec<u32>,
+) -> Option<Command> {
+    Some(Command::InsertTableOfFigures {
         after_block_id: block_id_from_caret(doc, caret_run_id)?,
         page_numbers,
     })

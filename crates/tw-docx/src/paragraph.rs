@@ -358,6 +358,16 @@ fn parse_field_type(instr: &str) -> FieldType {
         FieldType::Title
     } else if upper.contains("REF") || upper.contains("PAGEREF") {
         FieldType::CrossRef
+    } else if upper.contains("TOC") {
+        if upper.contains("FIGURE") {
+            FieldType::TableOfFigures
+        } else {
+            FieldType::TableOfContents
+        }
+    } else if upper.contains("NEXT") {
+        FieldType::NextRecord
+    } else if upper.contains(" IF ") || upper.starts_with("IF ") {
+        FieldType::MergeIf
     } else {
         FieldType::Other(instr.trim().to_string())
     }
@@ -488,6 +498,27 @@ fn parse_run(
             id: tw_model::NodeId::new(),
             format: format.clone(),
             content: RunContent::FootnoteRef(FootnoteRef {
+                note_id,
+                display_number: None,
+            }),
+            revision: revision.clone(),
+        });
+    }
+
+    if run_xml.contains("<w:endnoteReference") {
+        if let Some(r) = retention.as_deref_mut() {
+            r.record_encountered("endnoteReference");
+            r.record_retained("endnoteReference");
+        }
+        let note_id = split_elements(run_xml, "w:endnoteReference")
+            .into_iter()
+            .next()
+            .and_then(|el| read_int_attr(el, "w:endnoteReference", "w:id"))
+            .unwrap_or(0);
+        runs.push(Run {
+            id: tw_model::NodeId::new(),
+            format: format.clone(),
+            content: RunContent::EndnoteRef(FootnoteRef {
                 note_id,
                 display_number: None,
             }),

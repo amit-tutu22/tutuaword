@@ -80,11 +80,6 @@ class WordTitleBar extends StatelessWidget {
                     tooltip: 'Print',
                     onPressed: () => controller.printDocument(context: context),
                   ),
-                  _QuickAccessIcon(
-                    icon: Icons.more_horiz,
-                    tooltip: 'More',
-                    onPressed: null,
-                  ),
                   const Spacer(),
                   _QuickAccessIcon(
                     key: const Key('title_bar_search'),

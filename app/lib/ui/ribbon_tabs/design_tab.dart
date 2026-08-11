@@ -49,7 +49,6 @@ class DesignTab extends StatelessWidget {
                       selected: controller.documentThemeName == entry.$1,
                       onPressed: () => controller.applyDocumentTheme(entry.$1),
                     ),
-                  RibbonIconButton(icon: Icons.chevron_right, onPressed: null),
                 ],
               ),
             ),

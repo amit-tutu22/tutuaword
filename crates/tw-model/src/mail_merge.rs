@@ -143,6 +143,13 @@ fn apply_mail_merge_block(block: &mut Block, row: &BTreeMap<String, String>) {
                             .to_string();
                         run.content = RunContent::Text(value);
                     }
+                    RunContent::Field(field) if field.field_type == FieldType::MergeIf => {
+                        let text = evaluate_merge_if(field, row);
+                        run.content = RunContent::Text(text);
+                    }
+                    RunContent::Field(field) if field.field_type == FieldType::NextRecord => {
+                        run.content = RunContent::Text(String::new());
+                    }
                     RunContent::Text(text) => {
                         *text = replace_guillemet_placeholders(text, row);
                     }
@@ -202,6 +209,69 @@ fn replace_guillemet_placeholders(text: &str, row: &BTreeMap<String, String>) ->
     out
 }
 
+fn evaluate_merge_if(field: &crate::vocabulary::FieldData, row: &BTreeMap<String, String>) -> String {
+    let name = field
+        .merge_name
+        .clone()
+        .or_else(|| merge_name_from_if_instruction(field.instruction.as_deref()))
+        .unwrap_or_default();
+    let value = lookup_row_value(row, &name).unwrap_or_default();
+    let non_empty = !value.trim().is_empty();
+    parse_if_branches(field.instruction.as_deref(), non_empty)
+        .or_else(|| field.display_text.clone())
+        .unwrap_or_else(|| if non_empty { "Yes".into() } else { "No".into() })
+}
+
+fn merge_name_from_if_instruction(instr: Option<&str>) -> Option<String> {
+    let instr = instr?;
+    let upper = instr.to_ascii_uppercase();
+    let idx = upper.find("MERGEFIELD")?;
+    let rest = instr[idx + "MERGEFIELD".len()..].trim();
+    let name = rest
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .trim_matches('{')
+        .trim_matches('}')
+        .trim_matches('"')
+        .trim();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
+    }
+}
+
+fn parse_if_branches(instr: Option<&str>, condition: bool) -> Option<String> {
+    let instr = instr?;
+    let mut quoted = Vec::new();
+    let mut in_quote = false;
+    let mut current = String::new();
+    for ch in instr.chars() {
+        if ch == '"' {
+            if in_quote {
+                quoted.push(std::mem::take(&mut current));
+            }
+            in_quote = !in_quote;
+        } else if in_quote {
+            current.push(ch);
+        }
+    }
+    match quoted.len() {
+        0 => None,
+        1 => Some(if condition {
+            quoted[0].clone()
+        } else {
+            String::new()
+        }),
+        _ => Some(if condition {
+            quoted[quoted.len() - 2].clone()
+        } else {
+            quoted[quoted.len() - 1].clone()
+        }),
+    }
+}
+
 /// Clone the template once per CSV row and apply merge replacement.
 pub fn generate_mail_merge_documents(
     template: &Document,
@@ -227,5 +297,68 @@ mod tests {
         assert_eq!(src.headers, vec!["Name", "City"]);
         assert_eq!(src.rows.len(), 2);
         assert_eq!(src.rows[0].get("Name").map(String::as_str), Some("Ada"));
+    }
+
+    #[test]
+    fn merge_if_uses_true_branch_when_field_nonempty() {
+        use crate::Document;
+        use crate::nodes::{Block, Paragraph, Run, RunContent};
+        use crate::vocabulary::FieldData;
+
+        let mut doc = Document::with_paragraph("");
+        doc.sections[0].blocks[0] = Block::Paragraph({
+            let mut p = Paragraph::new();
+            p.runs = vec![Run {
+                id: crate::NodeId::new(),
+                format: Default::default(),
+                content: RunContent::Field(FieldData {
+                    field_type: FieldType::MergeIf,
+                    instruction: Some(r#" IF { MERGEFIELD City } <> "" "Local" "Visitor" "#.into()),
+                    display_text: None,
+                    form: None,
+                    merge_name: Some("City".into()),
+                }),
+                revision: None,
+            }];
+            p
+        });
+        let mut row = BTreeMap::new();
+        row.insert("City".into(), "Paris".into());
+        apply_mail_merge_row(&mut doc, &row);
+        assert_eq!(
+            doc.sections[0].blocks[0].paragraph().unwrap().full_text(),
+            "Local"
+        );
+    }
+
+    #[test]
+    fn merge_if_uses_false_branch_when_field_empty() {
+        use crate::Document;
+        use crate::nodes::{Block, Paragraph, Run, RunContent};
+        use crate::vocabulary::FieldData;
+
+        let mut doc = Document::with_paragraph("");
+        doc.sections[0].blocks[0] = Block::Paragraph({
+            let mut p = Paragraph::new();
+            p.runs = vec![Run {
+                id: crate::NodeId::new(),
+                format: Default::default(),
+                content: RunContent::Field(FieldData {
+                    field_type: FieldType::MergeIf,
+                    instruction: Some(r#" IF { MERGEFIELD City } <> "" "Local" "Visitor" "#.into()),
+                    display_text: None,
+                    form: None,
+                    merge_name: Some("City".into()),
+                }),
+                revision: None,
+            }];
+            p
+        });
+        let row = BTreeMap::new();
+        apply_mail_merge_row(&mut doc, &row);
+        assert_eq!(
+            doc.sections[0].blocks[0].paragraph().unwrap().full_text(),
+            "Visitor"
+        );
     }
 }

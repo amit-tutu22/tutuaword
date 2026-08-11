@@ -23,6 +23,7 @@ pub mod retention;
 mod signatures;
 mod styles;
 mod table;
+mod vba;
 mod xml_util;
 
 pub use encryption::{
@@ -34,6 +35,7 @@ pub use bibliography::BIBLIOGRAPHY_PART;
 pub use comments::COMMENTS_PART;
 pub use retention::ImportRetentionReport;
 pub use signatures::SIGNATURES_PART;
+pub use vba::{is_vba_part, package_has_vba_parts};
 
 /// Original OPC package retained for passthrough export (ADR-0008).
 #[derive(Debug, Clone, Default)]

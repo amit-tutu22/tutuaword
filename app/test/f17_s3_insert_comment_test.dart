@@ -5,6 +5,12 @@ import 'package:tutuaword/ui/ribbon_tabs/review_tab.dart';
 
 import 'editor_test_helpers.dart';
 
+Future<void> pumpWideTab(WidgetTester tester, Widget tab) async {
+  await tester.binding.setSurfaceSize(const Size(1600, 900));
+  addTearDown(() => tester.binding.setSurfaceSize(null));
+  await pumpRibbonTab(tester, tab, size: const Size(1600, 140));
+}
+
 void main() {
   group('F17.S3 Comments', () {
     testWidgets('I-F17-S3-insert-comment-from-review-ribbon', (tester) async {
@@ -12,8 +18,12 @@ void main() {
       final controller = createTestEditorController(engine: engine);
       addTearDown(controller.dispose);
 
-      await pumpRibbonTab(tester, ReviewTab(controller: controller));
+      await pumpWideTab(tester, ReviewTab(controller: controller));
       await tester.tap(find.byKey(const Key('insert_comment')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('comment_dialog')), findsOneWidget);
+      await tester.enterText(find.byKey(const Key('comment_body')), 'Review note');
+      await tester.tap(find.byKey(const Key('comment_ok')));
       await tester.pumpAndSettle();
       await settleEngineStyle(tester);
 
@@ -40,6 +50,10 @@ void main() {
       );
 
       await tester.tap(find.text('Comment'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('comment_dialog')), findsOneWidget);
+      await tester.enterText(find.byKey(const Key('comment_body')), 'API note');
+      await tester.tap(find.byKey(const Key('comment_ok')));
       await tester.pumpAndSettle();
       await settleEngineStyle(tester);
 

@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 tw-model = { path = "../tw-model" }
 tw-text = { path = "../tw-text" }
+chrono = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

@@ -55,6 +55,7 @@ pub enum RunContent {
     Field(FieldData),
     InlineImage(InlineImageRef),
     FootnoteRef(FootnoteRef),
+    EndnoteRef(FootnoteRef),
     CitationRef(CitationRef),
     CommentRef(CommentRef),
     Bookmark(BookmarkAnchor),
@@ -81,6 +82,10 @@ impl RunContent {
             RunContent::FootnoteRef(note) => {
                 let _ = note;
                 "[fn]"
+            }
+            RunContent::EndnoteRef(note) => {
+                let _ = note;
+                "[en]"
             }
             RunContent::CitationRef(cite) => cite
                 .display_text

@@ -1,3 +1,4 @@
+mod plain_text;
 mod undo;
 mod access;
 pub mod run_text;
@@ -18,6 +19,7 @@ pub use command_builders::*;
 pub use replace::{replace_run_range, replace_run_range_commands};
 pub use session::*;
 pub use undo::{TransactionGuard, UndoEntry};
+pub use plain_text::{body_plain_text, doc_position_at_plain_offset, doc_range_from_plain_text};
 pub use range::paragraph_id_for_run;
 pub use run_text::{run_char_len, run_char_len_by_id, run_slice, run_slice_by_id, run_with_id};
 
@@ -331,7 +333,7 @@ use serde::{Deserialize, Serialize};
 
 use access::{with_paragraph_mut, with_run_mut};
 use regex::Regex;
-use tw_model::{BibliographySource, Block, CharFormat, CommentThread, Document, DocumentTheme, FieldData, FieldType, Footnote, FootnoteRef, FormFieldKind, NodeId, NumberingRef, ParaFormat, Paragraph, Revision, RevisionType, Run, RunContent, Section, StyleId, StyleSheetError, apply_mail_merge_row, bookmark_run, build_bibliography_blocks, build_index_blocks, build_toc_blocks, citation_ref_run, cross_ref_field_data, document_outline, field_instruction, form_checkbox_display, form_checkbox_field_data, form_text_field_data, hyperlink_run, merge_field_data, resolve_theme};
+use tw_model::{BibliographySource, Block, CharFormat, CommentThread, Document, DocumentTheme, FieldData, FieldType, Footnote, FootnoteRef, FormFieldKind, NodeId, NumberingRef, ParaFormat, Paragraph, Revision, RevisionType, Run, RunContent, Section, StyleId, StyleSheetError, apply_mail_merge_row, bookmark_run, build_bibliography_blocks, build_index_blocks, build_toc_blocks, build_tof_blocks, citation_ref_run, cross_ref_field_data, document_captions, document_outline, field_instruction, form_checkbox_display, form_checkbox_field_data, form_text_field_data, hyperlink_run, merge_field_data, resolve_theme};
 
 enum FindPattern {
     Literal,
@@ -607,7 +609,14 @@ pub fn apply(
             run_id,
             offset,
             field_type,
-        } => insert_field(doc, *run_id, *offset, field_type.clone())?,
+            merge_name,
+        } => insert_field(
+            doc,
+            *run_id,
+            *offset,
+            field_type.clone(),
+            merge_name.clone(),
+        )?,
         Command::InsertFormField {
             run_id,
             offset,
@@ -637,15 +646,28 @@ pub fn apply(
         Command::InsertFootnote { run_id, offset } => {
             insert_footnote(doc, *run_id, *offset)?
         }
+        Command::InsertEndnote { run_id, offset } => insert_endnote(doc, *run_id, *offset)?,
         Command::InsertComment {
             run_id,
             offset,
             body_text,
         } => insert_comment(doc, *run_id, *offset, body_text.clone())?,
+        Command::ReplyToComment {
+            comment_id,
+            body_text,
+        } => reply_to_comment(doc, *comment_id, body_text.clone())?,
+        Command::ResolveComment {
+            comment_id,
+            resolved,
+        } => resolve_comment(doc, *comment_id, *resolved)?,
         Command::InsertTableOfContents {
             after_block_id,
             page_numbers,
         } => insert_table_of_contents(doc, *after_block_id, page_numbers.clone())?,
+        Command::InsertTableOfFigures {
+            after_block_id,
+            page_numbers,
+        } => insert_table_of_figures(doc, *after_block_id, page_numbers.clone())?,
         Command::AddBibliographySource { source } => add_bibliography_source(doc, source.clone())?,
         Command::InsertCitation {
             run_id,
@@ -1172,23 +1194,27 @@ fn insert_field(
     run_id: NodeId,
     offset: usize,
     field_type: FieldType,
+    merge_name: Option<String>,
 ) -> Result<EditResult, EditError> {
     let loc = doc
         .find_run_location(run_id)
         .ok_or(EditError::RunNotFound(run_id))?;
+
+    let instruction = merge_if_instruction(&field_type, merge_name.as_deref());
+    let field_data = |ft: FieldType| FieldData {
+        field_type: ft,
+        instruction: instruction.clone(),
+        display_text: None,
+        form: None,
+        merge_name: merge_name.clone(),
+    };
 
     if offset == 0 {
         if let Some(para) = doc.paragraph_at_loc(loc) {
             if let Some(run) = para.runs.get(loc.run_index) {
                 if matches!(&run.content, RunContent::Text(text) if text.is_empty()) {
                     with_run_mut(doc, run_id, |run| {
-                        run.content = RunContent::Field(FieldData {
-                            field_type: field_type.clone(),
-                            instruction: Some(field_instruction(&field_type)),
-                            display_text: None,
-                            form: None,
-            merge_name: None,
-                        });
+                        run.content = RunContent::Field(field_data(field_type.clone()));
                     })
                     .ok_or(EditError::RunNotFound(run_id))?;
                     return Ok(EditResult {
@@ -1222,17 +1248,10 @@ fn insert_field(
         }
     }
 
-    let instruction = field_instruction(&field_type);
     let field_run = Run {
         id: NodeId::new(),
         format,
-        content: RunContent::Field(FieldData {
-            field_type,
-            instruction: Some(instruction),
-            display_text: None,
-            form: None,
-            merge_name: None,
-        }),
+        content: RunContent::Field(field_data(field_type)),
         revision: None,
     };
     let field_id = field_run.id;
@@ -1248,6 +1267,17 @@ fn insert_field(
         seed_run_id: Some(field_id),
         ..Default::default()
     })
+}
+
+fn merge_if_instruction(field_type: &FieldType, merge_name: Option<&str>) -> Option<String> {
+    if *field_type != FieldType::MergeIf {
+        return Some(field_instruction(field_type));
+    }
+    let name = merge_name.unwrap_or("Field");
+    Some(format!(
+        r#" IF {{ MERGEFIELD {} }} <> "" "Yes" "No" "#,
+        name
+    ))
 }
 
 fn insert_footnote(
@@ -1325,6 +1355,90 @@ fn insert_footnote(
         .insert(insert_at, footnote_run);
 
     doc.renumber_footnotes();
+
+    Ok(EditResult {
+        affected_nodes: vec![ref_id],
+        created_node_id: Some(ref_id),
+        seed_run_id: Some(ref_id),
+        ..Default::default()
+    })
+}
+
+fn insert_endnote(
+    doc: &mut Document,
+    run_id: NodeId,
+    offset: usize,
+) -> Result<EditResult, EditError> {
+    let loc = doc
+        .find_run_location(run_id)
+        .ok_or(EditError::RunNotFound(run_id))?;
+
+    let note_id = doc.next_endnote_id();
+    doc.endnotes.push(Footnote::new(note_id));
+
+    let mut format = doc
+        .run_at(loc)
+        .ok_or(EditError::RunNotFound(run_id))?
+        .format
+        .clone();
+    format.superscript = Some(true);
+
+    if offset == 0 {
+        if let Some(para) = doc.paragraph_at_loc(loc) {
+            if let Some(run) = para.runs.get(loc.run_index) {
+                if matches!(&run.content, RunContent::Text(text) if text.is_empty()) {
+                    with_run_mut(doc, run_id, |run| {
+                        run.format = format.clone();
+                        run.content = RunContent::EndnoteRef(FootnoteRef {
+                            note_id,
+                            display_number: None,
+                        });
+                    })
+                    .ok_or(EditError::RunNotFound(run_id))?;
+                    doc.renumber_endnotes();
+                    return Ok(EditResult {
+                        affected_nodes: vec![run_id],
+                        created_node_id: Some(run_id),
+                        seed_run_id: Some(run_id),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+    }
+
+    let mut insert_at = loc.run_index;
+
+    if doc
+        .run_at(loc)
+        .is_some_and(|run| matches!(run.content, RunContent::Text(_)))
+    {
+        let char_len = run_char_len_by_id(doc, run_id);
+        if offset > 0 && offset < char_len {
+            split_run_at(doc, loc, run_id, offset)?;
+            insert_at = loc.run_index + 1;
+        } else if offset >= char_len {
+            insert_at = loc.run_index + 1;
+        }
+    }
+
+    let endnote_run = Run {
+        id: NodeId::new(),
+        format,
+        content: RunContent::EndnoteRef(FootnoteRef {
+            note_id,
+            display_number: None,
+        }),
+        revision: None,
+    };
+    let ref_id = endnote_run.id;
+
+    doc.paragraph_at_loc_mut(loc)
+        .ok_or(EditError::RunNotFound(run_id))?
+        .runs
+        .insert(insert_at, endnote_run);
+
+    doc.renumber_endnotes();
 
     Ok(EditResult {
         affected_nodes: vec![ref_id],
@@ -1431,6 +1545,43 @@ fn insert_comment(
     })
 }
 
+fn reply_to_comment(
+    doc: &mut Document,
+    comment_id: i32,
+    body_text: String,
+) -> Result<EditResult, EditError> {
+    use tw_model::CommentMessage;
+    let author = doc.settings.author_name.clone();
+    let thread = doc
+        .comment_thread_by_id_mut(comment_id)
+        .ok_or(EditError::InvalidRange)?;
+    thread.messages.push(CommentMessage {
+        id: NodeId::new(),
+        author,
+        timestamp: chrono::Utc::now(),
+        body: vec![Block::Paragraph(Paragraph::with_text(body_text))],
+    });
+    Ok(EditResult {
+        affected_nodes: vec![thread.id],
+        ..Default::default()
+    })
+}
+
+fn resolve_comment(
+    doc: &mut Document,
+    comment_id: i32,
+    resolved: bool,
+) -> Result<EditResult, EditError> {
+    let thread = doc
+        .comment_thread_by_id_mut(comment_id)
+        .ok_or(EditError::InvalidRange)?;
+    thread.resolved = resolved;
+    Ok(EditResult {
+        affected_nodes: vec![thread.id],
+        ..Default::default()
+    })
+}
+
 fn insert_table_of_contents(
     doc: &mut Document,
     after_block_id: NodeId,
@@ -1448,6 +1599,52 @@ fn insert_table_of_contents(
         .collect();
 
     let blocks = build_toc_blocks(&entries);
+    if blocks.is_empty() {
+        return Err(EditError::InvalidRange);
+    }
+
+    let mut affected = Vec::with_capacity(blocks.len());
+    let mut first_created = None;
+
+    for (i, block) in blocks.into_iter().enumerate() {
+        let new_id = match &block {
+            Block::Paragraph(p) => p.id,
+            Block::Table(t) => t.id,
+            Block::ImageBlock(i) => i.id,
+            Block::ShapeBlock(s) => s.id,
+            _ => return Err(EditError::InvalidRange),
+        };
+        doc.sections[si].blocks.insert(bi + 1 + i, block);
+        affected.push(new_id);
+        if i == 0 {
+            first_created = Some(new_id);
+        }
+    }
+
+    Ok(EditResult {
+        affected_nodes: affected,
+        created_node_id: first_created,
+        ..Default::default()
+    })
+}
+
+fn insert_table_of_figures(
+    doc: &mut Document,
+    after_block_id: NodeId,
+    page_numbers: Vec<u32>,
+) -> Result<EditResult, EditError> {
+    let (si, bi) = doc
+        .find_block_location(after_block_id)
+        .ok_or(EditError::BlockNotFound(after_block_id))?;
+
+    let captions = document_captions(doc);
+    let entries: Vec<_> = captions
+        .into_iter()
+        .zip(page_numbers.into_iter().chain(std::iter::repeat(1)))
+        .map(|(entry, page)| (entry, page.max(1)))
+        .collect();
+
+    let blocks = build_tof_blocks(&entries);
     if blocks.is_empty() {
         return Err(EditError::InvalidRange);
     }

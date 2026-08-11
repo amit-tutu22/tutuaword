@@ -26,6 +26,7 @@ mod styles;
 mod table;
 mod theme;
 mod toc;
+mod tof;
 mod vocabulary;
 
 pub use accessibility_check::*;
@@ -56,4 +57,5 @@ pub use styles::*;
 pub use table::*;
 pub use theme::*;
 pub use toc::*;
+pub use tof::*;
 pub use vocabulary::*;

@@ -212,8 +212,12 @@ impl AsyncResultStore {
         let result = match event {
             BridgeEvent::DocumentOpened { .. } => AsyncResult::Done(Vec::new()),
             BridgeEvent::DocumentSaved { data, .. } => AsyncResult::Done(data.clone()),
-            BridgeEvent::SpellCheckResult { misspellings, .. } => {
-                AsyncResult::Done(misspellings.join("\n").into_bytes())
+            BridgeEvent::SpellCheckResult { misspellings, spell_issues, .. } => {
+                if spell_issues.is_empty() {
+                    AsyncResult::Done(misspellings.join("\n").into_bytes())
+                } else {
+                    AsyncResult::Done(encode_spell_issues(spell_issues))
+                }
             }
             BridgeEvent::GrammarCheckResult { issues, .. } => {
                 AsyncResult::Done(issues.join("\n").into_bytes())
@@ -382,6 +386,26 @@ fn wait_for_document_saved(
     })
 }
 
+fn encode_spell_issues(issues: &[(String, usize, usize, Vec<String>)]) -> Vec<u8> {
+    #[derive(serde::Serialize)]
+    struct Issue<'a> {
+        word: &'a str,
+        start: usize,
+        end: usize,
+        suggestions: &'a [String],
+    }
+    let payload: Vec<Issue<'_>> = issues
+        .iter()
+        .map(|(word, start, end, suggestions)| Issue {
+            word,
+            start: *start,
+            end: *end,
+            suggestions,
+        })
+        .collect();
+    serde_json::to_vec(&payload).unwrap_or_default()
+}
+
 fn wait_for_spell_check(
     session: &Session,
     request_id: u64,
@@ -389,8 +413,12 @@ fn wait_for_spell_check(
     out_len: *mut usize,
 ) -> i32 {
     wait_for_request(session, request_id, BLOCKING_WAIT, |event| match event {
-        BridgeEvent::SpellCheckResult { misspellings, .. } => {
-            transfer_bytes_to_caller(misspellings.join("\n").into_bytes(), out_ptr, out_len);
+        BridgeEvent::SpellCheckResult { misspellings, spell_issues, .. } => {
+            if spell_issues.is_empty() {
+                transfer_bytes_to_caller(misspellings.join("\n").into_bytes(), out_ptr, out_len);
+            } else {
+                transfer_bytes_to_caller(encode_spell_issues(spell_issues), out_ptr, out_len);
+            }
             Some(0)
         }
         BridgeEvent::Error { .. } => Some(-2),
@@ -1210,19 +1238,22 @@ pub extern "C" fn tw_insert_field(
     run_id_ptr: *const c_char,
     offset: i32,
     field_type_ptr: *const c_char,
+    merge_name_ptr: *const c_char,
 ) -> i32 {
     guard_ffi(|| {
         with_session(|session| {
             let Some(run_id) = parse_node_id(run_id_ptr) else {
                 return -3;
             };
-            let Some(field_type) = parse_field_type(field_type_ptr) else {
+            let Some((field_type, merge_name)) = parse_field_type_with_merge(field_type_ptr) else {
                 return -3;
             };
+            let merge_name = merge_name.or_else(|| parse_cstr(merge_name_ptr));
             let Some(request_id) = session.insert_field_at(
                 run_id,
                 offset.max(0) as usize,
                 field_type,
+                merge_name,
             ) else {
                 return -4;
             };
@@ -1358,6 +1389,23 @@ pub extern "C" fn tw_insert_footnote(run_id_ptr: *const c_char, offset: i32) -> 
 }
 
 #[no_mangle]
+pub extern "C" fn tw_insert_endnote(run_id_ptr: *const c_char, offset: i32) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(run_id) = parse_node_id(run_id_ptr) else {
+                return -3;
+            };
+            let Some(request_id) =
+                session.insert_endnote_at(run_id, offset.max(0) as usize)
+            else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
 pub extern "C" fn tw_insert_comment(
     run_id_ptr: *const c_char,
     offset: i32,
@@ -1388,11 +1436,142 @@ pub extern "C" fn tw_insert_comment(
 }
 
 #[no_mangle]
+pub extern "C" fn tw_reply_to_comment(comment_id: i32, body_ptr: *const c_char) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let body = if body_ptr.is_null() {
+                String::new()
+            } else {
+                unsafe { CStr::from_ptr(body_ptr) }
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            let Some(request_id) = session.reply_to_comment(comment_id, body) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_resolve_comment(comment_id: i32, resolved: i32) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(request_id) =
+                session.resolve_comment(comment_id, resolved != 0)
+            else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_get_comments_json(out_ptr: *mut *const u8, out_len: *mut usize) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let json = serde_json::to_string(&session.document().comments).unwrap_or_else(|_| "[]".into());
+            transfer_bytes_to_caller(json.into_bytes(), out_ptr, out_len);
+            0
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_apply_spell_replacement(
+    plain_start: u32,
+    plain_end: u32,
+    replacement_ptr: *const c_char,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(replacement) = parse_cstr(replacement_ptr) else {
+                return -3;
+            };
+            let range = match tw_edit::doc_range_from_plain_text(
+                &session.document(),
+                plain_start as usize,
+                plain_end as usize,
+            ) {
+                Ok(r) => r,
+                Err(_) => return -2,
+            };
+            let delete = Command::DeleteDocRange { range: range.clone() };
+            let insert = Command::InsertText {
+                run_id: range.start.run_id,
+                offset: range.start.char_offset,
+                text: replacement,
+            };
+            let Some(delete_id) = session.apply(delete) else {
+                return -4;
+            };
+            if finish_edit_enqueue(delete_id) != 0 {
+                return -4;
+            }
+            let Some(insert_id) = session.apply(insert) else {
+                return -4;
+            };
+            finish_edit_enqueue(insert_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_export_selection_docx(
+    start_run_id_ptr: *const c_char,
+    start_offset: u32,
+    end_run_id_ptr: *const c_char,
+    end_offset: u32,
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    guard_ffi(|| {
+        with_session_then_flush(|session| {
+            let Some(start_run) = parse_node_id(start_run_id_ptr) else {
+                return -2;
+            };
+            let Some(end_run) = parse_node_id(end_run_id_ptr) else {
+                return -2;
+            };
+            let range = DocRange {
+                start: DocPosition {
+                    run_id: start_run,
+                    char_offset: start_offset as usize,
+                },
+                end: DocPosition {
+                    run_id: end_run,
+                    char_offset: end_offset as usize,
+                },
+            };
+            let Some(request_id) = session.export_selection_docx(range) else {
+                return -4;
+            };
+            wait_for_document_saved(session, request_id, out_ptr, out_len)
+        })
+    })
+}
+
+#[no_mangle]
 pub extern "C" fn tw_insert_table_of_contents(caret_run_id_ptr: *const c_char) -> i32 {
     guard_ffi(|| {
         with_session(|session| {
             let caret_run_id = parse_node_id(caret_run_id_ptr);
             let Some(request_id) = session.insert_table_of_contents_at(caret_run_id) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_insert_table_of_figures(caret_run_id_ptr: *const c_char) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let caret_run_id = parse_node_id(caret_run_id_ptr);
+            let Some(request_id) = session.insert_table_of_figures_at(caret_run_id) else {
                 return -4;
             };
             finish_edit_enqueue(request_id)
@@ -1664,18 +1843,30 @@ fn parse_cstr(ptr: *const c_char) -> Option<String> {
 }
 
 fn parse_field_type(ptr: *const c_char) -> Option<FieldType> {
+    parse_field_type_with_merge(ptr).map(|(ty, _)| ty)
+}
+
+fn parse_field_type_with_merge(ptr: *const c_char) -> Option<(FieldType, Option<String>)> {
     let name = parse_cstr(ptr)?;
-    match name.to_ascii_lowercase().as_str() {
-        "page" => Some(FieldType::Page),
-        "numpages" => Some(FieldType::NumPages),
-        "date" => Some(FieldType::Date),
-        "time" => Some(FieldType::Time),
-        "tablesum" | "sum" => Some(FieldType::TableSumAbove),
-        "formtext" | "form_text" => Some(FieldType::FormText),
-        "formcheckbox" | "form_checkbox" | "checkbox" => Some(FieldType::FormCheckbox),
-        "mergefield" | "merge_field" | "merge" => Some(FieldType::MergeField),
-        _ => None,
+    if let Some(rest) = name.strip_prefix("if:").or_else(|| name.strip_prefix("IF:")) {
+        return Some((FieldType::MergeIf, Some(rest.to_string())));
     }
+    let field = match name.to_ascii_lowercase().as_str() {
+        "page" => FieldType::Page,
+        "numpages" => FieldType::NumPages,
+        "date" => FieldType::Date,
+        "time" => FieldType::Time,
+        "tablesum" | "sum" => FieldType::TableSumAbove,
+        "formtext" | "form_text" => FieldType::FormText,
+        "formcheckbox" | "form_checkbox" | "checkbox" => FieldType::FormCheckbox,
+        "mergefield" | "merge_field" | "merge" => FieldType::MergeField,
+        "next" | "nextrecord" | "next_record" => FieldType::NextRecord,
+        "if" | "mergeif" | "merge_if" => FieldType::MergeIf,
+        "toc" | "tableofcontents" | "table_of_contents" => FieldType::TableOfContents,
+        "tof" | "tableoffigures" | "table_of_figures" => FieldType::TableOfFigures,
+        _ => return None,
+    };
+    Some((field, None))
 }
 
 /// Apply a character-format JSON delta over `[start, end)`.

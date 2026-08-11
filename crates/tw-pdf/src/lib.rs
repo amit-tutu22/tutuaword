@@ -474,10 +474,10 @@ impl PdfExporter for DisplayListPdfExporter {
             }
         }
 
-        let helvetica_id = if embed {
+        let standard14 = if embed {
             None
         } else {
-            Some(write_helvetica(&mut pdf))
+            Some(write_standard14_fonts(&mut pdf))
         };
 
         let sheet_plan = build_print_sheet_plan(layout.pages.len(), &options.print_layout);
@@ -497,7 +497,7 @@ impl PdfExporter for DisplayListPdfExporter {
                     &list,
                     embed,
                     &embedded,
-                    helvetica_id,
+                    standard14.as_ref(),
                     transform,
                 )?;
                 page_ids.push(page_id);
@@ -526,7 +526,7 @@ impl PdfExporter for DisplayListPdfExporter {
                     &options.print_layout,
                     embed,
                     &embedded,
-                    helvetica_id,
+                    standard14.as_ref(),
                 )?;
                 page_ids.push(page_id);
             }
@@ -621,14 +621,34 @@ impl PdfBuilder {
     }
 }
 
-fn write_helvetica(pdf: &mut PdfBuilder) -> u32 {
+struct Standard14Fonts {
+    regular: u32,
+    bold: u32,
+    italic: u32,
+    bold_italic: u32,
+}
+
+fn write_standard14_fonts(pdf: &mut PdfBuilder) -> Standard14Fonts {
+    Standard14Fonts {
+        regular: write_type1_font(pdf, "Helvetica"),
+        bold: write_type1_font(pdf, "Helvetica-Bold"),
+        italic: write_type1_font(pdf, "Helvetica-Oblique"),
+        bold_italic: write_type1_font(pdf, "Helvetica-BoldOblique"),
+    }
+}
+
+fn write_type1_font(pdf: &mut PdfBuilder, base: &str) -> u32 {
     let id = pdf.alloc();
     pdf.put(
         id,
-        format!("{id} 0 obj<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>endobj\n")
+        format!("{id} 0 obj<< /Type /Font /Subtype /Type1 /BaseFont /{base} >>endobj\n")
             .into_bytes(),
     );
     id
+}
+
+fn write_helvetica(pdf: &mut PdfBuilder) -> u32 {
+    write_type1_font(pdf, "Helvetica")
 }
 
 fn pdf_name_escape(name: &str) -> String {
@@ -845,7 +865,7 @@ fn write_imposed_sheet(
     layout: &PrintLayoutOptions,
     embed: bool,
     embedded: &BTreeMap<u32, EmbeddedFontRefs>,
-    helvetica_id: Option<u32>,
+    standard14: Option<&Standard14Fonts>,
 ) -> Result<u32, PdfError> {
     let mut content = String::new();
     let mut xobject_names: Vec<(String, u32)> = Vec::new();
@@ -872,7 +892,7 @@ fn write_imposed_sheet(
                 inner.scale, inner.scale, inner.tx, inner.ty
             ));
         }
-        append_page_text(&mut content, doc, page, embed, embedded);
+        append_page_text(&mut content, doc, page, embed, embedded, standard14);
         append_display_list_graphics(&mut content, pdf, page, list, &mut xobject_names)?;
         if !inner.is_identity() {
             content.push_str("Q\n");
@@ -884,8 +904,11 @@ fn write_imposed_sheet(
     let page_id = pdf.alloc();
 
     let mut font_res = String::new();
-    if let Some(hid) = helvetica_id {
-        font_res.push_str(&format!("/F1 {hid} 0 R "));
+    if let Some(std14) = standard14 {
+        font_res.push_str(&format!("/F1 {} 0 R ", std14.regular));
+        font_res.push_str(&format!("/F2 {} 0 R ", std14.bold));
+        font_res.push_str(&format!("/F3 {} 0 R ", std14.italic));
+        font_res.push_str(&format!("/F4 {} 0 R ", std14.bold_italic));
     }
     for font in embedded.values() {
         font_res.push_str(&format!("/{} {} 0 R ", font.resource_name, font.type0_id));
@@ -935,7 +958,7 @@ fn write_page(
     list: &tw_render::DisplayList,
     embed: bool,
     embedded: &BTreeMap<u32, EmbeddedFontRefs>,
-    helvetica_id: Option<u32>,
+    standard14: Option<&Standard14Fonts>,
     transform: PrintContentTransform,
 ) -> Result<u32, PdfError> {
     let mut content = String::new();
@@ -945,7 +968,7 @@ fn write_page(
             transform.scale, transform.scale, transform.tx, transform.ty
         ));
     }
-    append_page_text(&mut content, doc, page, embed, embedded);
+    append_page_text(&mut content, doc, page, embed, embedded, standard14);
 
     let mut xobject_names: Vec<(String, u32)> = Vec::new();
     append_display_list_graphics(&mut content, pdf, page, list, &mut xobject_names)?;
@@ -958,8 +981,11 @@ fn write_page(
     let page_id = pdf.alloc();
 
     let mut font_res = String::new();
-    if let Some(hid) = helvetica_id {
-        font_res.push_str(&format!("/F1 {hid} 0 R "));
+    if let Some(std14) = standard14 {
+        font_res.push_str(&format!("/F1 {} 0 R ", std14.regular));
+        font_res.push_str(&format!("/F2 {} 0 R ", std14.bold));
+        font_res.push_str(&format!("/F3 {} 0 R ", std14.italic));
+        font_res.push_str(&format!("/F4 {} 0 R ", std14.bold_italic));
     }
     for font in embedded.values() {
         font_res.push_str(&format!("/{} {} 0 R ", font.resource_name, font.type0_id));
@@ -1064,16 +1090,17 @@ fn append_page_text(
     page: &PageLayout,
     embed: bool,
     embedded: &BTreeMap<u32, EmbeddedFontRefs>,
+    standard14: Option<&Standard14Fonts>,
 ) {
     for layout_box in &page.boxes {
         match layout_box {
             LayoutBox::TextLine(line) => {
-                append_line_text(content, doc, page.height, line, embed, embedded)
+                append_line_text(content, doc, page.height, line, embed, embedded, standard14)
             }
             LayoutBox::Table(table) => {
                 for cell in &table.cells {
                     for line in &cell.lines {
-                        append_line_text(content, doc, page.height, line, embed, embedded);
+                        append_line_text(content, doc, page.height, line, embed, embedded, standard14);
                     }
                 }
             }
@@ -1089,6 +1116,7 @@ fn append_line_text(
     line: &TextLine,
     embed: bool,
     embedded: &BTreeMap<u32, EmbeddedFontRefs>,
+    standard14: Option<&Standard14Fonts>,
 ) {
     if line.glyphs.is_empty() {
         return;
@@ -1130,9 +1158,29 @@ fn append_line_text(
     if text.is_empty() {
         return;
     }
+    let (bold, italic) = line
+        .run_map
+        .first()
+        .and_then(|(_, _, run_id, _)| doc.run_by_id(*run_id))
+        .map(|run| {
+            (
+                run.format.bold == Some(true),
+                run.format.italic == Some(true),
+            )
+        })
+        .unwrap_or((false, false));
+    let font_name = match (bold, italic) {
+        (true, true) => "F4",
+        (true, false) => "F2",
+        (false, true) => "F3",
+        (false, false) => "F1",
+    };
+    if standard14.is_none() && font_name != "F1" {
+        // Fallback when only legacy single-font path is used.
+    }
     let pdf_y = page_height - line.y;
     content.push_str(&format!(
-        "BT /F1 {:.2} Tf 1 0 0 1 {:.2} {:.2} Tm ({}) Tj ET\n",
+        "BT /{font_name} {:.2} Tf 1 0 0 1 {:.2} {:.2} Tm ({}) Tj ET\n",
         size,
         line.x,
         pdf_y,

@@ -20,6 +20,8 @@ members = [
     "crates/tw-ai",
     "crates/tw-crdt",
     "crates/tw-plugin",
+    "crates/tw-policy",
+    "crates/tw-automation",
     "crates/tw-wasm",
 ]
 

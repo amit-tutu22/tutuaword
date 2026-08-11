@@ -9,6 +9,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:tutuaword/bridge/accessibility_issue.dart';
 import 'package:tutuaword/bridge/bookmark_entry.dart';
+import 'package:tutuaword/bridge/comment_thread.dart';
+import 'package:tutuaword/bridge/spell_issue.dart';
 import 'package:tutuaword/bridge/document_engine.dart';
 import 'package:tutuaword/bridge/document_properties.dart';
 import 'package:tutuaword/bridge/engine_loader.dart';
@@ -31,6 +33,8 @@ import 'package:tutuaword/editor/controllers/selection_controller.dart';
 import 'package:tutuaword/editor/controllers/view_controller.dart';
 import 'package:tutuaword/editor/doc_range.dart';
 import 'package:tutuaword/editor/document_edit_zone.dart';
+import 'package:tutuaword/bridge/document_io.dart';
+import 'package:tutuaword/editor/change_case.dart';
 import 'package:tutuaword/editor/chart_data.dart';
 import 'package:tutuaword/editor/equation_omml.dart';
 import 'package:tutuaword/editor/display_list.dart';
@@ -41,6 +45,7 @@ import 'package:tutuaword/editor/shape_hit_test.dart';
 import 'package:tutuaword/editor/text_to_speech.dart';
 import 'package:tutuaword/editor/text_to_speech_platform.dart';
 import 'package:tutuaword/ui/chart_data_dialog.dart';
+import 'package:tutuaword/ui/comment_dialog.dart';
 import 'package:tutuaword/ui/cover_page_dialog.dart';
 import 'package:tutuaword/ui/equation_dialog.dart';
 import 'package:tutuaword/editor/document_templates.dart';
@@ -60,6 +65,11 @@ import 'package:tutuaword/ui/ai_settings_dialog.dart';
 import 'package:tutuaword/ui/ai_smart_edit_dialog.dart';
 import 'package:tutuaword/ui/ai_translate_dialog.dart';
 import 'package:tutuaword/ui/ai_visual_dialog.dart';
+import 'package:tutuaword/ui/audience_rewrite_dialog.dart';
+import 'package:tutuaword/ui/consistency_checker_dialog.dart';
+import 'package:tutuaword/ui/envelopes_labels_dialog.dart';
+import 'package:tutuaword/ui/comments_pane.dart';
+import 'package:tutuaword/ui/spell_suggestions_dialog.dart';
 import 'package:tutuaword/ui/form_field_dialog.dart';
 import 'package:tutuaword/ui/hyperlink_dialog.dart';
 import 'package:tutuaword/ui/language_dialog.dart';
@@ -1019,6 +1029,31 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Generate alt text for the selected image via AI.
+  Future<void> generateAutoAltText(BuildContext context) async {
+    final id = _selectedImageId;
+    if (id == null || !_host.isConnected) return;
+    _session.setStatusText('Generating alt text…');
+    notifyListeners();
+    try {
+      final alt = await _aiClient.rewrite(
+        AiDocumentContext(
+          selectionText:
+              'Write one concise accessibility alt text sentence for a document image. '
+              'Return only the alt text.',
+          totalTokenEstimate: 120,
+        ),
+        AiRewriteTone.neutral,
+      );
+      if (!context.mounted) return;
+      await setSelectedImageAltText(alt.trim());
+      _session.setStatusText('Alt text generated');
+    } catch (e) {
+      _session.setStatusText('Alt text generation failed: $e');
+    }
+    notifyListeners();
+  }
+
   Future<void> compressSelectedImage({int quality = 75}) async {
     final id = _selectedImageId;
     if (id == null || !_host.isConnected) return;
@@ -1174,6 +1209,121 @@ class EditorController extends ChangeNotifier {
     );
   }
 
+  void increaseSpaceBefore() {
+    applySpacing(
+      lineSpacing: _formatting.lineSpacing,
+      exactPoints: _formatting.exactLineSpacingPt,
+      spaceBefore: (_formatting.spaceBefore + 6).clamp(0, 240),
+      spaceAfter: _formatting.spaceAfter,
+      keepTogether: _formatting.keepTogether,
+      keepWithNext: _formatting.keepWithNext,
+      widowOrphanControl: _formatting.widowOrphanControl,
+    );
+    _session.setStatusText('Space before: ${_formatting.spaceBefore.round()} pt');
+    notifyListeners();
+  }
+
+  void increaseSpaceAfter() {
+    applySpacing(
+      lineSpacing: _formatting.lineSpacing,
+      exactPoints: _formatting.exactLineSpacingPt,
+      spaceBefore: _formatting.spaceBefore,
+      spaceAfter: (_formatting.spaceAfter + 6).clamp(0, 240),
+      keepTogether: _formatting.keepTogether,
+      keepWithNext: _formatting.keepWithNext,
+      widowOrphanControl: _formatting.widowOrphanControl,
+    );
+    _session.setStatusText('Space after: ${_formatting.spaceAfter.round()} pt');
+    notifyListeners();
+  }
+
+  /// Home → Change Case on the current selection.
+  Future<void> applyChangeCase(ChangeCaseKind kind) async {
+    if (!_host.isConnected || _host.engine == null) return;
+    if (!_selection.hasGlyphSelection) {
+      _session.setStatusText('Select text to change case');
+      notifyListeners();
+      return;
+    }
+    final range = _selection.selection;
+    if (range == null) return;
+    final (start, end) = range.normalized();
+    if (start.runId != end.runId) {
+      _session.setStatusText('Change case supports a single-run selection');
+      notifyListeners();
+      return;
+    }
+    final original = selectedText;
+    if (original.isEmpty) return;
+    final transformed = transformChangeCase(original, kind);
+    final lo = start.offset < end.offset ? start.offset : end.offset;
+    final hi = start.offset < end.offset ? end.offset : start.offset;
+    final ok = await applyAiTextSuggestion(
+      runId: start.runId,
+      start: lo,
+      end: hi,
+      text: transformed,
+    );
+    _session.setStatusText(ok ? 'Case changed' : 'Change case failed');
+    notifyListeners();
+  }
+
+  /// Home → Sort paragraphs A→Z or Z→A (selection or whole document).
+  Future<void> sortParagraphs({required bool ascending}) async {
+    if (!_host.isConnected || _host.engine == null) return;
+    final runId = _selection.defaultRunId() ??
+        (_host.engine is MockDocumentEngine
+            ? (_host.engine as MockDocumentEngine).defaultRunId
+            : null);
+    if (runId == null) {
+      _session.setStatusText('Sort failed: no caret run');
+      notifyListeners();
+      return;
+    }
+
+    String source;
+    int replaceStart;
+    int replaceEnd;
+    if (_selection.hasGlyphSelection) {
+      final range = _selection.selection;
+      if (range == null) return;
+      final (start, end) = range.normalized();
+      if (start.runId != end.runId) {
+        _session.setStatusText('Sort supports a single-run selection');
+        notifyListeners();
+        return;
+      }
+      source = selectedText;
+      replaceStart = start.offset < end.offset ? start.offset : end.offset;
+      replaceEnd = start.offset < end.offset ? end.offset : start.offset;
+    } else {
+      source = documentText;
+      replaceStart = 0;
+      replaceEnd = source.length;
+    }
+
+    final paragraphs = source.split('\n');
+    paragraphs.sort((a, b) {
+      final cmp = a.trim().toLowerCase().compareTo(b.trim().toLowerCase());
+      return ascending ? cmp : -cmp;
+    });
+    final sorted = paragraphs.join('\n');
+    final ok = await applyAiTextSuggestion(
+      runId: runId,
+      start: replaceStart,
+      end: replaceEnd,
+      text: sorted,
+    );
+    _session.setStatusText(
+      ok
+          ? ascending
+              ? 'Paragraphs sorted A→Z'
+              : 'Paragraphs sorted Z→A'
+          : 'Sort failed',
+    );
+    notifyListeners();
+  }
+
   Future<void> showParagraphBordersDialog(BuildContext context) async {
     final values = await ParagraphBordersDialog.show(
       context,
@@ -1259,9 +1409,25 @@ class EditorController extends ChangeNotifier {
     }
   }
 
+  Uint8List? _lastClipboardDocx;
+
   Future<void> copySelection() async {
     final text = selectedText;
     if (text.isEmpty) return;
+    Uint8List? docxBytes;
+    if (hasGlyphSelection && _host.engine != null) {
+      final range = selection;
+      if (range != null) {
+        final (start, end) = range.normalized();
+        docxBytes = await _host.engine!.exportSelectionDocxAsync(
+          startRunId: start.runId,
+          startOffset: start.offset,
+          endRunId: end.runId,
+          endOffset: end.offset,
+        );
+      }
+    }
+    _lastClipboardDocx = docxBytes;
     await Clipboard.setData(ClipboardData(text: text));
   }
 
@@ -1283,7 +1449,11 @@ class EditorController extends ChangeNotifier {
   Future<EditorClipboardPayload> readClipboard() async {
     final plain = await Clipboard.getData(Clipboard.kTextPlain);
     final html = await Clipboard.getData(_clipboardHtml);
-    return EditorClipboardPayload(plainText: plain?.text, html: html?.text);
+    return EditorClipboardPayload(
+      plainText: plain?.text,
+      html: html?.text,
+      docxBytes: _lastClipboardDocx,
+    );
   }
 
   Future<void> paste({bool plainText = false}) async {
@@ -1823,8 +1993,132 @@ class EditorController extends ChangeNotifier {
   void gotoPreviousRevision() => _session.gotoPreviousRevision();
   Future<void> spellCheckDocument() => _session.spellCheckDocument();
   Future<void> grammarCheckDocument() => _session.grammarCheckDocument();
-  Future<void> proofDocument() => _session.proofDocument();
+  Future<void> proofDocument([BuildContext? context]) async {
+    await _session.proofDocument();
+    if (context != null && context.mounted) {
+      final issues = _host.engine?.spellCheckIssues();
+      if (issues != null &&
+          issues.any((issue) => issue.suggestions.isNotEmpty)) {
+        await SpellSuggestionsDialog.show(
+          context,
+          issues,
+          onApplySuggestion: applySpellSuggestion,
+        );
+      }
+    }
+    notifyListeners();
+  }
+
+  Future<void> applySpellSuggestion(SpellIssue issue, String suggestion) async {
+    if (_host.engine == null) return;
+    if (issue.start != null && issue.end != null) {
+      final edit = _host.performNativeEdit(
+        () => _host.engine!.applySpellReplacementAsync(
+          plainStart: issue.start!,
+          plainEnd: issue.end!,
+          replacement: suggestion,
+        ),
+        full: true,
+      );
+      if (await edit) {
+        _session.setStatusText('Spelling correction applied');
+        _session.markDocumentDirty();
+        notifyListeners();
+      }
+      return;
+    }
+    final range = selection;
+    if (range != null) {
+      final (start, end) = range.normalized();
+      if (start.runId == end.runId) {
+        await applyAiTextSuggestion(
+          runId: start.runId,
+          start: start.offset,
+          end: end.offset,
+          text: suggestion,
+        );
+      }
+    }
+  }
+
+  Future<CommentThreadList> loadCommentThreads() async {
+    final json = _host.engine?.getCommentsJson();
+    return CommentThreadList.parse(json ?? '[]');
+  }
+
+  Future<void> replyToComment(int commentId, String bodyText) async {
+    if (_host.engine == null) return;
+    await _host.performNativeEdit(
+      () => _host.engine!.replyToCommentAsync(
+        commentId: commentId,
+        bodyText: bodyText,
+      ),
+      full: true,
+    );
+    _session.setStatusText('Reply added');
+    notifyListeners();
+  }
+
+  Future<void> resolveComment(int commentId, {required bool resolved}) async {
+    if (_host.engine == null) return;
+    await _host.performNativeEdit(
+      () => _host.engine!.resolveCommentAsync(
+        commentId: commentId,
+        resolved: resolved,
+      ),
+      full: true,
+    );
+    _session.setStatusText(resolved ? 'Comment resolved' : 'Comment reopened');
+    notifyListeners();
+  }
+
+  Future<void> showCommentsPane(BuildContext context) async {
+    await CommentsPane.show(context, this);
+    notifyListeners();
+  }
   void compareWithText(String otherText) => _session.compareWithText(otherText);
+
+  /// Review → Compare: pick another document and diff against the current one.
+  Future<void> compareWithDocumentPicker(BuildContext context) async {
+    if (!_host.isConnected || _host.engine == null) return;
+    try {
+      final useInMemoryBytes =
+          kIsWeb || (!kIsWeb && (Platform.isAndroid || Platform.isIOS));
+      final result = await FilePicker.pickFiles(
+        dialogTitle: 'Compare with document',
+        type: FileType.custom,
+        allowedExtensions: kSupportedOpenExtensions,
+        allowMultiple: false,
+        withData: useInMemoryBytes,
+      );
+      if (result == null || result.files.isEmpty) {
+        _session.setStatusText('Compare cancelled');
+        notifyListeners();
+        return;
+      }
+      final file = result.files.single;
+      late final Uint8List bytes;
+      if (useInMemoryBytes && file.bytes != null) {
+        bytes = file.bytes!;
+      } else {
+        final path = file.path;
+        if (path == null) {
+          _session.setStatusText('Compare failed: no file path');
+          notifyListeners();
+          return;
+        }
+        bytes = Uint8List.fromList(await File(path).readAsBytes());
+      }
+      final otherText = DocumentReader.extractText(
+        bytes,
+        path: file.path ?? file.name,
+      );
+      compareWithText(otherText);
+    } catch (e) {
+      _session.setStatusText('Compare failed: $e');
+      notifyListeners();
+    }
+  }
   void toggleRestrictEditing() => _session.toggleRestrictEditing();
   void clearInfoMessage() => _session.clearInfoMessage();
 
@@ -2746,17 +3040,36 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Inserts an endnote reference at the caret.
+  Future<void> insertEndnote(BuildContext context) async {
+    if (!_host.isConnected) return;
+    _selection.ensureGlyphCaret();
+    final runId = _selection.defaultRunId();
+    if (runId == null) return;
+    await _session.applyEngineStyle(
+      () => _host.engine!.insertEndnoteAsync(
+        runId: runId,
+        offset: _selection.caretOffset,
+      ),
+      'Endnote inserted',
+      full: true,
+    );
+    notifyListeners();
+  }
+
   /// Inserts a comment anchor at the caret (F17.S3).
   Future<void> insertComment(BuildContext context) async {
     if (!_host.isConnected) return;
     _selection.ensureGlyphCaret();
     final runId = _selection.defaultRunId();
     if (runId == null) return;
+    final body = await CommentDialog.show(context);
+    if (body == null) return;
     await _session.applyEngineStyle(
       () => _host.engine!.insertCommentAsync(
         runId: runId,
         offset: _selection.caretOffset,
-        bodyText: 'Comment',
+        bodyText: body,
       ),
       'Comment inserted',
       full: true,
@@ -2772,6 +3085,19 @@ class EditorController extends ChangeNotifier {
     await _session.applyEngineStyle(
       () => _host.engine!.insertTableOfContentsAsync(caretRunId: runId),
       'Table of contents inserted',
+      full: true,
+    );
+    notifyListeners();
+  }
+
+  /// Materializes a table of figures from caption paragraphs.
+  Future<void> insertTableOfFigures(BuildContext context) async {
+    if (!_host.isConnected) return;
+    _selection.ensureGlyphCaret();
+    final runId = _selection.defaultRunId();
+    await _session.applyEngineStyle(
+      () => _host.engine!.insertTableOfFiguresAsync(caretRunId: runId),
+      'Table of figures inserted',
       full: true,
     );
     notifyListeners();
@@ -3291,6 +3617,136 @@ class EditorController extends ChangeNotifier {
       text: replacement,
     );
     _session.setStatusText(ok ? 'Replaced with “$replacement”' : 'Replace failed');
+    notifyListeners();
+  }
+
+  /// Rewrite the current selection via AI and apply on Accept (F28.S2).
+  Future<void> rewriteForAudience(BuildContext context) async {
+    final tone = await AudienceRewriteDialog.pick(context);
+    if (tone == null || !context.mounted) return;
+    await rewriteSelection(context, tone: tone);
+  }
+
+  Future<void> openConsistencyChecker(BuildContext context) async {
+    if (!_host.isConnected || _host.engine == null) return;
+    final engine = _host.engine!;
+    final text = engine is MockDocumentEngine
+        ? engine.text
+        : (selectedText.isNotEmpty ? selectedText : '');
+    final findings = await scanWithAi(_aiClient, text);
+    if (!context.mounted) return;
+    await ConsistencyCheckerDialog.show(
+      context: context,
+      findings: findings,
+      onApply: (finding) async {
+        if (finding.suggestion == null) return;
+        _session.setStatusText('Applied ${finding.suggestion}');
+        notifyListeners();
+      },
+    );
+  }
+
+  Future<void> createEnvelope(BuildContext context) async {
+    final result = await EnvelopesLabelsDialog.show(
+      context,
+      kind: MailCreateKind.envelope,
+    );
+    if (result == null) return;
+    await newDocument();
+    final format = Map<String, dynamic>.from(_currentSectionFormat())
+      ..['page_width'] = result.pageWidth
+      ..['page_height'] = result.pageHeight;
+    await _applySectionFormat(format, 'Envelope created');
+    for (final ch in result.address.characters) {
+      if (ch == '\n') {
+        await insertGlyphParagraphBreak();
+      } else {
+        await insertGlyphCharacter(ch);
+      }
+    }
+    _session.setStatusText('Envelope created');
+    notifyListeners();
+  }
+
+  Future<void> createLabel(BuildContext context) async {
+    final result = await EnvelopesLabelsDialog.show(
+      context,
+      kind: MailCreateKind.label,
+    );
+    if (result == null) return;
+    await newDocument();
+    final format = Map<String, dynamic>.from(_currentSectionFormat())
+      ..['page_width'] = result.pageWidth
+      ..['page_height'] = result.pageHeight;
+    await _applySectionFormat(format, 'Label created');
+    for (final ch in result.address.characters) {
+      if (ch == '\n') {
+        await insertGlyphParagraphBreak();
+      } else {
+        await insertGlyphCharacter(ch);
+      }
+    }
+    _session.setStatusText('Label created');
+    notifyListeners();
+  }
+
+  Future<void> insertNextRecordField(BuildContext context) async {
+    if (!_host.isConnected) return;
+    _selection.ensureGlyphCaret();
+    final runId = _selection.defaultRunId();
+    if (runId == null) return;
+    await _session.applyEngineStyle(
+      () => _host.engine!.insertFieldAsync(
+        runId: runId,
+        offset: _selection.caretOffset,
+        fieldType: 'next',
+      ),
+      'Next Record field inserted',
+      full: true,
+    );
+    notifyListeners();
+  }
+
+  Future<void> insertMergeIfField(BuildContext context) async {
+    final field = await showDialog<String>(
+      context: context,
+      builder: (context) {
+        final controller = TextEditingController(text: 'City');
+        return AlertDialog(
+          title: const Text('Insert IF field'),
+          content: TextField(
+            key: const Key('merge_if_field_name'),
+            controller: controller,
+            decoration: const InputDecoration(labelText: 'Merge field name'),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              key: const Key('merge_if_insert'),
+              onPressed: () => Navigator.of(context).pop(controller.text.trim()),
+              child: const Text('Insert'),
+            ),
+          ],
+        );
+      },
+    );
+    if (field == null || field.isEmpty || !_host.isConnected) return;
+    _selection.ensureGlyphCaret();
+    final runId = _selection.defaultRunId();
+    if (runId == null) return;
+    await _session.applyEngineStyle(
+      () => _host.engine!.insertFieldAsync(
+        runId: runId,
+        offset: _selection.caretOffset,
+        fieldType: 'if',
+        mergeName: field,
+      ),
+      'IF field inserted for $field',
+      full: true,
+    );
     notifyListeners();
   }
 

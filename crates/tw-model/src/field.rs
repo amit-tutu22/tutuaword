@@ -53,6 +53,10 @@ pub fn field_instruction(field_type: &FieldType) -> String {
         FieldType::FormText => " FORMTEXT ".to_string(),
         FieldType::FormCheckbox => " FORMCHECKBOX ".to_string(),
         FieldType::MergeField => " MERGEFIELD ".to_string(),
+        FieldType::NextRecord => " NEXT ".to_string(),
+        FieldType::MergeIf => " IF ".to_string(),
+        FieldType::TableOfContents => r#" TOC \o "1-3" \h \z \u "#.to_string(),
+        FieldType::TableOfFigures => r#" TOC \c "Figure" "#.to_string(),
         FieldType::Other(instr) => instr.clone(),
     }
 }
@@ -89,6 +93,28 @@ pub fn form_checkbox_field_data(name: Option<String>, checked: bool) -> FieldDat
 }
 
 /// Build a mail-merge field (`«Name»` unbound display) (F26.S2).
+/// Build a table-of-contents field run (`TOC \o "1-3" …`).
+pub fn toc_field_data(display_title: impl Into<String>) -> FieldData {
+    FieldData {
+        field_type: FieldType::TableOfContents,
+        instruction: Some(field_instruction(&FieldType::TableOfContents)),
+        display_text: Some(display_title.into()),
+        form: None,
+        merge_name: None,
+    }
+}
+
+/// Build a table-of-figures field run (`TOC \c "Figure"`).
+pub fn tof_field_data(display_title: impl Into<String>) -> FieldData {
+    FieldData {
+        field_type: FieldType::TableOfFigures,
+        instruction: Some(field_instruction(&FieldType::TableOfFigures)),
+        display_text: Some(display_title.into()),
+        form: None,
+        merge_name: None,
+    }
+}
+
 pub fn merge_field_data(name: impl Into<String>) -> FieldData {
     let name = name.into();
     FieldData {
@@ -135,6 +161,15 @@ pub fn evaluate_field(field: &FieldData, ctx: &FieldEvalContext) -> String {
                 .map(merge_field_placeholder)
                 .unwrap_or_else(|| "«»".to_string())
         }),
+        FieldType::NextRecord => "<<Next Record>>".to_string(),
+        FieldType::MergeIf => field
+            .display_text
+            .clone()
+            .unwrap_or_else(|| "<<IF>>".to_string()),
+        FieldType::TableOfContents | FieldType::TableOfFigures => field
+            .display_text
+            .clone()
+            .unwrap_or_default(),
         FieldType::Other(_) => field
             .display_text
             .clone()
@@ -164,6 +199,12 @@ pub fn run_layout_text(run: &Run, ctx: Option<&FieldEvalContext>) -> String {
             .display_number
             .map(|n| n.to_string())
             .unwrap_or_else(|| note.note_id.to_string()),
+        RunContent::EndnoteRef(note) => {
+            let n = note
+                .display_number
+                .unwrap_or_else(|| note.note_id.max(1) as u32);
+            roman_numeral(n)
+        }
         RunContent::CitationRef(cite) => cite
             .display_text
             .clone()
@@ -212,4 +253,33 @@ fn format_sum(value: f64) -> String {
     } else {
         format!("{value:.2}")
     }
+}
+
+fn roman_numeral(mut n: u32) -> String {
+    if n == 0 {
+        return "i".to_string();
+    }
+    const VALUES: [(u32, &str); 13] = [
+        (1000, "m"),
+        (900, "cm"),
+        (500, "d"),
+        (400, "cd"),
+        (100, "c"),
+        (90, "xc"),
+        (50, "l"),
+        (40, "xl"),
+        (10, "x"),
+        (9, "ix"),
+        (5, "v"),
+        (4, "iv"),
+        (1, "i"),
+    ];
+    let mut out = String::new();
+    for (value, symbol) in VALUES {
+        while n >= value {
+            out.push_str(symbol);
+            n -= value;
+        }
+    }
+    out
 }

@@ -159,7 +159,7 @@ We use Word's existing `w14:paraId` where available, and add our own `tw:nodeId`
 | App properties | `docProps/app.xml` | A | 3 | Page count, word count |
 | Custom properties | `docProps/custom.xml` | C | — | Preserve verbatim |
 | Custom XML | `customXml/*` | C | — | Preserve verbatim |
-| VBA macros | `word/vbaProject.bin` | C | — | Preserve verbatim; never execute |
+| VBA macros | `word/vbaProject.bin` | C | — | Preserve verbatim on passthrough; never execute |
 
 ## Element-Level Mapping
 
@@ -266,7 +266,7 @@ Default: **Max fidelity** when saving an imported DOCX. **Word 2016+** when savi
 
 These are accepted limitations, documented for user expectations:
 
-1. **VBA macros** — preserved but never executed
+1. **VBA macros** — preserved on passthrough export; never executed
 2. **ActiveX controls** — preserved but not rendered or interactive
 3. **SmartArt** — preserved; rendered as placeholder bounding box
 4. **Embedded Excel charts** — preserved; rendered as static image if available

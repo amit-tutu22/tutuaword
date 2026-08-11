@@ -163,8 +163,16 @@ class LayoutTab extends StatelessWidget {
                 children: [
                   Row(
                     children: [
-                      RibbonIconButton(icon: Icons.format_indent_decrease, onPressed: null),
-                      RibbonIconButton(icon: Icons.format_indent_increase, onPressed: null),
+                      RibbonIconButton(
+                        icon: Icons.format_indent_decrease,
+                        tooltip: 'Decrease Indent',
+                        onPressed: controller.decreaseIndent,
+                      ),
+                      RibbonIconButton(
+                        icon: Icons.format_indent_increase,
+                        tooltip: 'Increase Indent',
+                        onPressed: controller.increaseIndent,
+                      ),
                       RibbonIconButton(
                         icon: Icons.keyboard_tab,
                         label: 'Tabs',
@@ -175,8 +183,18 @@ class LayoutTab extends StatelessWidget {
                   ),
                   Row(
                     children: [
-                      RibbonIconButton(icon: Icons.space_bar, label: 'Before', onPressed: null),
-                      RibbonIconButton(icon: Icons.space_bar, label: 'After', onPressed: null),
+                      RibbonIconButton(
+                        icon: Icons.space_bar,
+                        label: 'Before',
+                        tooltip: 'Increase space before paragraph',
+                        onPressed: controller.increaseSpaceBefore,
+                      ),
+                      RibbonIconButton(
+                        icon: Icons.vertical_align_bottom,
+                        label: 'After',
+                        tooltip: 'Increase space after paragraph',
+                        onPressed: controller.increaseSpaceAfter,
+                      ),
                     ],
                   ),
                 ],

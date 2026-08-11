@@ -29,6 +29,9 @@ enum AiRewriteTone {
   casual,
   shorten,
   expand,
+  executive,
+  student,
+  customer,
 }
 
 /// Internal provider ids (settings / routing diagnostics only).

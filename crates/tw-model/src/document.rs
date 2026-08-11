@@ -53,6 +53,9 @@ pub struct Document {
     /// Footnote bodies keyed by OOXML `w:id` (F16.S1).
     #[serde(default)]
     pub footnotes: Vec<Footnote>,
+    /// Endnote bodies at document end (F16.S1 extension).
+    #[serde(default)]
+    pub endnotes: Vec<Footnote>,
     /// Bibliography sources keyed by citation tag (F16.S3).
     #[serde(default)]
     pub bibliography_sources: Vec<BibliographySource>,
@@ -73,6 +76,7 @@ impl Document {
             properties: DocumentProperties::default(),
             sections: vec![Section::new()],
             footnotes: Vec::new(),
+            endnotes: Vec::new(),
             bibliography_sources: Vec::new(),
             comments: Vec::new(),
             signatures: Vec::new(),
@@ -653,6 +657,61 @@ impl Document {
                     for row in &mut table.rows {
                         for cell in &mut row.cells {
                             Self::renumber_footnotes_in_blocks(&mut cell.blocks, number);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    pub fn endnote_by_id(&self, id: i32) -> Option<&Footnote> {
+        self.endnotes.iter().find(|note| note.id == id)
+    }
+
+    pub fn endnote_by_id_mut(&mut self, id: i32) -> Option<&mut Footnote> {
+        self.endnotes.iter_mut().find(|note| note.id == id)
+    }
+
+    pub fn next_endnote_id(&self) -> i32 {
+        let max_body = self.endnotes.iter().map(|f| f.id).max().unwrap_or(0);
+        let max_ref = self
+            .sections
+            .iter()
+            .flat_map(|section| section.blocks.iter())
+            .filter_map(|block| block.paragraph())
+            .flat_map(|para| para.runs.iter())
+            .filter_map(|run| match &run.content {
+                RunContent::EndnoteRef(note) => Some(note.note_id),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0);
+        max_body.max(max_ref).max(0) + 1
+    }
+
+    pub fn renumber_endnotes(&mut self) {
+        let mut number = 1u32;
+        for section in &mut self.sections {
+            Self::renumber_endnotes_in_blocks(&mut section.blocks, &mut number);
+        }
+    }
+
+    fn renumber_endnotes_in_blocks(blocks: &mut [Block], number: &mut u32) {
+        for block in blocks {
+            match block {
+                Block::Paragraph(para) => {
+                    for run in &mut para.runs {
+                        if let RunContent::EndnoteRef(note) = &mut run.content {
+                            note.display_number = Some(*number);
+                            *number += 1;
+                        }
+                    }
+                }
+                Block::Table(table) => {
+                    for row in &mut table.rows {
+                        for cell in &mut row.cells {
+                            Self::renumber_endnotes_in_blocks(&mut cell.blocks, number);
                         }
                     }
                 }

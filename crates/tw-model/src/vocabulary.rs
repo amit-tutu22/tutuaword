@@ -152,6 +152,14 @@ pub enum FieldType {
     FormCheckbox,
     /// Mail-merge field (`MERGEFIELD Name`) (F26.S2).
     MergeField,
+    /// Advance to next mail-merge record (`NEXT`) (F26.S2).
+    NextRecord,
+    /// Conditional mail-merge field (`IF`) — instruction holds full IF expression (F26.S2).
+    MergeIf,
+    /// Table of contents field (`TOC \o "1-3" …`) — F16.S2 / L1.
+    TableOfContents,
+    /// Table of figures field (`TOC \c "Figure"`) — L1.
+    TableOfFigures,
     Other(String),
 }
 
