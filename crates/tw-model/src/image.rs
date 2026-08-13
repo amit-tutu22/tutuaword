@@ -229,6 +229,8 @@ pub enum AnchorOrigin {
     Column,
     Page,
     Margin,
+    /// Relative to the paragraph that owns the floating drawing (`relativeFrom="paragraph"`).
+    Paragraph,
 }
 
 /// Placement of a floating (`wp:anchor`) image. Inline images have none.

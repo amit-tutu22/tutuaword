@@ -1,14 +1,12 @@
-// Application-level settings for the Runner target.
+// Application-level settings for the Flutter macOS target.
 //
-// This may be replaced with something auto-generated from metadata (e.g., pubspec.yaml) in the
-// future. If not, the values below would default to using the project name when this becomes a
-// 'flutter create' template.
+// PRODUCT_NAME is the Dock / menu-bar / .app name (tutuaword).
+// The Xcode target stays "Runner" because Flutter and CocoaPods expect that.
 
-// The application's name. By default this is also the title of the Flutter window.
 PRODUCT_NAME = tutuaword
 
 // The application's bundle identifier
-PRODUCT_BUNDLE_IDENTIFIER = com.example.tutuaword
+PRODUCT_BUNDLE_IDENTIFIER = com.manasai.tutuaword
 
 // The copyright displayed in application information
-PRODUCT_COPYRIGHT = Copyright © 2026 com.example. All rights reserved.
+PRODUCT_COPYRIGHT = Copyright © 2026 amit.blr76. All rights reserved.

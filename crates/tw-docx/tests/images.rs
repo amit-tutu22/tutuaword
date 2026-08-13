@@ -2,7 +2,7 @@
 
 use std::io::Write;
 use tw_docx::import;
-use tw_model::{AnchorOrigin, Block};
+use tw_model::{AnchorOrigin, Block, TextWrap};
 use zip::write::SimpleFileOptions;
 
 const PNG_1X1: &[u8] = &[
@@ -137,12 +137,59 @@ fn an_anchored_image_records_its_offsets_and_origins() {
         </wp:anchor></w:drawing></w:r></w:p>"#;
     let docx = build_docx(body, true);
     let result = import(&docx).unwrap();
-    let anchor = image_blocks(&result.document)[0]
-        .anchor
-        .expect("anchored image should have an anchor");
+    let image = image_blocks(&result.document)[0];
+    let anchor = image.anchor.expect("anchored image should have an anchor");
 
     assert!((anchor.x - -36.0).abs() < 0.01, "{}", anchor.x);
     assert!((anchor.y - 18.0).abs() < 0.01, "{}", anchor.y);
     assert_eq!(anchor.origin_x, AnchorOrigin::Column);
     assert_eq!(anchor.origin_y, AnchorOrigin::Page);
+    assert_eq!(image.wrap, TextWrap::Behind);
+}
+
+#[test]
+fn square_wrap_and_paragraph_origin_are_preserved() {
+    let body = r#"<w:p><w:r><w:drawing><wp:anchor behindDoc="0">
+        <wp:positionH relativeFrom="margin"><wp:posOffset>0</wp:posOffset></wp:positionH>
+        <wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>
+        <wp:extent cx="914400" cy="914400"/>
+        <wp:wrapSquare wrapText="bothSides"/>
+        <a:blip r:embed="rId7"/>
+        </wp:anchor></w:drawing></w:r></w:p>"#;
+    let docx = build_docx(body, true);
+    let result = import(&docx).unwrap();
+    let image = image_blocks(&result.document)[0];
+    let anchor = image.anchor.expect("anchored image should have an anchor");
+
+    assert_eq!(image.wrap, TextWrap::Square);
+    assert_eq!(anchor.origin_x, AnchorOrigin::Margin);
+    assert_eq!(anchor.origin_y, AnchorOrigin::Paragraph);
+}
+
+#[test]
+fn wrap_none_in_front_is_not_behind() {
+    let body = r#"<w:p><w:r><w:drawing><wp:anchor behindDoc="0">
+        <wp:positionH relativeFrom="margin"><wp:posOffset>0</wp:posOffset></wp:positionH>
+        <wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>
+        <wp:extent cx="914400" cy="914400"/>
+        <wp:wrapNone/>
+        <a:blip r:embed="rId7"/>
+        </wp:anchor></w:drawing></w:r></w:p>"#;
+    let docx = build_docx(body, true);
+    let result = import(&docx).unwrap();
+    assert_eq!(image_blocks(&result.document)[0].wrap, TextWrap::InFront);
+}
+
+#[test]
+fn top_and_bottom_wrap_is_preserved() {
+    let body = r#"<w:p><w:r><w:drawing><wp:anchor behindDoc="0">
+        <wp:positionH relativeFrom="margin"><wp:posOffset>0</wp:posOffset></wp:positionH>
+        <wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>
+        <wp:extent cx="914400" cy="914400"/>
+        <wp:wrapTopAndBottom/>
+        <a:blip r:embed="rId7"/>
+        </wp:anchor></w:drawing></w:r></w:p>"#;
+    let docx = build_docx(body, true);
+    let result = import(&docx).unwrap();
+    assert_eq!(image_blocks(&result.document)[0].wrap, TextWrap::TopBottom);
 }

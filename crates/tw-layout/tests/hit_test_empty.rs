@@ -65,14 +65,17 @@ fn empty_line_hit_test_accepts_x_past_zero_width_run() {
 }
 
 #[test]
-fn hit_test_below_all_lines_falls_back_to_first_run() {
+fn hit_test_below_all_lines_falls_back_to_last_run() {
     let mut engine = LayoutEngine::new();
     let doc = Document::new();
+    let expected = doc.paragraph_at(0, 0).unwrap().runs[0].id;
     let _ = engine.layout_document(&doc);
     let map = engine.line_map(0).unwrap();
 
+    // Single-line page: last == first. Below-content must not jump to a
+    // phantom "top" — it should stay on the content edge (last line).
     let hit = map
         .hit_test(100.0, 700.0)
-        .expect("clicks below content should land on the first run");
-    assert_eq!(hit.run_id, doc.paragraph_at(0, 0).unwrap().runs[0].id);
+        .expect("clicks below content should land on the last run");
+    assert_eq!(hit.run_id, expected);
 }

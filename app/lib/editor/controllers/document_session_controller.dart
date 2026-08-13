@@ -6,12 +6,14 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:tutuaword/bridge/document_io.dart';
+import 'package:tutuaword/bridge/document_picker.dart';
 import 'package:tutuaword/bridge/document_properties.dart';
 import 'package:tutuaword/bridge/document_session_store.dart';
 import 'package:tutuaword/bridge/print_layout_settings.dart';
 import 'package:tutuaword/editor/doc_range.dart';
 import 'package:tutuaword/bridge/file_bytes.dart';
 import 'package:tutuaword/bridge/macos_file_access.dart';
+import 'package:tutuaword/bridge/spell_issue.dart';
 import 'package:tutuaword/bridge/twdoc_io.dart';
 import 'package:tutuaword/editor/autosave_scheduler.dart';
 import 'package:tutuaword/editor/controllers/engine_host.dart';
@@ -77,6 +79,7 @@ class DocumentSessionController extends ChangeNotifier {
   String? _infoMessage;
   bool _trackChanges = false;
   List<String> _spellMisspellings = const [];
+  List<SpellIssue> _spellIssues = const [];
   List<String> _grammarIssues = const [];
   String? _compareSummary;
   int _editGeneration = 0;
@@ -92,6 +95,7 @@ class DocumentSessionController extends ChangeNotifier {
   String? get infoMessage => _infoMessage;
   bool get trackChanges => _trackChanges;
   List<String> get spellMisspellings => _spellMisspellings;
+  List<SpellIssue> get spellIssues => _spellIssues;
   List<String> get grammarIssues => _grammarIssues;
   String? get compareSummary => _compareSummary;
   int get editGeneration => _editGeneration;
@@ -247,6 +251,7 @@ class DocumentSessionController extends ChangeNotifier {
     _host.setPageCount(1);
     _selection.reset();
     _spellMisspellings = const [];
+    _spellIssues = const [];
     _infoMessage = null;
     _documentProperties = DocumentProperties.empty;
     _documentReadOnly = false;
@@ -279,35 +284,13 @@ class DocumentSessionController extends ChangeNotifier {
     _statusText = 'Opening…';
     notifyListeners();
     try {
-      final useInMemoryBytes =
-          kIsWeb || (!kIsWeb && (Platform.isAndroid || Platform.isIOS));
-      final result = await FilePicker.pickFiles(
-        dialogTitle: 'Open document',
-        type: FileType.custom,
-        allowedExtensions: kSupportedOpenExtensions,
-        // 12.x defaults allowMultiple to true; we open one document at a time.
-        allowMultiple: false,
-        withData: useInMemoryBytes,
-      );
-      if (result == null || result.files.isEmpty) {
+      final picked = await pickDocumentFile(dialogTitle: 'Open document');
+      if (picked == null) {
         _statusText = 'Open cancelled';
         notifyListeners();
         return;
       }
-      final file = result.files.single;
-      if (useInMemoryBytes && file.bytes != null) {
-        final path = file.path ?? file.name;
-        await _openDocumentBytes(file.bytes!, path: path);
-        return;
-      }
-      final path = file.path;
-      if (path == null) {
-        _statusText = 'Open failed: no file path (try again)';
-        notifyListeners();
-        return;
-      }
-      final bytes = await _readDocumentBytes(path);
-      await _openDocumentBytes(bytes, path: path);
+      await _openDocumentBytes(picked.bytes, path: picked.path);
     } catch (e) {
       _statusText = 'Open failed: $e';
       notifyListeners();
@@ -834,22 +817,24 @@ class DocumentSessionController extends ChangeNotifier {
 
   Future<void> spellCheckDocument() async {
     if (_host.engine != null) {
-      // Blocks this isolate — see NativeEngineOps.spellCheckMisspellings.
-      final words = _host.engine!.spellCheckMisspellings();
-      if (words == null) {
+      // Single spell pass — cache issues and derive misspelling words.
+      final issues = _host.engine!.spellCheckIssues();
+      if (issues == null) {
         _statusText = 'Spell check failed';
         notifyListeners();
         return;
       }
-      _spellMisspellings = words;
-      _statusText = words.isEmpty
+      _spellIssues = issues;
+      _spellMisspellings = issues.map((issue) => issue.word).toList();
+      _statusText = issues.isEmpty
           ? 'No spelling issues found'
-          : 'Spell check: ${words.length} issue(s)';
-      if (words.isNotEmpty) {
+          : 'Spell check: ${issues.length} issue(s)';
+      if (issues.isNotEmpty) {
         _infoMessage =
-            'Spell check found ${words.length} issue(s): ${words.take(5).join(", ")}';
+            'Spell check found ${issues.length} issue(s): ${_spellMisspellings.take(5).join(", ")}';
       }
     } else {
+      _spellIssues = const [];
       _spellMisspellings = const [];
       _statusText = 'Spell check: no issues';
     }

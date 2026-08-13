@@ -25,6 +25,7 @@ class EditorMenuBar extends StatelessWidget {
     required this.onRemovePassword,
     required this.onInspectDocument,
     required this.onDigitalSignatures,
+    required this.onShowAbout,
     required this.child,
   });
 
@@ -44,6 +45,7 @@ class EditorMenuBar extends StatelessWidget {
   final VoidCallback onRemovePassword;
   final VoidCallback onInspectDocument;
   final VoidCallback onDigitalSignatures;
+  final VoidCallback onShowAbout;
   final Widget child;
 
   static const _appName = 'tutuaword';
@@ -70,6 +72,7 @@ class EditorMenuBar extends StatelessWidget {
         _editMenu(),
         _toolsMenu(),
         _viewMenu(),
+        _helpMenu(),
         _windowMenu(),
       ],
       child: child,
@@ -80,14 +83,14 @@ class EditorMenuBar extends StatelessWidget {
     return PlatformMenu(
       label: _appName,
       menus: _compact([
-        if (_has(PlatformProvidedMenuItemType.about))
-          PlatformMenuItemGroup(
-            members: [
-              PlatformProvidedMenuItem(
-                type: PlatformProvidedMenuItemType.about,
-              ),
-            ],
-          ),
+        PlatformMenuItemGroup(
+          members: [
+            PlatformMenuItem(
+              label: 'About Tutuaword',
+              onSelected: onShowAbout,
+            ),
+          ],
+        ),
         if (_has(PlatformProvidedMenuItemType.servicesSubmenu))
           PlatformMenuItemGroup(
             members: [
@@ -304,6 +307,18 @@ class EditorMenuBar extends StatelessWidget {
               onSelected: onShowGoTo,
             ),
           ],
+        ),
+      ],
+    );
+  }
+
+  PlatformMenu _helpMenu() {
+    return PlatformMenu(
+      label: 'Help',
+      menus: [
+        PlatformMenuItem(
+          label: 'About Tutuaword',
+          onSelected: onShowAbout,
         ),
       ],
     );

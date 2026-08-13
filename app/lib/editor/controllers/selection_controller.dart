@@ -222,6 +222,15 @@ class SelectionController extends ChangeNotifier {
     _selectionRects = _engine!.selectionRectsForRange(caretPage, _selection!);
   }
 
+  /// Selection highlight for any page (cross-page drag paints non-caret pages too).
+  List<GlyphSelectionRect> selectionRectsForPage(int pageIndex) {
+    if (_engine == null || _selection == null || !hasGlyphSelection) {
+      return const [];
+    }
+    if (pageIndex == caretPage) return _selectionRects;
+    return _engine!.selectionRectsForRange(pageIndex, _selection!);
+  }
+
   void moveGlyphCaretByArrow(LogicalKeyboardKey key) {
     if (_engine == null || _caretRunId == null) return;
     final extend = HardwareKeyboard.instance.isShiftPressed;
@@ -267,9 +276,16 @@ class SelectionController extends ChangeNotifier {
     // Empty table cells share a baseline and have zero advance; a 2px nudge stays
     // inside the same cell. Probe farther so left/right can cross into neighbors.
     const distances = <double>[2.0, 24.0, 60.0, 110.0, 180.0];
+    var reachedHorizontalEdge = false;
     for (final distance in distances) {
       final probeX = (before.x + delta.sign * distance)
           .clamp(_marginLeft, _host.pageWidth - _marginRight);
+      if (delta < 0 && probeX <= _marginLeft + 0.5) {
+        reachedHorizontalEdge = true;
+      }
+      if (delta > 0 && probeX >= _host.pageWidth - _marginRight - 0.5) {
+        reachedHorizontalEdge = true;
+      }
       final hit = _engine!.hitTestPage(caretPage, probeX, before.y);
       if (hit == null) continue;
       if (hit.runId == runId && hit.charOffset == _caretOffset) continue;
@@ -279,6 +295,28 @@ class SelectionController extends ChangeNotifier {
         hitTestAt(caretPage, probeX, before.y);
       }
       return;
+    }
+    // Only leave the page when the caret is already at the horizontal edge.
+    if (reachedHorizontalEdge) {
+      _moveGlyphCaretAcrossPage(delta.sign, extendSelection: extendSelection);
+    }
+  }
+
+  void _moveGlyphCaretAcrossPage(int direction, {required bool extendSelection}) {
+    if (direction == 0) return;
+    final nextPage = caretPage + direction;
+    if (nextPage < 0 || nextPage >= _host.pageCount) return;
+    final x = direction > 0
+        ? _marginLeft
+        : (_host.pageWidth - _marginRight);
+    final y = direction > 0
+        ? (_marginTop + _fontSize)
+        : (_host.pageHeight - _marginBottom - _fontSize);
+    if (extendSelection) {
+      _ensureSelectionAnchorForExtend();
+      _moveGlyphCaretToHit(nextPage, x, y, extendSelection: true);
+    } else {
+      hitTestAt(nextPage, x, y);
     }
   }
 
@@ -347,13 +385,40 @@ class SelectionController extends ChangeNotifier {
   void _moveGlyphCaretUpDown(int direction, {bool extendSelection = false}) {
     if (_caretGeometry == null) return;
     final stepY = _fontSize * lineHeightFactor;
+    final x = _caretGeometry!.x;
     final newY = _caretGeometry!.y + stepY * direction;
-    if (extendSelection) {
-      _ensureSelectionAnchorForExtend();
-      _moveGlyphCaretToHit(caretPage, _caretGeometry!.x, newY, extendSelection: true);
+    final contentTop = _marginTop;
+    final contentBottom = _host.pageHeight - _marginBottom;
+
+    if (newY > contentBottom + 0.5 && direction > 0) {
+      _moveGlyphCaretAcrossPage(1, extendSelection: extendSelection);
       return;
     }
-    hitTestAt(caretPage, _caretGeometry!.x, newY);
+    if (newY < contentTop - 0.5 && direction < 0) {
+      _moveGlyphCaretAcrossPage(-1, extendSelection: extendSelection);
+      return;
+    }
+
+    final beforeRun = _caretRunId;
+    final beforeOff = _caretOffset;
+    final beforeY = _caretGeometry!.y;
+    final clampedY = newY.clamp(contentTop, contentBottom);
+    final probingPageEdge = (direction > 0 && newY >= contentBottom - stepY) ||
+        (direction < 0 && newY <= contentTop + stepY);
+    if (extendSelection) {
+      _ensureSelectionAnchorForExtend();
+      _moveGlyphCaretToHit(caretPage, x, clampedY, extendSelection: true);
+    } else {
+      hitTestAt(caretPage, x, clampedY);
+    }
+    // Stuck on the last/first line — only then advance across the page break.
+    // (Engines that ignore probe Y must not treat every Down as a page jump.)
+    final stuck = _caretRunId == beforeRun &&
+        _caretOffset == beforeOff &&
+        ((_caretGeometry?.y ?? beforeY) - beforeY).abs() < 0.5;
+    if (stuck && probingPageEdge) {
+      _moveGlyphCaretAcrossPage(direction, extendSelection: extendSelection);
+    }
   }
 
   void beginGlyphSelection(int pageIndex, double x, double y) =>
@@ -380,10 +445,10 @@ class SelectionController extends ChangeNotifier {
   }
 
   bool isPointInGlyphSelection(int pageIndex, Offset point) {
-    if (!hasGlyphSelection || pageIndex != caretPage || _selectionRects.isEmpty) {
-      return false;
-    }
-    for (final rect in _selectionRects) {
+    if (!hasGlyphSelection) return false;
+    final rects = selectionRectsForPage(pageIndex);
+    if (rects.isEmpty) return false;
+    for (final rect in rects) {
       final bounds = Rect.fromLTWH(rect.x, rect.y, rect.width, rect.height);
       if (bounds.inflate(2).contains(point)) return true;
     }

@@ -20,6 +20,7 @@ class WordTitleBar extends StatelessWidget {
     // app. The blue extends under them so the bar still reads as one surface,
     // while the quick-access controls sit below the inset.
     final viewPadding = MediaQuery.paddingOf(context);
+    final phone = WordTheme.phoneChrome(context);
     return AnnotatedRegion<SystemUiOverlayStyle>(
       // Light glyphs: the system clock and indicators sit on the blue bar.
       value: SystemUiOverlayStyle.light,
@@ -32,68 +33,162 @@ class WordTitleBar extends StatelessWidget {
         ),
         child: SizedBox(
           height: WordTheme.titleBarHeight,
-          // Title is centered on the full bar width; icons sit in a separate
-          // layer so asymmetric quick-access chrome does not shift the name.
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 120),
-                child: Text(
-                  controller.documentTitle,
-                  style: WordTheme.titleBarTitle,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center,
-                  maxLines: 1,
-                ),
-              ),
-              Row(
-                children: [
-                  const SizedBox(width: WordTheme.trafficLightInset),
-                  _QuickAccessIcon(
-                    icon: Icons.home_outlined,
-                    tooltip: onHomePressed == null ? kComingSoonTooltip : 'Home',
-                    onPressed: onHomePressed,
-                  ),
-                  _QuickAccessIcon(
-                    icon: Icons.folder_open_outlined,
-                    tooltip: 'Open',
-                    onPressed: () => controller.openDocument(),
-                  ),
-                  _QuickAccessIcon(
-                    icon: Icons.save_outlined,
-                    tooltip: 'Save',
-                    onPressed: () => controller.saveDocument(),
-                  ),
-                  _QuickAccessIcon(
-                    icon: Icons.undo,
-                    tooltip: 'Undo',
-                    onPressed: controller.undo,
-                  ),
-                  _QuickAccessIcon(
-                    icon: Icons.redo,
-                    tooltip: 'Redo',
-                    onPressed: controller.redo,
-                  ),
-                  _QuickAccessIcon(
-                    icon: Icons.print_outlined,
-                    tooltip: 'Print',
-                    onPressed: () => controller.printDocument(context: context),
-                  ),
-                  const Spacer(),
-                  _QuickAccessIcon(
-                    key: const Key('title_bar_search'),
-                    icon: Icons.search,
-                    tooltip: 'Find',
-                    onPressed: controller.openFindPane,
-                  ),
-                  const SizedBox(width: 12),
-                ],
-              ),
-            ],
-          ),
+          child: phone ? _buildPhoneBar(context) : _buildDesktopBar(context),
         ),
       ),
+    );
+  }
+
+  /// Phone: title between icon groups; Undo / Redo / Print in overflow menu.
+  Widget _buildPhoneBar(BuildContext context) {
+    return Row(
+      children: [
+        SizedBox(width: WordTheme.leadingChromeInset(context)),
+        _QuickAccessIcon(
+          icon: Icons.home_outlined,
+          tooltip: onHomePressed == null ? kComingSoonTooltip : 'Home',
+          onPressed: onHomePressed,
+        ),
+        _QuickAccessIcon(
+          icon: Icons.folder_open_outlined,
+          tooltip: 'Open',
+          onPressed: () => controller.openDocument(),
+        ),
+        _QuickAccessIcon(
+          icon: Icons.save_outlined,
+          tooltip: 'Save',
+          onPressed: () => controller.saveDocument(),
+        ),
+        Expanded(
+          child: Text(
+            controller.documentTitle,
+            style: WordTheme.titleBarTitle,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            maxLines: 1,
+          ),
+        ),
+        _QuickAccessIcon(
+          key: const Key('title_bar_search'),
+          icon: Icons.search,
+          tooltip: 'Find',
+          onPressed: controller.openFindPane,
+        ),
+        _QuickAccessIcon(
+          key: const Key('title_bar_overflow'),
+          icon: Icons.more_horiz,
+          tooltip: 'More actions',
+          onPressed: () => _showOverflowMenu(context),
+        ),
+        const SizedBox(width: 12),
+      ],
+    );
+  }
+
+  void _showOverflowMenu(BuildContext context) {
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final origin = box.localToGlobal(Offset.zero, ancestor: overlay);
+    showMenu<void>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        origin.dx,
+        origin.dy + box.size.height,
+        origin.dx + box.size.width,
+        origin.dy + box.size.height + 4,
+      ),
+      items: [
+        PopupMenuItem<void>(
+          onTap: controller.undo,
+          child: const ListTile(
+            dense: true,
+            leading: Icon(Icons.undo, size: 18),
+            title: Text('Undo', style: TextStyle(fontSize: 13)),
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        PopupMenuItem<void>(
+          onTap: controller.redo,
+          child: const ListTile(
+            dense: true,
+            leading: Icon(Icons.redo, size: 18),
+            title: Text('Redo', style: TextStyle(fontSize: 13)),
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        PopupMenuItem<void>(
+          onTap: () => controller.printDocument(context: context),
+          child: const ListTile(
+            dense: true,
+            leading: Icon(Icons.print_outlined, size: 18),
+            title: Text('Print', style: TextStyle(fontSize: 13)),
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Tablet + desktop: title centered on full bar; QAT floats above.
+  Widget _buildDesktopBar(BuildContext context) {
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 120),
+          child: Text(
+            controller.documentTitle,
+            style: WordTheme.titleBarTitle,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            maxLines: 1,
+          ),
+        ),
+        Row(
+          children: [
+            SizedBox(width: WordTheme.leadingChromeInset(context)),
+            _QuickAccessIcon(
+              icon: Icons.home_outlined,
+              tooltip: onHomePressed == null ? kComingSoonTooltip : 'Home',
+              onPressed: onHomePressed,
+            ),
+            _QuickAccessIcon(
+              icon: Icons.folder_open_outlined,
+              tooltip: 'Open',
+              onPressed: () => controller.openDocument(),
+            ),
+            _QuickAccessIcon(
+              icon: Icons.save_outlined,
+              tooltip: 'Save',
+              onPressed: () => controller.saveDocument(),
+            ),
+            _QuickAccessIcon(
+              icon: Icons.undo,
+              tooltip: 'Undo',
+              onPressed: controller.undo,
+            ),
+            _QuickAccessIcon(
+              icon: Icons.redo,
+              tooltip: 'Redo',
+              onPressed: controller.redo,
+            ),
+            _QuickAccessIcon(
+              icon: Icons.print_outlined,
+              tooltip: 'Print',
+              onPressed: () => controller.printDocument(context: context),
+            ),
+            const Spacer(),
+            _QuickAccessIcon(
+              key: const Key('title_bar_search'),
+              icon: Icons.search,
+              tooltip: 'Find',
+              onPressed: controller.openFindPane,
+            ),
+            const SizedBox(width: 12),
+          ],
+        ),
+      ],
     );
   }
 }

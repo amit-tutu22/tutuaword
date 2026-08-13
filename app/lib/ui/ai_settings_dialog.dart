@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:tutuaword/bridge/ai_client.dart';
+import 'package:tutuaword/bridge/ollama_host.dart';
 
 /// AI routing / provider settings (F28.S1). Capability calls stay provider-agnostic.
+///
+/// Choosing **Always Local** (or Automatic) probes the local endpoint and, on
+/// desktop, starts `ollama serve` when Ollama is installed but not running.
 class AiSettingsDialog extends StatefulWidget {
   const AiSettingsDialog({
     super.key,
@@ -36,6 +40,8 @@ class _AiSettingsDialogState extends State<AiSettingsDialog> {
   late final TextEditingController _openaiKey;
   late final TextEditingController _geminiKey;
   late final TextEditingController _llamaEndpoint;
+  bool _busy = false;
+  String _status = '';
 
   @override
   void initState() {
@@ -44,6 +50,7 @@ class _AiSettingsDialogState extends State<AiSettingsDialog> {
     _openaiKey = TextEditingController(text: widget.client.openaiApiKey);
     _geminiKey = TextEditingController(text: widget.client.geminiApiKey);
     _llamaEndpoint = TextEditingController(text: widget.client.llamaEndpoint);
+    _status = widget.client.lastOllamaEnsure?.message ?? '';
   }
 
   @override
@@ -54,10 +61,37 @@ class _AiSettingsDialogState extends State<AiSettingsDialog> {
     super.dispose();
   }
 
-  void _setMode(AiRoutingMode? mode) {
-    if (mode == null) return;
-    setState(() => _mode = mode);
-    widget.client.setRoutingMode(mode);
+  Future<void> _setMode(AiRoutingMode? mode) async {
+    if (mode == null || _busy) return;
+    setState(() {
+      _mode = mode;
+      _busy = mode != AiRoutingMode.alwaysCloud;
+      _status = mode == AiRoutingMode.alwaysCloud
+          ? 'Using cloud providers (OpenAI / Gemini).'
+          : 'Starting local AI if needed…';
+    });
+    widget.client.openaiApiKey = _openaiKey.text.trim();
+    widget.client.geminiApiKey = _geminiKey.text.trim();
+    widget.client.llamaEndpoint = _llamaEndpoint.text.trim().isEmpty
+        ? 'http://127.0.0.1:11434'
+        : _llamaEndpoint.text.trim();
+
+    final result = await widget.client.applyRoutingMode(mode);
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      if (mode == AiRoutingMode.alwaysCloud) {
+        _status = 'Using cloud providers (OpenAI / Gemini).';
+      } else if (result == null) {
+        _status = '';
+      } else if (result.ok) {
+        _status = result.status == OllamaEnsureStatus.started
+            ? result.message
+            : 'Local AI ready. ${result.message}';
+      } else {
+        _status = result.message;
+      }
+    });
     widget.onChanged?.call();
   }
 
@@ -85,36 +119,57 @@ class _AiSettingsDialogState extends State<AiSettingsDialog> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               const Text(
-                'Routing chooses local or cloud models automatically. '
-                'Capability actions never hardcode a provider.',
+                'Choose where AI runs. Local uses Ollama on this machine '
+                '(auto-started when you pick Local). Cloud uses your API keys.',
               ),
               const SizedBox(height: 12),
               const Text(
-                'Routing mode',
+                'Mode',
                 style: TextStyle(fontWeight: FontWeight.w600),
               ),
               RadioListTile<AiRoutingMode>(
                 key: const Key('ai_routing_automatic'),
                 title: const Text('Automatic'),
-                subtitle: const Text('Grammar → local; long summarize → cloud'),
+                subtitle: const Text(
+                  'Short/local tasks → Ollama; heavy summarize → cloud',
+                ),
                 value: AiRoutingMode.automatic,
                 groupValue: _mode,
-                onChanged: _setMode,
+                onChanged: _busy ? null : _setMode,
               ),
               RadioListTile<AiRoutingMode>(
                 key: const Key('ai_routing_always_local'),
                 title: const Text('Always Local'),
+                subtitle: const Text(
+                  'Starts Ollama automatically if installed (port 11434)',
+                ),
                 value: AiRoutingMode.alwaysLocal,
                 groupValue: _mode,
-                onChanged: _setMode,
+                onChanged: _busy ? null : _setMode,
               ),
               RadioListTile<AiRoutingMode>(
                 key: const Key('ai_routing_always_cloud'),
                 title: const Text('Always Cloud'),
+                subtitle: const Text('OpenAI or Gemini — no local server'),
                 value: AiRoutingMode.alwaysCloud,
                 groupValue: _mode,
-                onChanged: _setMode,
+                onChanged: _busy ? null : _setMode,
               ),
+              if (_busy) ...[
+                const SizedBox(height: 8),
+                const LinearProgressIndicator(key: Key('ai_local_starting')),
+              ],
+              if (_status.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text(
+                  _status,
+                  key: const Key('ai_local_status'),
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    fontSize: 13,
+                  ),
+                ),
+              ],
               const SizedBox(height: 8),
               const Text(
                 'Credentials',
@@ -179,7 +234,7 @@ class _AiSettingsDialogState extends State<AiSettingsDialog> {
       actions: [
         TextButton(
           key: const Key('ai_settings_close'),
-          onPressed: () => Navigator.of(context).pop(),
+          onPressed: _busy ? null : () => Navigator.of(context).pop(),
           child: const Text('Close'),
         ),
       ],

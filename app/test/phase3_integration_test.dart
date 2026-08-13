@@ -12,14 +12,14 @@ Uint8List _minimalDocx(String documentXml) {
     ..addFile(ArchiveFile('word/document.xml', documentXml.length, documentXml.codeUnits))
     ..addFile(ArchiveFile('[Content_Types].xml', 8, '<Types/>'.codeUnits))
     ..addFile(ArchiveFile('word/_rels/document.xml.rels', 16, '<Relationships/>'.codeUnits));
-  return Uint8List.fromList(ZipEncoder().encode(archive)!);
+  return ZipEncoder().encodeBytes(archive);
 }
 
 Uint8List _minimalOdt(String contentXml) {
   final archive = Archive()
     ..addFile(ArchiveFile('content.xml', contentXml.length, contentXml.codeUnits))
     ..addFile(ArchiveFile('mimetype', 39, 'application/vnd.oasis.opendocument.text'.codeUnits));
-  return Uint8List.fromList(ZipEncoder().encode(archive)!);
+  return ZipEncoder().encodeBytes(archive);
 }
 
 void main() {

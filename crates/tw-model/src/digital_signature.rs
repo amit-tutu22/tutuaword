@@ -153,7 +153,9 @@ pub fn verify_signature(doc: &Document, signature: &DigitalSignature) -> Signatu
         Ok(false) | Err(_) => SignatureStatus::Invalid,
     };
     let message = match status {
-        SignatureStatus::Valid => "Signature is valid".into(),
+        SignatureStatus::Valid => {
+            "Self-attested signature intact (not certificate-backed)".into()
+        }
         SignatureStatus::Invalid => "Signature cryptographic check failed".into(),
         SignatureStatus::Tampered => "Document has changed since it was signed".into(),
     };

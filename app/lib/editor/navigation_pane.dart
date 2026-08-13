@@ -14,12 +14,14 @@ class NavigationPane extends StatefulWidget {
     required this.currentPage,
     required this.onPageSelected,
     required this.onOutlineSelected,
+    this.expanded = false,
   });
 
   final EditorController controller;
   final int currentPage;
   final ValueChanged<int> onPageSelected;
   final ValueChanged<DocumentOutlineEntry> onOutlineSelected;
+  final bool expanded;
 
   @override
   State<NavigationPane> createState() => _NavigationPaneState();
@@ -47,7 +49,9 @@ class _NavigationPaneState extends State<NavigationPane> {
 
   @override
   Widget build(BuildContext context) {
-    final outlineWidth = _tab == NavigationPaneTab.outline ? 200.0 : 140.0;
+    final outlineWidth = widget.expanded
+        ? double.infinity
+        : (_tab == NavigationPaneTab.outline ? 200.0 : 140.0);
     return AnimatedContainer(
       duration: const Duration(milliseconds: 120),
       width: outlineWidth,

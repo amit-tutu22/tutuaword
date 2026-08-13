@@ -11,6 +11,8 @@ class ViewController extends ChangeNotifier {
   bool _splitView = false;
   double _viewportWidth = 900;
   double _viewportHeight = 700;
+  /// One-shot: phone/tablet print layout starts at a readable zoom (not fit-width).
+  bool _appliedMobileReadingZoom = false;
   bool _showRuler = false;
   bool _showNavigationPane = false;
   bool _showStyleInspector = false;
@@ -104,6 +106,16 @@ class ViewController extends ChangeNotifier {
 
   void zoomIn() => setZoom(_zoom + 0.1);
   void zoomOut() => setZoom(_zoom - 0.1);
+
+  /// On narrow screens, 100% letter-page width is unreadable (~11pt → ~7px).
+  /// Bump default zoom once so body text is closer to ~16–18 logical px; the
+  /// canvas pans horizontally when the page is wider than the phone.
+  void ensureMobileReadingZoom() {
+    if (_appliedMobileReadingZoom) return;
+    _appliedMobileReadingZoom = true;
+    if ((_zoom - 1.0).abs() > 0.01) return;
+    setZoom(1.5);
+  }
 
   void setPageColumns(int columns) {
     _pageColumns = columns.clamp(1, 3);

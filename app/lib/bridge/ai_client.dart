@@ -4,6 +4,8 @@
 /// use provider ids for tests and settings status only.
 
 import 'ai_http.dart';
+import 'ollama_host.dart';
+import 'ollama_launcher.dart';
 
 enum AiRoutingMode {
   automatic,
@@ -105,16 +107,19 @@ class MockAiHttpClient {
 class AiClient {
   AiClient({
     AiHttpPost? httpPost,
+    OllamaHost? ollamaHost,
     this.openaiApiKey = '',
     this.geminiApiKey = '',
     this.llamaEndpoint = 'http://127.0.0.1:11434',
     this.routingMode = AiRoutingMode.automatic,
     this.defaultCloud = AiProviderIds.openai,
     this.defaultLocal = AiProviderIds.llamaCpp,
-  }) : httpPost = httpPost;
+  })  : httpPost = httpPost,
+        ollamaHost = ollamaHost ?? createOllamaHost();
 
   /// Injectable HTTP (tests use [MockAiHttpClient]; production uses [defaultAiHttpPost]).
   AiHttpPost? httpPost;
+  OllamaHost ollamaHost;
   String openaiApiKey;
   String geminiApiKey;
   String llamaEndpoint;
@@ -124,6 +129,9 @@ class AiClient {
 
   /// Last routed provider id (diagnostics / tests only).
   String? lastRoutedProviderId;
+
+  /// Last local-runtime ensure result (settings / status bar).
+  OllamaEnsureResult? lastOllamaEnsure;
 
   /// Completions issued (stress / integration).
   int completionCount = 0;
@@ -150,6 +158,27 @@ class AiClient {
       ];
 
   void setRoutingMode(AiRoutingMode mode) => routingMode = mode;
+
+  /// Applies [mode] and, for local/automatic, starts Ollama when needed.
+  Future<OllamaEnsureResult?> applyRoutingMode(AiRoutingMode mode) async {
+    routingMode = mode;
+    if (mode == AiRoutingMode.alwaysCloud) {
+      lastOllamaEnsure = null;
+      return null;
+    }
+    return ensureLocalRuntime();
+  }
+
+  /// Probe / auto-start local Ollama for [llamaEndpoint].
+  Future<OllamaEnsureResult> ensureLocalRuntime() async {
+    final result = await ollamaHost.ensureRunning(llamaEndpoint);
+    lastOllamaEnsure = result;
+    return result;
+  }
+
+  bool get prefersLocalRuntime =>
+      routingMode == AiRoutingMode.alwaysLocal ||
+      routingMode == AiRoutingMode.automatic;
 
   /// Select a provider for [task]. Returns an internal id for diagnostics.
   String route(AiTask task, AiDocumentContext ctx) {
@@ -309,14 +338,25 @@ class AiClient {
       throw StateError('Gemini API key not configured');
     }
     final url =
-        'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$geminiApiKey';
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
     final body =
         '{"contents":[{"parts":[{"text":${_jsonString(prompt)}}]}]}';
-    final raw = await post(url, {'Content-Type': 'application/json'}, body);
+    final raw = await post(url, {
+      'Content-Type': 'application/json',
+      'x-goog-api-key': geminiApiKey,
+    }, body);
     return _parseGemini(raw);
   }
 
   Future<String> _llamaComplete(AiHttpPost post, String prompt) async {
+    final ensured = await ensureLocalRuntime();
+    if (!ensured.ok) {
+      throw StateError(
+        ensured.message.isEmpty
+            ? 'Local AI server unreachable at $llamaEndpoint'
+            : ensured.message,
+      );
+    }
     final base = llamaEndpoint.replaceAll(RegExp(r'/+$'), '');
     final body =
         '{"model":"llama3.2","messages":[{"role":"user","content":${_jsonString(prompt)}}]}';
@@ -361,12 +401,14 @@ class AiClient {
   /// Factory with production defaults and injectable HTTP (tests use mock).
   static AiClient productionDesktop({
     AiHttpPost? httpPost,
+    OllamaHost? ollamaHost,
     String? openaiApiKey,
     String? geminiApiKey,
     String? llamaEndpoint,
   }) {
     return AiClient(
       httpPost: httpPost ?? defaultAiHttpPost,
+      ollamaHost: ollamaHost,
       openaiApiKey: openaiApiKey ?? aiEnv('OPENAI_API_KEY') ?? '',
       geminiApiKey: geminiApiKey ?? aiEnv('GEMINI_API_KEY') ?? '',
       llamaEndpoint: llamaEndpoint ??

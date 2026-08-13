@@ -159,9 +159,11 @@ class LayoutTab extends StatelessWidget {
             RibbonGroup(
               label: 'Paragraph',
               child: Column(
+                mainAxisSize: MainAxisSize.min,
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
                       RibbonIconButton(
                         icon: Icons.format_indent_decrease,
@@ -182,6 +184,7 @@ class LayoutTab extends StatelessWidget {
                     ],
                   ),
                   Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
                       RibbonIconButton(
                         icon: Icons.space_bar,

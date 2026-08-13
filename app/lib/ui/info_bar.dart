@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
 import 'package:tutuaword/ui/word_theme.dart';
@@ -24,6 +25,8 @@ class InfoBar extends StatelessWidget {
             child: Text(
               message,
               style: WordTheme.ribbonLabel.copyWith(fontSize: 11),
+              maxLines: WordTheme.phoneChrome(context) ? 2 : null,
+              overflow: TextOverflow.ellipsis,
             ),
           ),
           if (controller.infoMessage != null)

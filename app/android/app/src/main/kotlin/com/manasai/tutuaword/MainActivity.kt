@@ -1,4 +1,4 @@
-package com.example.tutuaword
+package com.manasai.tutuaword
 
 import android.os.Build
 import android.os.Bundle

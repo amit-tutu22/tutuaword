@@ -101,6 +101,7 @@ class _EditorScreenState extends State<EditorScreen> {
           unawaited(_controller.inspectDocument(context)),
       onDigitalSignatures: () =>
           unawaited(_controller.manageDigitalSignatures(context)),
+      onShowAbout: () => unawaited(_controller.openAboutDialog(context)),
       child: Material(
         color: WordTheme.tabStripSurface,
         child: Shortcuts(

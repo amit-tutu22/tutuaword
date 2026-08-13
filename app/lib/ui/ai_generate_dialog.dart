@@ -70,7 +70,13 @@ class _AiGenerateDialogState extends State<AiGenerateDialog> {
       );
       if (mounted) setState(() => _generated = doc);
     } catch (e) {
-      if (mounted) setState(() => _error = e.toString());
+      if (!mounted) return;
+      final raw = e.toString();
+      setState(() {
+        _error = raw.startsWith('Bad state: ')
+            ? raw.substring('Bad state: '.length)
+            : raw;
+      });
     }
     if (mounted) setState(() => _busy = false);
   }

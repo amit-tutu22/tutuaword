@@ -32,10 +32,9 @@ impl GeminiProvider {
 
     fn generate_url(&self) -> String {
         format!(
-            "{}/models/{}:generateContent?key={}",
+            "{}/models/{}:generateContent",
             self.base_url.trim_end_matches('/'),
             self.model,
-            self.api_key
         )
     }
 }
@@ -79,7 +78,10 @@ impl AiProvider for GeminiProvider {
         .to_string();
         let response = self.http.post_json(
             &self.generate_url(),
-            &[("Content-Type", "application/json")],
+            &[
+                ("Content-Type", "application/json"),
+                ("x-goog-api-key", self.api_key.as_str()),
+            ],
             &body,
         )?;
         parse_gemini_response(&response)

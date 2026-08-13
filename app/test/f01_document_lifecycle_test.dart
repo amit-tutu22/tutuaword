@@ -73,7 +73,7 @@ void main() {
       ..addFile(ArchiveFile('docProps/app.xml', appXml.length, appXml.codeUnits))
       ..addFile(ArchiveFile('[Content_Types].xml', 8, '<Types/>'.codeUnits))
       ..addFile(ArchiveFile('word/_rels/document.xml.rels', 16, '<Relationships/>'.codeUnits));
-    return Uint8List.fromList(ZipEncoder().encode(archive)!);
+    return ZipEncoder().encodeBytes(archive);
   }
 
   Uint8List encryptedDocxBytes() {
@@ -81,7 +81,7 @@ void main() {
       ..addFile(ArchiveFile('[Content_Types].xml', 32, '<?xml version="1.0"?><Types/>'.codeUnits))
       ..addFile(ArchiveFile('EncryptionInfo', 9, 'encrypted'.codeUnits))
       ..addFile(ArchiveFile('EncryptedPackage', 9, 'encrypted'.codeUnits));
-    return Uint8List.fromList(ZipEncoder().encode(archive)!);
+    return ZipEncoder().encodeBytes(archive);
   }
 
   group('F01.S1 document lifecycle', () {
@@ -428,7 +428,7 @@ void main() {
         ..addFile(ArchiveFile('word/settings.xml', settingsXml.length, settingsXml.codeUnits))
         ..addFile(ArchiveFile('[Content_Types].xml', 8, '<Types/>'.codeUnits))
         ..addFile(ArchiveFile('word/_rels/document.xml.rels', 16, '<Relationships/>'.codeUnits));
-      final bytes = Uint8List.fromList(ZipEncoder().encode(archive)!);
+      final bytes = ZipEncoder().encodeBytes(archive);
 
       final dir = Directory.systemTemp.createTempSync('tutuaword_f01_s4_ro_open_');
       addTearDown(() {

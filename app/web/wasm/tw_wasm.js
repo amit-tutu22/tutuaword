@@ -139,6 +139,19 @@ export class TwEngine {
         return ret[0];
     }
     /**
+     * @param {string} values_json
+     * @returns {number}
+     */
+    apply_mail_merge_row(values_json) {
+        const ptr0 = passStringToWasm0(values_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.twengine_apply_mail_merge_row(this.__wbg_ptr, ptr0, len0);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return ret[0];
+    }
+    /**
      * @param {string} caret_run_id
      * @returns {number}
      */
@@ -302,6 +315,16 @@ export class TwEngine {
         return v1;
     }
     /**
+     * @returns {number}
+     */
+    clear_digital_signatures() {
+        const ret = wasm.twengine_clear_digital_signatures(this.__wbg_ptr);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return ret[0];
+    }
+    /**
      * @param {string} start_run
      * @param {number} start_offset
      * @param {string} end_run
@@ -391,6 +414,21 @@ export class TwEngine {
         return ret[0];
     }
     /**
+     * @returns {string}
+     */
+    digital_signatures_json() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.twengine_digital_signatures_json(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * @param {Uint8Array} data
      * @returns {number}
      */
@@ -439,6 +477,21 @@ export class TwEngine {
     display_list_version() {
         const ret = wasm.twengine_display_list_version(this.__wbg_ptr);
         return ret;
+    }
+    /**
+     * @returns {string}
+     */
+    document_inspect_json() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.twengine_document_inspect_json(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
     }
     /**
      * @returns {string}
@@ -516,6 +569,56 @@ export class TwEngine {
         var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
         wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
         return v1;
+    }
+    /**
+     * @param {number} scale_mode
+     * @param {number} scale_percent
+     * @param {number} margin_left
+     * @param {number} margin_right
+     * @param {number} margin_top
+     * @param {number} margin_bottom
+     * @param {number} duplex
+     * @param {number} pages_per_sheet
+     * @param {number} booklet
+     * @returns {Uint8Array}
+     */
+    export_pdf_for_print(scale_mode, scale_percent, margin_left, margin_right, margin_top, margin_bottom, duplex, pages_per_sheet, booklet) {
+        const ret = wasm.twengine_export_pdf_for_print(this.__wbg_ptr, scale_mode, scale_percent, margin_left, margin_right, margin_top, margin_bottom, duplex, pages_per_sheet, booklet);
+        if (ret[3]) {
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v1;
+    }
+    /**
+     * @param {string} start_run_id
+     * @param {number} start_offset
+     * @param {string} end_run_id
+     * @param {number} end_offset
+     * @param {number} scale_mode
+     * @param {number} scale_percent
+     * @param {number} margin_left
+     * @param {number} margin_right
+     * @param {number} margin_top
+     * @param {number} margin_bottom
+     * @param {number} duplex
+     * @param {number} pages_per_sheet
+     * @param {number} booklet
+     * @returns {Uint8Array}
+     */
+    export_pdf_for_print_selection(start_run_id, start_offset, end_run_id, end_offset, scale_mode, scale_percent, margin_left, margin_right, margin_top, margin_bottom, duplex, pages_per_sheet, booklet) {
+        const ptr0 = passStringToWasm0(start_run_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(end_run_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.twengine_export_pdf_for_print_selection(this.__wbg_ptr, ptr0, len0, start_offset, ptr1, len1, end_offset, scale_mode, scale_percent, margin_left, margin_right, margin_top, margin_bottom, duplex, pages_per_sheet, booklet);
+        if (ret[3]) {
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        var v3 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v3;
     }
     /**
      * @param {string} query
@@ -855,6 +958,29 @@ export class TwEngine {
     /**
      * @param {string} run_id
      * @param {number} offset
+     * @param {string} kind
+     * @param {string} name
+     * @param {string} initial_value
+     * @returns {number}
+     */
+    insert_form_field(run_id, offset, kind, name, initial_value) {
+        const ptr0 = passStringToWasm0(run_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(kind, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ptr3 = passStringToWasm0(initial_value, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len3 = WASM_VECTOR_LEN;
+        const ret = wasm.twengine_insert_form_field(this.__wbg_ptr, ptr0, len0, offset, ptr1, len1, ptr2, len2, ptr3, len3);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return ret[0];
+    }
+    /**
+     * @param {string} run_id
+     * @param {number} offset
      * @param {string} url
      * @param {string} text
      * @param {string} tooltip
@@ -924,6 +1050,23 @@ export class TwEngine {
         const ptr0 = passStringToWasm0(caret_run_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.twengine_insert_index(this.__wbg_ptr, ptr0, len0);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return ret[0];
+    }
+    /**
+     * @param {string} run_id
+     * @param {number} offset
+     * @param {string} name
+     * @returns {number}
+     */
+    insert_merge_field(run_id, offset, name) {
+        const ptr0 = passStringToWasm0(run_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.twengine_insert_merge_field(this.__wbg_ptr, ptr0, len0, offset, ptr1, len1);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }
@@ -1194,6 +1337,24 @@ export class TwEngine {
         }
     }
     /**
+     * Open document bytes; [password] decrypts encrypted DOCX when non-empty (F22.S1).
+     * @param {Uint8Array} data
+     * @param {string} path
+     * @param {string} password
+     */
+    open_document_with_password(data, path, password) {
+        const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(path, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(password, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ret = wasm.twengine_open_document_with_password(this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
      * @param {Uint8Array} data
      * @param {string} path
      */
@@ -1354,6 +1515,19 @@ export class TwEngine {
         return ret[0];
     }
     /**
+     * @param {boolean} comments
+     * @param {boolean} metadata
+     * @param {boolean} hidden_text
+     * @returns {number}
+     */
+    remove_inspect_findings(comments, metadata, hidden_text) {
+        const ret = wasm.twengine_remove_inspect_findings(this.__wbg_ptr, comments, metadata, hidden_text);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return ret[0];
+    }
+    /**
      * @param {string} image_id
      * @param {Uint8Array} data
      * @param {string} mime_type
@@ -1470,11 +1644,42 @@ export class TwEngine {
         return ret[0];
     }
     /**
+     * Set or clear DOCX encryption password for subsequent saves (F22.S2).
+     * Empty string clears the password.
+     * @param {string} password
+     * @returns {number}
+     */
+    set_encryption_password(password) {
+        const ptr0 = passStringToWasm0(password, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.twengine_set_encryption_password(this.__wbg_ptr, ptr0, len0);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return ret[0];
+    }
+    /**
      * @param {boolean} enabled
      * @returns {number}
      */
     set_even_and_odd_headers(enabled) {
         const ret = wasm.twengine_set_even_and_odd_headers(this.__wbg_ptr, enabled);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return ret[0];
+    }
+    /**
+     * @param {string} run_id
+     * @param {string} value
+     * @returns {number}
+     */
+    set_form_field_value(run_id, value) {
+        const ptr0 = passStringToWasm0(run_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(value, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.twengine_set_form_field_value(this.__wbg_ptr, ptr0, len0, ptr1, len1);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }
@@ -1651,6 +1856,25 @@ export class TwEngine {
         return ret[0];
     }
     /**
+     * @param {string} name
+     * @param {string} email
+     * @param {string | null} [organization]
+     * @returns {number}
+     */
+    sign_document(name, email, organization) {
+        const ptr0 = passStringToWasm0(name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(email, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        var ptr2 = isLikeNone(organization) ? 0 : passStringToWasm0(organization, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len2 = WASM_VECTOR_LEN;
+        const ret = wasm.twengine_sign_document(this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return ret[0];
+    }
+    /**
      * @param {string} caret_run_id
      * @param {boolean} ascending
      * @returns {number}
@@ -1743,11 +1967,39 @@ export class TwEngine {
         }
         return ret[0];
     }
+    /**
+     * @returns {string}
+     */
+    verify_signatures_json() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.twengine_verify_signatures_json(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
 }
 if (Symbol.dispose) TwEngine.prototype[Symbol.dispose] = TwEngine.prototype.free;
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
+        __wbg___wbindgen_is_function_1ff95bcc5517c252: function(arg0) {
+            const ret = typeof(arg0) === 'function';
+            return ret;
+        },
+        __wbg___wbindgen_is_object_a27215656b807791: function(arg0) {
+            const val = arg0;
+            const ret = typeof(val) === 'object' && val !== null;
+            return ret;
+        },
+        __wbg___wbindgen_is_string_ea5e6cc2e4141dfe: function(arg0) {
+            const ret = typeof(arg0) === 'string';
+            return ret;
+        },
         __wbg___wbindgen_is_undefined_c05833b95a3cf397: function(arg0) {
             const ret = arg0 === undefined;
             return ret;
@@ -1755,6 +2007,20 @@ function __wbg_get_imports() {
         __wbg___wbindgen_throw_344f42d3211c4765: function(arg0, arg1) {
             throw new Error(getStringFromWasm0(arg0, arg1));
         },
+        __wbg_call_a6e5c5dce5018821: function() { return handleError(function (arg0, arg1, arg2) {
+            const ret = arg0.call(arg1, arg2);
+            return ret;
+        }, arguments); },
+        __wbg_crypto_38df2bab126b63dc: function(arg0) {
+            const ret = arg0.crypto;
+            return ret;
+        },
+        __wbg_getRandomValues_3f44b700395062e5: function() { return handleError(function (arg0, arg1) {
+            globalThis.crypto.getRandomValues(getArrayU8FromWasm0(arg0, arg1));
+        }, arguments); },
+        __wbg_getRandomValues_c44a50d8cfdaebeb: function() { return handleError(function (arg0, arg1) {
+            arg0.getRandomValues(arg1);
+        }, arguments); },
         __wbg_getRandomValues_ceb34d8ffce7e87f: function() { return handleError(function (arg0, arg1) {
             globalThis.crypto.getRandomValues(getArrayU8FromWasm0(arg0, arg1));
         }, arguments); },
@@ -1762,8 +2028,24 @@ function __wbg_get_imports() {
             const ret = arg0.getTime();
             return ret;
         },
+        __wbg_length_1f0964f4a5e2c6d8: function(arg0) {
+            const ret = arg0.length;
+            return ret;
+        },
+        __wbg_msCrypto_bd5a034af96bcba6: function(arg0) {
+            const ret = arg0.msCrypto;
+            return ret;
+        },
         __wbg_new_0_3da9e97f24fc69be: function() {
             const ret = new Date();
+            return ret;
+        },
+        __wbg_new_with_length_e6785c33c8e4cce8: function(arg0) {
+            const ret = new Uint8Array(arg0 >>> 0);
+            return ret;
+        },
+        __wbg_node_84ea875411254db1: function(arg0) {
+            const ret = arg0.node;
             return ret;
         },
         __wbg_now_e7c6795a7f81e10f: function(arg0) {
@@ -1774,6 +2056,20 @@ function __wbg_get_imports() {
             const ret = arg0.performance;
             return ret;
         },
+        __wbg_process_44c7a14e11e9f69e: function(arg0) {
+            const ret = arg0.process;
+            return ret;
+        },
+        __wbg_prototypesetcall_4770620bbe4688a0: function(arg0, arg1, arg2) {
+            Uint8Array.prototype.set.call(getArrayU8FromWasm0(arg0, arg1), arg2);
+        },
+        __wbg_randomFillSync_6c25eac9869eb53c: function() { return handleError(function (arg0, arg1) {
+            arg0.randomFillSync(arg1);
+        }, arguments); },
+        __wbg_require_b4edbdcf3e2a1ef0: function() { return handleError(function () {
+            const ret = module.require;
+            return ret;
+        }, arguments); },
         __wbg_static_accessor_GLOBAL_4ef717fb391d88b7: function() {
             const ret = typeof global === 'undefined' ? null : global;
             return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
@@ -1790,7 +2086,20 @@ function __wbg_get_imports() {
             const ret = typeof window === 'undefined' ? null : window;
             return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
         },
+        __wbg_subarray_3ed232c8a6baee09: function(arg0, arg1, arg2) {
+            const ret = arg0.subarray(arg1 >>> 0, arg2 >>> 0);
+            return ret;
+        },
+        __wbg_versions_276b2795b1c6a219: function(arg0) {
+            const ret = arg0.versions;
+            return ret;
+        },
         __wbindgen_cast_0000000000000001: function(arg0, arg1) {
+            // Cast intrinsic for `Ref(Slice(U8)) -> NamedExternref("Uint8Array")`.
+            const ret = getArrayU8FromWasm0(arg0, arg1);
+            return ret;
+        },
+        __wbindgen_cast_0000000000000002: function(arg0, arg1) {
             // Cast intrinsic for `Ref(String) -> Externref`.
             const ret = getStringFromWasm0(arg0, arg1);
             return ret;

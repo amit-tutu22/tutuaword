@@ -15,7 +15,7 @@ Uint8List encryptedDocxBytes() {
     ..addFile(ArchiveFile('[Content_Types].xml', 32, '<?xml version="1.0"?><Types/>'.codeUnits))
     ..addFile(ArchiveFile('EncryptionInfo', 9, 'encrypted'.codeUnits))
     ..addFile(ArchiveFile('EncryptedPackage', 9, 'encrypted'.codeUnits));
-  return Uint8List.fromList(ZipEncoder().encode(archive)!);
+  return ZipEncoder().encodeBytes(archive);
 }
 
 DocumentSessionStore _isolatedStore(String prefix) => DocumentSessionStore(
@@ -42,7 +42,7 @@ void main() {
         )
         ..addFile(ArchiveFile('encryptioninfo', 9, 'encrypted'.codeUnits))
         ..addFile(ArchiveFile('encryptedpackage', 9, 'encrypted'.codeUnits));
-      final bytes = Uint8List.fromList(ZipEncoder().encode(archive)!);
+      final bytes = ZipEncoder().encodeBytes(archive);
       expect(
         DocumentReader.isPasswordProtectedDocx(bytes, path: 'locked.docx'),
         isTrue,
@@ -65,7 +65,7 @@ void main() {
             '<?xml version="1.0"?><w:document/>'.codeUnits,
           ),
         );
-      final bytes = Uint8List.fromList(ZipEncoder().encode(archive)!);
+      final bytes = ZipEncoder().encodeBytes(archive);
       expect(
         DocumentReader.isPasswordProtectedDocx(bytes, path: 'plain.docx'),
         isFalse,

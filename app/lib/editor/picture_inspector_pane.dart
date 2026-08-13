@@ -6,9 +6,11 @@ class PictureInspectorPane extends StatefulWidget {
   const PictureInspectorPane({
     super.key,
     required this.controller,
+    this.expanded = false,
   });
 
   final EditorController controller;
+  final bool expanded;
 
   @override
   State<PictureInspectorPane> createState() => _PictureInspectorPaneState();
@@ -67,7 +69,7 @@ class _PictureInspectorPaneState extends State<PictureInspectorPane> {
     final hasImage = widget.controller.hasSelectedImage;
     return Container(
       key: const Key('picture_inspector_pane'),
-      width: 220,
+      width: widget.expanded ? double.infinity : 220,
       color: Theme.of(context).colorScheme.surfaceContainerHighest,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,

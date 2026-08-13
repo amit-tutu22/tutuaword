@@ -202,7 +202,7 @@ class DocumentReader {
     if (content == null) {
       throw const FormatException('word/document.xml missing from .docx');
     }
-    final xml = utf8.decode(content.content as List<int>);
+    final xml = utf8.decode(content.readBytes() ?? const <int>[]);
     return _extractOoxmlParagraphs(xml, 'w:p', 'w:t');
   }
 
@@ -212,7 +212,7 @@ class DocumentReader {
     if (content == null) {
       throw const FormatException('content.xml missing from .odt');
     }
-    final xml = utf8.decode(content.content as List<int>);
+    final xml = utf8.decode(content.readBytes() ?? const <int>[]);
     return _extractOoxmlParagraphs(xml, 'text:p', 'text:span');
   }
 

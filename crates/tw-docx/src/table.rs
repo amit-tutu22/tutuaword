@@ -320,7 +320,7 @@ pub fn parse_image_block(para_xml: &str, media: &dyn MediaResolver) -> Option<Im
     }
     block.anchor = parse_anchor(para_xml);
     if block.anchor.is_some() {
-        block.wrap = tw_model::TextWrap::Behind;
+        block.wrap = parse_text_wrap(para_xml);
     }
     // Word stores alt text on wp:docPr/@descr (preferred) or pic:cNvPr/@descr.
     block.alt_text = read_attr_value(para_xml, "wp:docPr", "descr")
@@ -696,6 +696,36 @@ fn parse_anchor(para_xml: &str) -> Option<tw_model::ImageAnchor> {
     })
 }
 
+/// Map DrawingML wrap children / `behindDoc` onto our `TextWrap` enum.
+/// Tight/through collapse to square until contour wrapping is implemented.
+fn parse_text_wrap(para_xml: &str) -> tw_model::TextWrap {
+    if para_xml.contains("<wp:wrapSquare") {
+        return tw_model::TextWrap::Square;
+    }
+    if para_xml.contains("<wp:wrapTight") || para_xml.contains("<wp:wrapThrough") {
+        return tw_model::TextWrap::Square;
+    }
+    if para_xml.contains("<wp:wrapTopAndBottom") {
+        return tw_model::TextWrap::TopBottom;
+    }
+    if para_xml.contains("<wp:wrapNone") {
+        let behind = read_attr_value(para_xml, "wp:anchor", "behindDoc")
+            .as_deref()
+            == Some("1");
+        return if behind {
+            tw_model::TextWrap::Behind
+        } else {
+            tw_model::TextWrap::InFront
+        };
+    }
+    // Anchors without an explicit wrap child still honour behindDoc.
+    if read_attr_value(para_xml, "wp:anchor", "behindDoc").as_deref() == Some("1") {
+        tw_model::TextWrap::Behind
+    } else {
+        tw_model::TextWrap::Square
+    }
+}
+
 fn parse_position(para_xml: &str, tag: &str) -> (f32, tw_model::AnchorOrigin) {
     let Some(start) = para_xml.find(&format!("<{tag}")) else {
         return (0.0, tw_model::AnchorOrigin::Column);
@@ -708,7 +738,9 @@ fn parse_position(para_xml: &str, tag: &str) -> (f32, tw_model::AnchorOrigin) {
 
     let origin = match read_attr_value(fragment, tag, "relativeFrom").as_deref() {
         Some("page") => tw_model::AnchorOrigin::Page,
-        Some("margin") | Some("leftMargin") | Some("topMargin") => tw_model::AnchorOrigin::Margin,
+        Some("margin") | Some("leftMargin") | Some("rightMargin") | Some("topMargin")
+        | Some("bottomMargin") => tw_model::AnchorOrigin::Margin,
+        Some("paragraph") => tw_model::AnchorOrigin::Paragraph,
         _ => tw_model::AnchorOrigin::Column,
     };
     let offset = fragment

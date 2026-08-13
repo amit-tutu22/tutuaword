@@ -7,16 +7,18 @@ class AccessibilityCheckerPane extends StatelessWidget {
   const AccessibilityCheckerPane({
     super.key,
     required this.controller,
+    this.expanded = false,
   });
 
   final EditorController controller;
+  final bool expanded;
 
   @override
   Widget build(BuildContext context) {
     final issues = controller.accessibilityIssues;
     return Container(
       key: const Key('accessibility_checker_pane'),
-      width: 240,
+      width: expanded ? double.infinity : 240,
       color: Theme.of(context).colorScheme.surfaceContainerHighest,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,

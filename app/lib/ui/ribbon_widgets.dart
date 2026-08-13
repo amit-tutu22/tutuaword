@@ -87,20 +87,22 @@ class RibbonGroup extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final phone = WordTheme.phoneChrome(context);
     return Row(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 6),
+          padding: EdgeInsets.symmetric(horizontal: phone ? 4 : 6),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Expanded(child: Center(child: child)),
-              Padding(
-                padding: const EdgeInsets.only(bottom: 2, top: 2),
-                child: Text(label, style: WordTheme.ribbonGroupLabel),
-              ),
+              if (!phone)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 2, top: 2),
+                  child: Text(label, style: WordTheme.ribbonGroupLabel),
+                ),
             ],
           ),
         ),
@@ -140,8 +142,16 @@ class _RibbonIconButtonState extends State<RibbonIconButton> {
   Widget build(BuildContext context) {
     final enabled = widget.onPressed != null;
     final color = enabled ? WordTheme.ribbonText : WordTheme.ribbonTextDisabled;
-    final effectiveTooltip =
-        effectiveRibbonTooltip(tooltip: widget.tooltip, enabled: enabled);
+    // Prefer an explicit tooltip; otherwise fall back to the label so phone
+    // icon-only chrome still explains the control.
+    final effectiveTooltip = effectiveRibbonTooltip(
+      tooltip: widget.tooltip ?? widget.label,
+      enabled: enabled,
+    );
+    final phone = WordTheme.phoneChrome(context);
+    // Phone ribbon is only 64px tall — stacked labeled icon rows overflow.
+    // Keep labels on tablet/desktop; on phones rely on tooltips.
+    final showLabel = widget.label != null && !phone;
 
     return wrapRibbonTooltip(
       effectiveTooltip,
@@ -153,13 +163,16 @@ class _RibbonIconButtonState extends State<RibbonIconButton> {
               ? WordTheme.ribbonHover
               : Colors.transparent;
           return Container(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+            padding: EdgeInsets.symmetric(
+              horizontal: 4,
+              vertical: phone ? 1 : 2,
+            ),
             decoration: ribbonFocusDecoration(fill: bg, focused: focused),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Icon(widget.icon, size: widget.iconSize, color: color),
-                if (widget.label != null) ...[
+                if (showLabel) ...[
                   const SizedBox(height: 2),
                   Text(
                     widget.label!,
@@ -337,6 +350,10 @@ class _RibbonLargeButtonState extends State<RibbonLargeButton> {
         effectiveRibbonTooltip(tooltip: widget.tooltip, enabled: enabled);
     final activate = widget.onPressed;
     final dropdown = widget.onDropdown ?? widget.onPressed;
+    final phone = WordTheme.phoneChrome(context);
+    final iconSize = phone ? 22.0 : WordTheme.largeIconSize;
+    // Stay under WordTheme.ribbonHeightPhone (64) with button padding.
+    final chevronHeight = phone ? 36.0 : 52.0;
 
     return wrapRibbonTooltip(
       effectiveTooltip,
@@ -364,13 +381,15 @@ class _RibbonLargeButtonState extends State<RibbonLargeButton> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(widget.icon, size: WordTheme.largeIconSize, color: color),
-                      const SizedBox(height: 2),
-                      Text(
-                        widget.label,
-                        textAlign: TextAlign.center,
-                        style: WordTheme.ribbonLabel.copyWith(color: color),
-                      ),
+                      Icon(widget.icon, size: iconSize, color: color),
+                      if (!phone) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          widget.label,
+                          textAlign: TextAlign.center,
+                          style: WordTheme.ribbonLabel.copyWith(color: color),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -379,7 +398,7 @@ class _RibbonLargeButtonState extends State<RibbonLargeButton> {
                 onTap: enabled ? dropdown : null,
                 child: Container(
                   width: 14,
-                  height: 52,
+                  height: chevronHeight,
                   decoration: BoxDecoration(
                     color: fill,
                     borderRadius: const BorderRadius.horizontal(
@@ -546,6 +565,7 @@ class StyleGalleryCard extends StatefulWidget {
     this.selected = false,
     this.tooltip,
     this.onPressed,
+    this.compact = false,
   });
 
   final String label;
@@ -553,6 +573,7 @@ class StyleGalleryCard extends StatefulWidget {
   final bool selected;
   final String? tooltip;
   final VoidCallback? onPressed;
+  final bool compact;
 
   @override
   State<StyleGalleryCard> createState() => _StyleGalleryCardState();
@@ -578,8 +599,8 @@ class _StyleGalleryCardState extends State<StyleGalleryCard> {
             borderColor = WordTheme.ribbonText;
           }
           return Container(
-            width: 72,
-            height: 52,
+            width: widget.compact ? 64 : 72,
+            height: widget.compact ? 44 : 52,
             margin: const EdgeInsets.symmetric(horizontal: 2),
             padding: const EdgeInsets.all(4),
             decoration: BoxDecoration(

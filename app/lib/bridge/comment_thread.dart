@@ -9,18 +9,30 @@ class CommentMessageView {
     final bodyBlocks = json['body'] as List? ?? const [];
     final text = bodyBlocks
         .whereType<Map>()
-        .map((block) {
-          final runs = block['runs'] as List? ?? const [];
-          return runs
-              .whereType<Map>()
-              .map((run) => run['text']?.toString() ?? '')
-              .join();
-        })
+        .map((block) => _blockText(Map<String, dynamic>.from(block)))
         .join('\n');
     return CommentMessageView(
       author: json['author']?.toString() ?? 'Author',
       body: text.isEmpty ? '(empty)' : text,
     );
+  }
+
+  static String _blockText(Map<String, dynamic> block) {
+    final para = block['Paragraph'] as Map?;
+    final runs = (para?['runs'] ?? block['runs']) as List? ?? const [];
+    return runs
+        .whereType<Map>()
+        .map((run) => _runText(Map<String, dynamic>.from(run)))
+        .join();
+  }
+
+  static String _runText(Map<String, dynamic> run) {
+    final content = run['content'];
+    if (content is Map) {
+      final text = content['Text'];
+      if (text != null) return text.toString();
+    }
+    return run['text']?.toString() ?? '';
   }
 }
 

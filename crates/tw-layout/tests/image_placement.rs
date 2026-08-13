@@ -160,3 +160,80 @@ fn u_f10_s3_square_wrap_reflow() {
         "line beside image should be narrower than the full column",
     );
 }
+
+#[test]
+fn paragraph_relative_float_stays_with_its_host_flow() {
+    let mut doc = Document::new();
+    doc.sections[0].blocks = vec![
+        Block::Paragraph(Paragraph::with_text("Title line")),
+        Block::Paragraph(Paragraph::with_text("Intro paragraph one.")),
+        {
+            let mut image = ImageBlock::placeholder(100.0, 100.0);
+            image.wrap = TextWrap::Square;
+            image.anchor = Some(ImageAnchor {
+                x: 0.0,
+                y: 0.0,
+                origin_x: AnchorOrigin::Margin,
+                origin_y: AnchorOrigin::Paragraph,
+            });
+            Block::ImageBlock(image)
+        },
+        Block::Paragraph(Paragraph::with_text(
+            "Text beside the square-wrapped image should not sit under it.",
+        )),
+    ];
+
+    let mut engine = LayoutEngine::new();
+    let layout = engine.layout_document(&doc);
+    let image = image_boxes(&layout)[0];
+    let title_y = first_line_y(&layout);
+
+    assert!(
+        image.y > title_y + 10.0,
+        "paragraph-relative float should sit below the title, image.y={} title_y={}",
+        image.y,
+        title_y,
+    );
+
+    let beside = layout
+        .pages
+        .iter()
+        .flat_map(|p| &p.boxes)
+        .filter_map(|b| match b {
+            LayoutBox::TextLine(line) if line.y >= image.y && line.y < image.y + image.height => {
+                Some(line)
+            }
+            _ => None,
+        })
+        .next()
+        .expect("expected a text line beside the image");
+    assert!(
+        beside.x > image.x + image.width,
+        "text should wrap to the right of the square image, x={}",
+        beside.x,
+    );
+}
+
+#[test]
+fn top_and_bottom_wrap_skips_the_image_band() {
+    let mut image = ImageBlock::placeholder(200.0, 80.0);
+    image.wrap = TextWrap::TopBottom;
+    image.anchor = Some(ImageAnchor {
+        x: 0.0,
+        y: 0.0,
+        origin_x: AnchorOrigin::Column,
+        origin_y: AnchorOrigin::Paragraph,
+    });
+
+    let mut engine = LayoutEngine::new();
+    let layout = engine.layout_document(&document_with_wrap(image, "After the image band."));
+    let placed = image_boxes(&layout)[0];
+    let text_y = first_line_y(&layout);
+
+    assert!(
+        text_y >= placed.y + placed.height,
+        "top-and-bottom wrap should push text below the image, text_y={} image_bottom={}",
+        text_y,
+        placed.y + placed.height,
+    );
+}

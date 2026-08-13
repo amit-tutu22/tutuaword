@@ -207,18 +207,38 @@ impl LineMap {
             }
         }
 
-        // Below/above all lines: still land on the first available run so an
-        // empty page remains editable without a precise click.
-        self.lines.first().and_then(|line| {
-            line.run_map.first().map(|&(_, _, run_id, char_offset)| HitTestResult {
+        // Outside every line band: land on the nearest edge so empty pages stay
+        // editable. Below content → last line (Enter-at-bottom / page growth);
+        // above content → first line.
+        let edge = if let Some(first) = self.lines.first() {
+            let first_top = first.y - first.ascent;
+            if y < first_top {
+                first
+            } else {
+                self.lines.last().unwrap_or(first)
+            }
+        } else {
+            return None;
+        };
+        if y < edge.y - edge.ascent {
+            edge.run_map.first().map(|&(_, _, run_id, char_offset)| HitTestResult {
                 page: 0,
                 run_id,
                 char_offset,
             })
-        })
+        } else {
+            line_end_offset(edge).map(|(run_id, char_offset)| HitTestResult {
+                page: 0,
+                run_id,
+                char_offset,
+            })
+        }
     }
 
     /// Caret `(x, baseline_y, height)` for a document position within a run.
+    ///
+    /// Returns `None` when [run_id] is not laid out on this page so callers can
+    /// search other pages (critical after Enter creates a paragraph on page N+1).
     pub fn caret_at(&self, run_id: NodeId, char_offset: usize) -> Option<(f32, f32, f32)> {
         let mut best: Option<(f32, f32, f32)> = None;
 
@@ -257,9 +277,7 @@ impl LineMap {
             }
         }
 
-        self.lines
-            .first()
-            .map(|line| (line.x, line.y, line.ascent + line.descent))
+        None
     }
 
     /// Last editable position on this page's final line.

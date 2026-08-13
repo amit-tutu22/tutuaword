@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tutuaword/bridge/mock_native_engine.dart';
@@ -16,13 +17,66 @@ import 'package:tutuaword/ui/status_bar.dart';
 import 'package:tutuaword/ui/title_bar.dart';
 import 'package:tutuaword/ui/word_theme.dart';
 
+import 'editor_test_helpers.dart';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   Future<void> pumpWide(WidgetTester tester, Widget child) async {
     await tester.binding.setSurfaceSize(const Size(1400, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    await tester.pumpWidget(MaterialApp(home: Scaffold(body: child)));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaQuery(
+          data: const MediaQueryData(size: Size(1400, 900)),
+          child: Scaffold(body: child),
+        ),
+      ),
+    );
+  }
+
+  Future<void> runOnPhone(WidgetTester tester, Future<void> Function() body) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    try {
+      await body();
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+      await tester.binding.setSurfaceSize(null);
+    }
+  }
+
+  Future<void> runOnTablet(WidgetTester tester, Future<void> Function() body) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    await tester.binding.setSurfaceSize(const Size(820, 1180));
+    try {
+      await body();
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+      await tester.binding.setSurfaceSize(null);
+    }
+  }
+
+  Future<void> pumpPhone(WidgetTester tester, Widget child) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaQuery(
+          data: const MediaQueryData(size: Size(390, 844)),
+          child: Scaffold(body: child),
+        ),
+      ),
+    );
+  }
+
+  Future<void> pumpTablet(WidgetTester tester, Widget child) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaQuery(
+          data: const MediaQueryData(size: Size(820, 1180)),
+          child: Scaffold(body: child),
+        ),
+      ),
+    );
   }
 
   group('Word shell integration', () {
@@ -103,11 +157,40 @@ void main() {
     });
 
     testWidgets('Title bar centers document name on the full bar width', (tester) async {
-      await pumpWide(tester, WordTitleBar(controller: controller));
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      try {
+        await pumpWide(tester, WordTitleBar(controller: controller));
 
-      final title = tester.getCenter(find.text('Document1'));
-      final bar = tester.getRect(find.byType(WordTitleBar));
-      expect(title.dx, closeTo(bar.center.dx, 1.0));
+        final title = tester.getCenter(find.text('Document1'));
+        final bar = tester.getRect(find.byType(WordTitleBar));
+        expect(title.dx, closeTo(bar.center.dx, 1.0));
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+        await tester.binding.setSurfaceSize(null);
+      }
+    });
+
+    testWidgets('Compact title bar keeps document name between icon groups', (tester) async {
+      await runOnPhone(tester, () async {
+        await pumpPhone(tester, WordTitleBar(controller: controller));
+
+        expect(find.text('Document1'), findsOneWidget);
+        expect(find.byIcon(Icons.undo), findsNothing);
+        expect(find.byIcon(Icons.print_outlined), findsNothing);
+        expect(find.byIcon(Icons.search), findsOneWidget);
+        expect(find.byKey(const Key('title_bar_overflow')), findsOneWidget);
+      });
+    });
+
+    testWidgets('Tablet title bar shows full quick-access toolbar', (tester) async {
+      await runOnTablet(tester, () async {
+        await pumpTablet(tester, WordTitleBar(controller: controller));
+
+        expect(find.text('Document1'), findsOneWidget);
+        expect(find.byIcon(Icons.undo), findsOneWidget);
+        expect(find.byIcon(Icons.print_outlined), findsOneWidget);
+        expect(find.byKey(const Key('title_bar_overflow')), findsNothing);
+      });
     });
   });
 
@@ -276,6 +359,34 @@ void main() {
       expect(controller.zoom, greaterThan(1.0));
     });
 
+    testWidgets('Phone status bar hides wide slider and view mode icons', (tester) async {
+      await runOnPhone(tester, () async {
+        await pumpPhone(tester, WordStatusBar(controller: controller));
+
+        expect(find.byType(Slider), findsNothing);
+        expect(find.byIcon(Icons.article_outlined), findsNothing);
+        expect(find.byKey(const Key('status_view_menu')), findsOneWidget);
+        expect(find.textContaining('Page 1 of'), findsOneWidget);
+      });
+    });
+
+    testWidgets('Phone ribbon shows icon-only Share button', (tester) async {
+      await runOnPhone(tester, () async {
+        await pumpPhone(tester, WordRibbon(controller: controller));
+
+        expect(find.byKey(const Key('ribbon_share')), findsOneWidget);
+        expect(find.text('Share'), findsNothing);
+      });
+    });
+
+    testWidgets('Tablet ribbon keeps Share label', (tester) async {
+      await runOnTablet(tester, () async {
+        await pumpTablet(tester, WordRibbon(controller: controller));
+
+        expect(find.text('Share'), findsOneWidget);
+      });
+    });
+
     testWidgets('Design tab has no Coming soon placeholders', (tester) async {
       await pumpWide(tester, DesignTab(controller: controller));
 
@@ -379,8 +490,71 @@ void main() {
       expect(WordTheme.titleBarBlue, const Color(0xFF2B579A));
       expect(WordTheme.canvasGray, const Color(0xFFE6E6E6));
       expect(WordTheme.ribbonHeight, 92);
+      expect(WordTheme.ribbonHeightPhone, 64);
       expect(WordTheme.titleBarHeight, 38);
       expect(WordTheme.statusBarHeight, 26);
+    });
+
+    testWidgets('Layout tab fits phone ribbon height', (tester) async {
+      await runOnPhone(tester, () async {
+        final controller = createTestEditorController(
+          engine: MockDocumentEngine(),
+        );
+        addTearDown(controller.dispose);
+        await pumpPhone(tester, WordRibbon(controller: controller));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.text('Layout'));
+        await tester.pumpAndSettle();
+
+        expect(tester.takeException(), isNull);
+        expect(find.textContaining('OVERFLOWED'), findsNothing);
+        // Phone chrome hides icon-button labels inside the 64px ribbon.
+        expect(find.text('Before'), findsNothing);
+        expect(find.text('After'), findsNothing);
+      });
+    });
+
+    testWidgets('phoneChrome and tabletChrome breakpoints', (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      try {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: MediaQuery(
+              data: const MediaQueryData(size: Size(390, 844)),
+              child: Builder(
+                builder: (context) {
+                  expect(WordTheme.phoneChrome(context), isTrue);
+                  expect(WordTheme.tabletChrome(context), isFalse);
+                  expect(WordTheme.leadingChromeInset(context), 8.0);
+                  expect(WordTheme.ribbonHeightFor(context), WordTheme.ribbonHeightPhone);
+                  return const SizedBox();
+                },
+              ),
+            ),
+          ),
+        );
+
+        await tester.binding.setSurfaceSize(const Size(820, 1180));
+        await tester.pumpWidget(
+          MaterialApp(
+            home: MediaQuery(
+              data: const MediaQueryData(size: Size(820, 1180)),
+              child: Builder(
+                builder: (context) {
+                  expect(WordTheme.phoneChrome(context), isFalse);
+                  expect(WordTheme.tabletChrome(context), isTrue);
+                  expect(WordTheme.ribbonHeightFor(context), WordTheme.ribbonHeight);
+                  return const SizedBox();
+                },
+              ),
+            ),
+          ),
+        );
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+        await tester.binding.setSurfaceSize(null);
+      }
     });
   });
 }

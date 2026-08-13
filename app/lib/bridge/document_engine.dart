@@ -387,18 +387,89 @@ abstract class DocumentEngine {
 
 /// Resolve range → pixel rects via caret geometry (never pixel → range).
 extension DocumentEngineSelection on DocumentEngine {
+  /// Find caret geometry for [runId]/[offset], trying [hintPage] first then
+  /// scanning outward. Needed when a selection spans pages and one endpoint
+  /// does not live on the page being painted.
+  (int, CaretGeometry)? caretPageAndGeometry(
+    String runId,
+    int offset, {
+    int hintPage = 0,
+  }) {
+    final hint = hintPage < 0 ? 0 : hintPage;
+    final direct = caretAtPosition(hint, runId, offset);
+    if (direct != null) return (hint, direct);
+    for (var delta = 1; delta < 64; delta++) {
+      final earlier = hint - delta;
+      if (earlier >= 0) {
+        final geom = caretAtPosition(earlier, runId, offset);
+        if (geom != null) return (earlier, geom);
+      }
+      final later = hint + delta;
+      final geom = caretAtPosition(later, runId, offset);
+      if (geom != null) return (later, geom);
+    }
+    return null;
+  }
+
+  /// Project normalized selection endpoints onto [page] for [selectionRectsOnPage].
+  /// Returns null when [page] is outside the selected page span.
+  static (double, double, double, double)? projectSelectionOntoPage({
+    required int page,
+    required int startPage,
+    required CaretGeometry startGeom,
+    required int endPage,
+    required CaretGeometry endGeom,
+  }) {
+    if (page < startPage || page > endPage) return null;
+    if (page == startPage && page == endPage) {
+      return (startGeom.x, startGeom.y, endGeom.x, endGeom.y);
+    }
+    if (page == startPage) {
+      // Through the bottom of this page.
+      return (startGeom.x, startGeom.y, startGeom.x + 1e6, 1e9);
+    }
+    if (page == endPage) {
+      // From the top of this page through the end caret.
+      return (0, 0, endGeom.x, endGeom.y);
+    }
+    // Middle page fully covered by a multi-page selection.
+    return (0, 0, 1e6, 1e9);
+  }
+
   List<GlyphSelectionRect> selectionRectsForRange(int page, DocRange range) {
-    final anchorGeom =
-        caretAtPosition(page, range.anchor.runId, range.anchor.offset);
-    final focusGeom =
-        caretAtPosition(page, range.focus.runId, range.focus.offset);
-    if (anchorGeom == null || focusGeom == null) return const [];
-    return selectionRectsOnPage(
-      page,
-      anchorGeom.x,
-      anchorGeom.y,
-      focusGeom.x,
-      focusGeom.y,
+    final anchor = caretPageAndGeometry(
+      range.anchor.runId,
+      range.anchor.offset,
+      hintPage: page,
     );
+    final focus = caretPageAndGeometry(
+      range.focus.runId,
+      range.focus.offset,
+      hintPage: page,
+    );
+    if (anchor == null || focus == null) return const [];
+
+    final (anchorPage, anchorGeom) = anchor;
+    final (focusPage, focusGeom) = focus;
+    final forward = anchorPage < focusPage ||
+        (anchorPage == focusPage &&
+            (anchorGeom.y < focusGeom.y - 0.5 ||
+                ((anchorGeom.y - focusGeom.y).abs() <= 0.5 &&
+                    anchorGeom.x <= focusGeom.x)));
+    final startPage = forward ? anchorPage : focusPage;
+    final endPage = forward ? focusPage : anchorPage;
+    final startGeom = forward ? anchorGeom : focusGeom;
+    final endGeom = forward ? focusGeom : anchorGeom;
+
+    final projected = projectSelectionOntoPage(
+      page: page,
+      startPage: startPage,
+      startGeom: startGeom,
+      endPage: endPage,
+      endGeom: endGeom,
+    );
+    if (projected == null) return const [];
+    final (startX, startY, endX, endY) = projected;
+    return selectionRectsOnPage(page, startX, startY, endX, endY);
   }
 }

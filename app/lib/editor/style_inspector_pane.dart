@@ -6,15 +6,17 @@ class StyleInspectorPane extends StatelessWidget {
   const StyleInspectorPane({
     super.key,
     required this.controller,
+    this.expanded = false,
   });
 
   final EditorController controller;
+  final bool expanded;
 
   @override
   Widget build(BuildContext context) {
     final summary = controller.styleInspectorSummary;
     return Container(
-      width: 200,
+      width: expanded ? double.infinity : 200,
       color: Theme.of(context).colorScheme.surfaceContainerHighest,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,

@@ -1662,6 +1662,7 @@ fn anchor_origin_value(origin: tw_model::AnchorOrigin) -> &'static str {
         tw_model::AnchorOrigin::Column => "column",
         tw_model::AnchorOrigin::Page => "page",
         tw_model::AnchorOrigin::Margin => "margin",
+        tw_model::AnchorOrigin::Paragraph => "paragraph",
     }
 }
 

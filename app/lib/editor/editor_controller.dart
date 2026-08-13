@@ -34,6 +34,7 @@ import 'package:tutuaword/editor/controllers/view_controller.dart';
 import 'package:tutuaword/editor/doc_range.dart';
 import 'package:tutuaword/editor/document_edit_zone.dart';
 import 'package:tutuaword/bridge/document_io.dart';
+import 'package:tutuaword/bridge/document_picker.dart';
 import 'package:tutuaword/editor/change_case.dart';
 import 'package:tutuaword/editor/chart_data.dart';
 import 'package:tutuaword/editor/equation_omml.dart';
@@ -51,9 +52,11 @@ import 'package:tutuaword/ui/equation_dialog.dart';
 import 'package:tutuaword/editor/document_templates.dart';
 import 'package:tutuaword/editor/document_view_layout.dart';
 import 'package:tutuaword/ui/goto_dialog.dart';
+import 'package:tutuaword/ui/about_dialog.dart';
 import 'package:tutuaword/ui/zoom_dialog.dart';
 import 'package:tutuaword/bridge/mail_merge_csv.dart';
 import 'package:tutuaword/bridge/ai_client.dart';
+import 'package:tutuaword/bridge/ollama_host.dart';
 import 'package:tutuaword/bridge/plugin_registry.dart';
 import 'package:tutuaword/bridge/ai_generate.dart';
 import 'package:tutuaword/bridge/ai_smart_edit.dart';
@@ -135,13 +138,21 @@ class EditorController extends ChangeNotifier {
     bool enableAutosave = true,
     Duration? autosaveInterval,
     bool useMockWhenEngineMissing = false,
+    AiClient? aiClient,
   })  : _recentSymbols = recentSymbols ?? RecentSymbolsStore.instance,
         _sessionStore = sessionStore,
         _tts = textToSpeech ?? createPlatformTextToSpeech(),
         _printHost = printHost ?? createPlatformPrintHost(),
         _shareHost = shareHost ?? createPlatformShareHost(),
         _shareTempWriter = shareTempWriter ?? writeShareTempFile,
-        _host = EngineHost(engine: engine ?? (useMockWhenEngineMissing ? MockDocumentEngine() : loadDocumentEngine())) {
+        _host = EngineHost(engine: engine ?? (useMockWhenEngineMissing ? MockDocumentEngine() : loadDocumentEngine())),
+        _aiClient = aiClient ??
+            AiClient.productionDesktop(
+              // Tests / mock engines must not spawn Ollama.
+              ollamaHost: (useMockWhenEngineMissing || engine is MockDocumentEngine)
+                  ? FakeOllamaHost()
+                  : null,
+            ) {
     _view = ViewController();
     _selection = SelectionController(
       host: _host,
@@ -231,7 +242,7 @@ class EditorController extends ChangeNotifier {
   MailMergeDataSource? _mailMergeData;
   int _mailMergeRowIndex = 0;
   final PluginRegistry _pluginRegistry = PluginRegistry();
-  final AiClient _aiClient = AiClient.productionDesktop();
+  final AiClient _aiClient;
   String _proofingLanguageId = kDefaultProofingLanguageId;
   DocumentEditZone _editZone = DocumentEditZone.body;
   String? _selectedImageId;
@@ -249,6 +260,9 @@ class EditorController extends ChangeNotifier {
   List<AccessibilityIssue> _accessibilityIssues = const [];
   bool _accessibilityChecked = false;
   bool _readingAloud = false;
+
+  /// Serializes glyph mutations so held Enter/Backspace cannot overlap splits.
+  Future<void> _glyphMutationTail = Future<void>.value();
 
   String _bootStatus = '';
 
@@ -470,6 +484,7 @@ class EditorController extends ChangeNotifier {
   void setZoom(double value) => _view.setZoom(value);
   void zoomIn() => _view.zoomIn();
   void zoomOut() => _view.zoomOut();
+  void ensureMobileReadingZoom() => _view.ensureMobileReadingZoom();
 
   Future<void> openZoomDialog(BuildContext context) async {
     final next = await ZoomDialog.show(context, currentZoom: zoom);
@@ -478,6 +493,9 @@ class EditorController extends ChangeNotifier {
     _session.setStatusText('Zoom ${(next * 100).round()}%');
     notifyListeners();
   }
+
+  Future<void> openAboutDialog(BuildContext context) =>
+      TutuawordAboutDialog.show(context);
 
   void zoomToOnePage() {
     _view.zoomToOnePage(pageWidth: pageWidth, pageHeight: pageHeight);
@@ -682,6 +700,8 @@ class EditorController extends ChangeNotifier {
   CaretGeometry? get caretGeometry => _selection.caretGeometry;
   int get caretPage => _selection.caretPage;
   List<GlyphSelectionRect> get selectionRects => _selection.selectionRects;
+  List<GlyphSelectionRect> selectionRectsForPage(int pageIndex) =>
+      _selection.selectionRectsForPage(pageIndex);
   bool get hasGlyphSelection => _selection.hasGlyphSelection;
   DocRange? get selection => _selection.selection;
   String? get caretRunId => _selection.caretRunId;
@@ -874,30 +894,16 @@ class EditorController extends ChangeNotifier {
     _session.setStatusText('Choose picture…');
     notifyListeners();
     try {
-      final useInMemoryBytes =
-          kIsWeb || (!kIsWeb && (Platform.isAndroid || Platform.isIOS));
-      final result = await FilePicker.pickFiles(
+      final picked = await pickDocumentFile(
         dialogTitle: 'Replace picture',
-        type: FileType.custom,
         allowedExtensions: const ['png', 'jpg', 'jpeg', 'svg'],
-        allowMultiple: false,
-        withData: useInMemoryBytes,
       );
-      if (result == null || result.files.isEmpty) {
+      if (picked == null) {
         _session.setStatusText('Replace cancelled');
         return;
       }
-      final file = result.files.single;
-      Uint8List? bytes = file.bytes;
-      if (bytes == null && file.path != null) {
-        bytes = Uint8List.fromList(await File(file.path!).readAsBytes());
-      }
-      if (bytes == null || bytes.isEmpty) {
-        _session.setStatusText('Replace failed: empty file');
-        return;
-      }
-      final mime = _mimeForPicture(file.extension, file.name);
-      await replaceSelectedImageBytes(bytes, mime);
+      final mime = _mimeForPicture(picked.name.split('.').last, picked.name);
+      await replaceSelectedImageBytes(picked.bytes, mime);
     } catch (e) {
       _session.setStatusText('Replace failed: $e');
     }
@@ -1513,33 +1519,40 @@ class EditorController extends ChangeNotifier {
     if (_host.isConnected) unawaited(deleteGlyphForward());
   }
 
+  Future<void> _runGlyphMutation(Future<void> Function() body) {
+    final released = Completer<void>();
+    final previous = _glyphMutationTail;
+    _glyphMutationTail = released.future;
+    return previous.then((_) => body()).whenComplete(released.complete);
+  }
+
   Future<void> insertGlyphCharacter(String char) async {
     if (_host.engine == null) return;
     if (char == '\n' || char == '\r') return;
     if (char != '\t' && char.codeUnitAt(0) < 0x20) return;
-    final runId = _selection.defaultRunId();
-    if (runId == null) return;
-    final offset = _selection.caretOffset;
-    final edit = _host.performNativeEdit(
-      () => _host.engine!.tryInsertTextAsync(runId, offset, char),
-      dirtyPage: _selection.caretPage,
-    );
-    // Logical caret advances before the worker acknowledges so the next
-    // keystroke targets the right offset. Geometry must wait for the edit —
-    // querying the engine earlier still sees the pre-insert layout.
-    final optimistic = offset + char.length;
-    _selection.afterInsert(runId, optimistic);
-    _session.markDocumentDirty();
-    notifyListeners();
-    if (!await edit) {
-      _rollbackCaret(runId, from: optimistic, to: offset);
-    } else if (_selection.caretRunId == runId &&
-        _selection.caretOffset == optimistic) {
-      // Skip if a later keystroke (e.g. Enter) already moved the caret —
-      // keyboard handlers fire inserts without awaiting them.
-      _selection.syncCaretGeometry();
-    }
-    notifyListeners();
+    await _runGlyphMutation(() async {
+      final runId = _selection.defaultRunId();
+      if (runId == null) return;
+      final offset = _selection.caretOffset;
+      final edit = _host.performNativeEdit(
+        () => _host.engine!.tryInsertTextAsync(runId, offset, char),
+        dirtyPage: _selection.caretPage,
+      );
+      // Logical caret advances before the worker acknowledges so the next
+      // keystroke targets the right offset. Geometry must wait for the edit —
+      // querying the engine earlier still sees the pre-insert layout.
+      final optimistic = offset + char.length;
+      _selection.afterInsert(runId, optimistic);
+      _session.markDocumentDirty();
+      notifyListeners();
+      if (!await edit) {
+        _rollbackCaret(runId, from: optimistic, to: offset);
+      } else if (_selection.caretRunId == runId &&
+          _selection.caretOffset == optimistic) {
+        _selection.syncCaretGeometry();
+      }
+      notifyListeners();
+    });
   }
 
   /// Undoes an optimistic caret advance, but only when nothing has moved the
@@ -1553,83 +1566,126 @@ class EditorController extends ChangeNotifier {
 
   Future<void> insertGlyphParagraphBreak() async {
     if (_host.engine == null) return;
-    final runId = _selection.defaultRunId();
-    if (runId == null) return;
-    const margin = 72.0;
-    final prevY = _selection.caretGeometry?.y ?? (margin + _formatting.fontSize);
-    final edit = _host.performNativeEdit(
-      () => _host.engine!.splitParagraphAsync(runId, _selection.caretOffset),
-      dirtyPage: _selection.caretPage,
-    );
-    await edit;
-    // Probe from the left margin on the line below the break. Using the
-    // pre-break caret X lands on the trailing edge of the previous character
-    // whenever hit-testing ignores Y (mocks) or the Y probe is still on the
-    // same line. A split always leaves the caret at offset 0 of the new para.
-    final nextY = prevY + _formatting.fontSize * 1.4;
-    hitTestAt(_selection.caretPage, margin, nextY);
-    final newRun = _selection.caretRunId ?? runId;
-    _selection.afterInsert(newRun, 0);
-    _selection.syncCaretGeometry();
-    _session.markDocumentDirty();
-    notifyListeners();
+    await _runGlyphMutation(() async {
+      final runId = _selection.defaultRunId();
+      if (runId == null) return;
+      final pageBefore = _selection.caretPage;
+      final margin = _host.marginLeft;
+      final splitOffset = _selection.caretOffset;
+      final prevY = _selection.caretGeometry?.y ??
+          (_host.marginTop + _formatting.fontSize);
+      // Full refresh: Enter may soft-paginate onto a new page; dirty-page-only
+      // refresh leaves pageCount stale so cross-page caret sync cannot see it.
+      final edit = _host.performNativeEdit(
+        () => _host.engine!.splitParagraphAsync(runId, splitOffset),
+        full: true,
+      );
+      await edit;
+      await _host.ensureLayoutReady();
+
+      // Empty Enter at offset 0 moves the caret run onto the new paragraph
+      // (same run id). Require a real Y advance or page change — equality
+      // alone left the caret stuck when layout/sync returned the old Y.
+      _selection.afterInsert(runId, 0);
+      _selection.syncCaretGeometry();
+      final landedY = _selection.caretGeometry?.y;
+      final pageAfter = _selection.caretPage;
+      final resolvedSameRun = _selection.caretRunId == runId && landedY != null;
+      final advancedOrNewPage = resolvedSameRun &&
+          (pageAfter > pageBefore || (landedY ?? 0) > prevY + 0.5);
+
+      if (!advancedOrNewPage) {
+        // End-of-text / mid-run Enter creates a different run id — probe below
+        // the break, then the next page if the probe jumps upward or past the
+        // content bottom.
+        final contentBottom = _host.pageHeight - _host.marginBottom;
+        final nextY = prevY + _formatting.fontSize * 1.4;
+        hitTestAt(
+          pageBefore,
+          margin,
+          nextY.clamp(_host.marginTop, contentBottom),
+        );
+        final probeY = _selection.caretGeometry?.y ?? prevY;
+        final needsNextPage =
+            probeY < prevY - 0.5 || nextY > contentBottom + 0.5;
+        if (needsNextPage && pageBefore + 1 < pageCount) {
+          hitTestAt(
+            pageBefore + 1,
+            margin,
+            _host.marginTop + _formatting.fontSize,
+          );
+        }
+        final newRun = _selection.caretRunId ?? runId;
+        _selection.afterInsert(newRun, 0);
+        _selection.syncCaretGeometry();
+      }
+
+      if (_selection.caretPage != _view.currentPage) {
+        jumpToPage(_selection.caretPage);
+      }
+      _session.markDocumentDirty();
+      notifyListeners();
+    });
   }
 
   Future<void> deleteGlyphBackward() async {
     if (_host.engine == null) return;
-    if (hasSelectedObject) {
-      await deleteSelectedObject();
-      return;
-    }
-    if (_selection.hasGlyphSelection) {
-      await _selection.deleteGlyphSelection();
-      _session.markDocumentDirty();
-      return;
-    }
-    final runId = _selection.defaultRunId();
-    if (runId == null) return;
-    if (_selection.caretOffset > 0) {
-      final off = _selection.caretOffset;
-      final edit = _host.performNativeEdit(
-        () => _host.engine!.deleteRangeAsync(runId, off - 1, off),
-        dirtyPage: _selection.caretPage,
-      );
-      final optimistic = off - 1;
-      _selection.afterInsert(runId, optimistic);
-      _session.markDocumentDirty();
-      notifyListeners();
-      if (!await edit) {
-        _rollbackCaret(runId, from: optimistic, to: off);
-      } else if (_selection.caretRunId == runId &&
-          _selection.caretOffset == optimistic) {
-        _selection.syncCaretGeometry();
+    await _runGlyphMutation(() async {
+      if (hasSelectedObject) {
+        await deleteSelectedObject();
+        return;
       }
-      notifyListeners();
-      return;
-    }
+      if (_selection.hasGlyphSelection) {
+        await _selection.deleteGlyphSelection();
+        _session.markDocumentDirty();
+        return;
+      }
+      final runId = _selection.defaultRunId();
+      if (runId == null) return;
+      if (_selection.caretOffset > 0) {
+        final off = _selection.caretOffset;
+        final edit = _host.performNativeEdit(
+          () => _host.engine!.deleteRangeAsync(runId, off - 1, off),
+          dirtyPage: _selection.caretPage,
+        );
+        final optimistic = off - 1;
+        _selection.afterInsert(runId, optimistic);
+        _session.markDocumentDirty();
+        notifyListeners();
+        if (!await edit) {
+          _rollbackCaret(runId, from: optimistic, to: off);
+        } else if (_selection.caretRunId == runId &&
+            _selection.caretOffset == optimistic) {
+          _selection.syncCaretGeometry();
+        }
+        notifyListeners();
+      }
+    });
   }
 
   Future<void> deleteGlyphForward() async {
     if (_host.engine == null) return;
-    if (hasSelectedObject) {
-      await deleteSelectedObject();
-      return;
-    }
-    if (_selection.hasGlyphSelection) {
-      await _selection.deleteGlyphSelection();
-      _session.markDocumentDirty();
-      return;
-    }
-    final runId = _selection.defaultRunId();
-    if (runId == null) return;
-    final off = _selection.caretOffset;
-    final edit = _host.performNativeEdit(
-      () => _host.engine!.deleteRangeAsync(runId, off, off + 1),
-      dirtyPage: _selection.caretPage,
-    );
-    _selection.collapseToCaret();
-    notifyListeners();
-    if (await edit) _session.markDocumentDirty();
+    await _runGlyphMutation(() async {
+      if (hasSelectedObject) {
+        await deleteSelectedObject();
+        return;
+      }
+      if (_selection.hasGlyphSelection) {
+        await _selection.deleteGlyphSelection();
+        _session.markDocumentDirty();
+        return;
+      }
+      final runId = _selection.defaultRunId();
+      if (runId == null) return;
+      final off = _selection.caretOffset;
+      final edit = _host.performNativeEdit(
+        () => _host.engine!.deleteRangeAsync(runId, off, off + 1),
+        dirtyPage: _selection.caretPage,
+      );
+      _selection.collapseToCaret();
+      notifyListeners();
+      if (await edit) _session.markDocumentDirty();
+    });
   }
 
   Future<void> moveGlyphSelectionTo(int pageIndex, double x, double y) async {
@@ -1996,9 +2052,8 @@ class EditorController extends ChangeNotifier {
   Future<void> proofDocument([BuildContext? context]) async {
     await _session.proofDocument();
     if (context != null && context.mounted) {
-      final issues = _host.engine?.spellCheckIssues();
-      if (issues != null &&
-          issues.any((issue) => issue.suggestions.isNotEmpty)) {
+      final issues = _session.spellIssues;
+      if (issues.any((issue) => issue.suggestions.isNotEmpty)) {
         await SpellSuggestionsDialog.show(
           context,
           issues,
@@ -2082,36 +2137,17 @@ class EditorController extends ChangeNotifier {
   Future<void> compareWithDocumentPicker(BuildContext context) async {
     if (!_host.isConnected || _host.engine == null) return;
     try {
-      final useInMemoryBytes =
-          kIsWeb || (!kIsWeb && (Platform.isAndroid || Platform.isIOS));
-      final result = await FilePicker.pickFiles(
+      final picked = await pickDocumentFile(
         dialogTitle: 'Compare with document',
-        type: FileType.custom,
-        allowedExtensions: kSupportedOpenExtensions,
-        allowMultiple: false,
-        withData: useInMemoryBytes,
       );
-      if (result == null || result.files.isEmpty) {
+      if (picked == null) {
         _session.setStatusText('Compare cancelled');
         notifyListeners();
         return;
       }
-      final file = result.files.single;
-      late final Uint8List bytes;
-      if (useInMemoryBytes && file.bytes != null) {
-        bytes = file.bytes!;
-      } else {
-        final path = file.path;
-        if (path == null) {
-          _session.setStatusText('Compare failed: no file path');
-          notifyListeners();
-          return;
-        }
-        bytes = Uint8List.fromList(await File(path).readAsBytes());
-      }
       final otherText = DocumentReader.extractText(
-        bytes,
-        path: file.path ?? file.name,
+        picked.bytes,
+        path: picked.path,
       );
       compareWithText(otherText);
     } catch (e) {
@@ -2599,30 +2635,16 @@ class EditorController extends ChangeNotifier {
     _session.setStatusText('Choose picture…');
     notifyListeners();
     try {
-      final useInMemoryBytes =
-          kIsWeb || (!kIsWeb && (Platform.isAndroid || Platform.isIOS));
-      final result = await FilePicker.pickFiles(
+      final picked = await pickDocumentFile(
         dialogTitle: 'Insert picture',
-        type: FileType.custom,
         allowedExtensions: const ['png', 'jpg', 'jpeg', 'svg'],
-        allowMultiple: false,
-        withData: useInMemoryBytes,
       );
-      if (result == null || result.files.isEmpty) {
+      if (picked == null) {
         _session.setStatusText('Insert cancelled');
         return;
       }
-      final file = result.files.single;
-      Uint8List? bytes = file.bytes;
-      if (bytes == null && file.path != null) {
-        bytes = Uint8List.fromList(await File(file.path!).readAsBytes());
-      }
-      if (bytes == null || bytes.isEmpty) {
-        _session.setStatusText('Insert failed: empty file');
-        return;
-      }
-      final mime = _mimeForPicture(file.extension, file.name);
-      await insertImageBytes(bytes, mime);
+      final mime = _mimeForPicture(picked.name.split('.').last, picked.name);
+      await insertImageBytes(picked.bytes, mime);
     } catch (e) {
       _session.setStatusText('Insert failed: $e');
     }
@@ -3338,10 +3360,14 @@ class EditorController extends ChangeNotifier {
     if (!_host.isConnected || _host.engine == null) return;
     _smartEditAppliedStyles.clear();
     for (final heading in plan.headings) {
+      final matches = _host.engine!.findMatches(heading.previewText, false);
+      final runId = matches != null && matches.isNotEmpty
+          ? matches.first.startRunId
+          : _selection.defaultRunId();
       await _session.applyEngineStyle(
         () => _host.engine!.applyParagraphStyleAsync(
           styleName: heading.styleName,
-          caretRunId: _selection.defaultRunId(),
+          caretRunId: runId,
         ),
         '${heading.styleName} applied',
       );
@@ -3632,7 +3658,7 @@ class EditorController extends ChangeNotifier {
     final engine = _host.engine!;
     final text = engine is MockDocumentEngine
         ? engine.text
-        : (selectedText.isNotEmpty ? selectedText : '');
+        : (selectedText.isNotEmpty ? selectedText : documentText);
     final findings = await scanWithAi(_aiClient, text);
     if (!context.mounted) return;
     await ConsistencyCheckerDialog.show(
@@ -3640,7 +3666,22 @@ class EditorController extends ChangeNotifier {
       findings: findings,
       onApply: (finding) async {
         if (finding.suggestion == null) return;
-        _session.setStatusText('Applied ${finding.suggestion}');
+        var total = 0;
+        for (final variant in finding.variants) {
+          if (variant == finding.suggestion) continue;
+          final count = await engine.replaceAll(
+            variant,
+            finding.suggestion!,
+            true,
+          );
+          if (count != null) total += count;
+        }
+        _session.setStatusText(
+          total > 0
+              ? 'Applied ${finding.suggestion} ($total replacement(s))'
+              : 'Applied ${finding.suggestion}',
+        );
+        _session.markDocumentDirty();
         notifyListeners();
       },
     );

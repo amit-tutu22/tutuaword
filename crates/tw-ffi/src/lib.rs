@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::Duration;
 use tw_core::{BridgeEvent, Session, WaitOutcome, STARTUP_REQUEST_ID};
-use tw_edit::{command_from_json, Command, DocPosition, DocRange};
+use tw_edit::{command_from_json, replace_run_range_commands, Command, DocPosition, DocRange};
 use tw_layout::FontFaceSpec;
 use tw_model::{CharFormat, FieldType, NodeId, ParaFormat, SectionFormat};
 use uuid::Uuid;
@@ -1498,22 +1498,41 @@ pub extern "C" fn tw_apply_spell_replacement(
                 Ok(r) => r,
                 Err(_) => return -2,
             };
-            let delete = Command::DeleteDocRange { range: range.clone() };
-            let insert = Command::InsertText {
-                run_id: range.start.run_id,
-                offset: range.start.char_offset,
-                text: replacement,
+            let last_id = if range.start.run_id == range.end.run_id {
+                let cmds = replace_run_range_commands(
+                    range.start.run_id,
+                    range.start.char_offset,
+                    range.end.char_offset,
+                    replacement,
+                );
+                let mut last = None;
+                for cmd in cmds {
+                    last = session.apply(cmd);
+                    if last.is_none() {
+                        return -4;
+                    }
+                }
+                last
+            } else {
+                let delete = Command::DeleteDocRange { range: range.clone() };
+                let insert = Command::InsertText {
+                    run_id: range.start.run_id,
+                    offset: range.start.char_offset,
+                    text: replacement,
+                };
+                let Some(delete_id) = session.apply(delete) else {
+                    return -4;
+                };
+                let Some(insert_id) = session.apply(insert) else {
+                    return -4;
+                };
+                let _ = delete_id;
+                Some(insert_id)
             };
-            let Some(delete_id) = session.apply(delete) else {
+            let Some(request_id) = last_id else {
                 return -4;
             };
-            if finish_edit_enqueue(delete_id) != 0 {
-                return -4;
-            }
-            let Some(insert_id) = session.apply(insert) else {
-                return -4;
-            };
-            finish_edit_enqueue(insert_id)
+            finish_edit_enqueue(request_id)
         })
     })
 }
@@ -3136,6 +3155,7 @@ fn anchor_origin_from_u8(value: u8) -> Option<tw_model::AnchorOrigin> {
         0 => Some(tw_model::AnchorOrigin::Column),
         1 => Some(tw_model::AnchorOrigin::Page),
         2 => Some(tw_model::AnchorOrigin::Margin),
+        3 => Some(tw_model::AnchorOrigin::Paragraph),
         _ => None,
     }
 }

@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tutuaword/editor/display_list.dart';
@@ -106,6 +107,39 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(controller.currentPage, greaterThan(0));
+    });
+
+    testWidgets('phone uses reading zoom and pans when page is wider', (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      const phone = Size(390, 844);
+      tester.view.physicalSize = phone;
+      tester.view.devicePixelRatio = 1.0;
+      try {
+        final controller = EditorController.forTest();
+        addTearDown(controller.dispose);
+        controller.setDisplayListForTest(fakeGlyphDisplayList(), pageCount: 2);
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: MediaQuery(
+              data: const MediaQueryData(size: phone),
+              child: Scaffold(body: DocumentView(controller: controller)),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(tester.takeException(), isNull);
+        expect(controller.zoom, closeTo(1.5, 0.01));
+        expect(
+          find.byKey(ValueKey('page-0-${controller.pageDisplayVersion(0)}')),
+          findsOneWidget,
+        );
+        expect(find.byType(SingleChildScrollView), findsWidgets);
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+        tester.view.reset();
+      }
     });
   });
 

@@ -39,6 +39,24 @@ class _DocumentViewState extends State<DocumentView> {
   int _loadedAtlasGeneration = -1;
   final ScrollController _scrollController = ScrollController();
   final ScrollController _splitScrollController = ScrollController();
+  double _viewportWidth = 0;
+
+  bool _phoneNavSheetOpen = false;
+  bool _phoneStyleSheetOpen = false;
+  bool _phoneAccessibilitySheetOpen = false;
+  bool _phonePictureSheetOpen = false;
+  String? _dismissedPictureId;
+
+  /// Display scale follows the status-bar zoom only (no silent fit-to-width).
+  /// Fit-to-width made phone text unreadable; narrow screens pan horizontally.
+  double _effectiveScale(EditorController controller) => controller.zoom;
+
+  double _pageExtentFor(EditorController controller) {
+    final gap = _pageGapEffective;
+    return (controller.pageHeight + gap) * _effectiveScale(controller);
+  }
+
+  double get _pageExtent => _pageExtentFor(widget.controller);
 
   /// Decoded document images shared across pages, keyed by asset id.
   final Map<String, ui.Image> _images = {};
@@ -102,11 +120,6 @@ class _DocumentViewState extends State<DocumentView> {
     if (layout == DocumentViewLayout.webLayout) return 4.0;
     if (layout == DocumentViewLayout.readMode) return 16.0;
     return _pageGap;
-  }
-
-  double get _pageExtent {
-    final gap = _pageGapEffective;
-    return (widget.controller.pageHeight + gap) * widget.controller.zoom;
   }
 
   int get _rowCount {
@@ -243,10 +256,16 @@ class _DocumentViewState extends State<DocumentView> {
   @override
   Widget build(BuildContext context) {
     final controller = widget.controller;
+    final phone = WordTheme.phoneChrome(context);
+    if (phone) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _syncPhoneSidePanes(context);
+      });
+    }
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (controller.showNavigationPane && !controller.isReadMode)
+        if (!phone && controller.showNavigationPane && !controller.isReadMode)
           NavigationPane(
             controller: controller,
             currentPage: controller.currentPage,
@@ -256,9 +275,16 @@ class _DocumentViewState extends State<DocumentView> {
         Expanded(
           child: LayoutBuilder(
             builder: (context, constraints) {
+              _viewportWidth = constraints.maxWidth;
               controller.reportViewportSize(
                 Size(constraints.maxWidth, constraints.maxHeight),
               );
+              if (WordTheme.mobileChrome(context)) {
+                // Don't notifyListeners during build — apply after the frame.
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (mounted) controller.ensureMobileReadingZoom();
+                });
+              }
               final canvasBg = controller.isWebLayout || controller.isReadMode
                   ? Colors.white
                   : WordTheme.canvasGray;
@@ -302,14 +328,132 @@ class _DocumentViewState extends State<DocumentView> {
             },
           ),
         ),
-        if (controller.hasSelectedImage && !controller.isReadMode)
+        if (!phone && controller.hasSelectedImage && !controller.isReadMode)
           PictureInspectorPane(controller: controller),
-        if (controller.showAccessibilityChecker && !controller.isReadMode)
+        if (!phone && controller.showAccessibilityChecker && !controller.isReadMode)
           AccessibilityCheckerPane(controller: controller),
-        if (controller.showStyleInspector && !controller.isReadMode)
+        if (!phone && controller.showStyleInspector && !controller.isReadMode)
           StyleInspectorPane(controller: controller),
       ],
     );
+  }
+
+  Future<void> _syncPhoneSidePanes(BuildContext context) async {
+    final controller = widget.controller;
+    if (!WordTheme.phoneChrome(context) || controller.isReadMode) return;
+
+    if (controller.showNavigationPane && !_phoneNavSheetOpen) {
+      _phoneNavSheetOpen = true;
+      await _showPhonePaneSheet(
+        context,
+        title: 'Navigation',
+        onDismiss: () {
+          if (controller.showNavigationPane) {
+            controller.toggleNavigationPane();
+          }
+        },
+        child: NavigationPane(
+          controller: controller,
+          currentPage: controller.currentPage,
+          onPageSelected: controller.jumpToPage,
+          onOutlineSelected: controller.jumpToOutlineEntry,
+          expanded: true,
+        ),
+      );
+      _phoneNavSheetOpen = false;
+    }
+
+    if (controller.showStyleInspector && !_phoneStyleSheetOpen) {
+      _phoneStyleSheetOpen = true;
+      await _showPhonePaneSheet(
+        context,
+        title: 'Style Inspector',
+        onDismiss: () {
+          if (controller.showStyleInspector) {
+            controller.toggleStyleInspector();
+          }
+        },
+        child: StyleInspectorPane(controller: controller, expanded: true),
+      );
+      _phoneStyleSheetOpen = false;
+    }
+
+    if (controller.showAccessibilityChecker && !_phoneAccessibilitySheetOpen) {
+      _phoneAccessibilitySheetOpen = true;
+      await _showPhonePaneSheet(
+        context,
+        title: 'Accessibility',
+        onDismiss: controller.hideAccessibilityChecker,
+        child: AccessibilityCheckerPane(controller: controller, expanded: true),
+      );
+      _phoneAccessibilitySheetOpen = false;
+    }
+
+    if (!controller.hasSelectedImage) {
+      _dismissedPictureId = null;
+    } else if (controller.hasSelectedImage &&
+        !_phonePictureSheetOpen &&
+        controller.selectedImageId != _dismissedPictureId) {
+      _phonePictureSheetOpen = true;
+      final imageId = controller.selectedImageId;
+      await _showPhonePaneSheet(
+        context,
+        title: 'Picture',
+        onDismiss: () => _dismissedPictureId = imageId,
+        child: PictureInspectorPane(controller: controller, expanded: true),
+      );
+      _phonePictureSheetOpen = false;
+    }
+  }
+
+  Future<void> _showPhonePaneSheet(
+    BuildContext context, {
+    required String title,
+    required VoidCallback onDismiss,
+    required Widget child,
+  }) {
+    return showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        final height = MediaQuery.sizeOf(sheetContext).height * 0.55;
+        return SafeArea(
+          child: SizedBox(
+            height: height,
+            width: double.infinity,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 8, 8),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          title,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close, size: 20),
+                        onPressed: () => Navigator.pop(sheetContext),
+                        tooltip: 'Close',
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1),
+                Expanded(child: child),
+              ],
+            ),
+          ),
+        );
+      },
+    ).whenComplete(onDismiss);
   }
 
   Widget _buildSplitOrCanvas(BuildContext context, EditorController controller) {
@@ -367,6 +511,35 @@ class _DocumentViewState extends State<DocumentView> {
     required bool trackVisiblePage,
     bool forceReadOnly = false,
   }) {
+    // Phone: true zoom + horizontal pan (readable text, no silent fit-width).
+    // Desktop/web: prior Transform.scale + FittedBox.scaleDown path — keeps
+    // pages centered and fitting the viewport (Chrome/Mac/Windows).
+    final phone = WordTheme.phoneChrome(context);
+    return phone
+        ? _buildPhoneCanvas(
+            context,
+            controller,
+            scrollController: scrollController,
+            trackVisiblePage: trackVisiblePage,
+            forceReadOnly: forceReadOnly,
+          )
+        : _buildDesktopCanvas(
+            context,
+            controller,
+            scrollController: scrollController,
+            trackVisiblePage: trackVisiblePage,
+            forceReadOnly: forceReadOnly,
+          );
+  }
+
+  /// Desktop / web / tablet: scale-down to width and center the page row.
+  Widget _buildDesktopCanvas(
+    BuildContext context,
+    EditorController controller, {
+    required ScrollController scrollController,
+    required bool trackVisiblePage,
+    bool forceReadOnly = false,
+  }) {
     final columns = controller.pageColumns.clamp(1, 3);
     final gap = _pageGapEffective;
     return Stack(
@@ -378,7 +551,7 @@ class _DocumentViewState extends State<DocumentView> {
           controller: scrollController,
           padding: EdgeInsets.symmetric(vertical: gap),
           itemCount: _rowCount,
-          itemExtent: _pageExtent,
+          itemExtent: _pageExtentFor(controller),
           itemBuilder: (context, rowIndex) {
             final children = <Widget>[];
             for (var col = 0; col < columns; col++) {
@@ -437,6 +610,105 @@ class _DocumentViewState extends State<DocumentView> {
                   ),
                 );
               },
+            );
+          },
+        ),
+        if (kIsWeb) WebGlyphTextInput(controller: controller),
+      ],
+    );
+  }
+
+  /// Phone: layout size matches painted zoom; pan horizontally when wider.
+  Widget _buildPhoneCanvas(
+    BuildContext context,
+    EditorController controller, {
+    required ScrollController scrollController,
+    required bool trackVisiblePage,
+    bool forceReadOnly = false,
+  }) {
+    final columns = controller.pageColumns.clamp(1, 3);
+    final gap = _pageGapEffective;
+    final scale = _effectiveScale(controller);
+    final scaledPageW = controller.pageWidth * scale;
+    final scaledPageH = controller.pageHeight * scale;
+    final hPad = (gap * scale) / 2;
+    final vPad = gap * scale;
+    final contentWidth = columns * (scaledPageW + gap * scale);
+    final pageList = ListView.builder(
+      key: trackVisiblePage
+          ? const ValueKey('document-page-list')
+          : const ValueKey('document-page-list-split'),
+      controller: scrollController,
+      padding: EdgeInsets.symmetric(vertical: vPad),
+      itemCount: _rowCount,
+      itemExtent: _pageExtentFor(controller),
+      itemBuilder: (context, rowIndex) {
+        final children = <Widget>[];
+        for (var col = 0; col < columns; col++) {
+          final index = rowIndex * columns + col;
+          if (index >= controller.pageCount) break;
+          _scheduleLoad(index);
+          final readOnly =
+              forceReadOnly || !controller.isPageEditable(index);
+          children.add(
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: hPad),
+              child: SizedBox(
+                width: scaledPageW,
+                height: scaledPageH,
+                child: FittedBox(
+                  fit: BoxFit.fill,
+                  alignment: Alignment.topCenter,
+                  child: SizedBox(
+                    width: controller.pageWidth,
+                    height: controller.pageHeight,
+                    child: GestureDetector(
+                      onTap: readOnly
+                          ? () => controller.setCurrentPage(index)
+                          : null,
+                      child: _PageCanvas(
+                        key: ValueKey(
+                          'page-$index-${controller.pageDisplayVersion(index)}',
+                        ),
+                        controller: controller,
+                        pageIndex: index,
+                        snapshot: _snapshots[index],
+                        atlasImage: _atlasImage,
+                        images: _images,
+                        readOnly: readOnly,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        }
+        return Align(
+          alignment: Alignment.topCenter,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: children,
+          ),
+        );
+      },
+    );
+
+    return Stack(
+      children: [
+        LayoutBuilder(
+          builder: (context, constraints) {
+            if (contentWidth <= constraints.maxWidth + 0.5) {
+              return pageList;
+            }
+            return SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: SizedBox(
+                width: contentWidth,
+                height: constraints.maxHeight,
+                child: pageList,
+              ),
             );
           },
         ),

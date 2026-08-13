@@ -435,12 +435,20 @@ class WasmEngine {
   int openDocumentBytes(Uint8List bytes, {String? path, String? password}) {
     try {
       final pw = password ?? '';
-      if (pw.isNotEmpty || (path != null && path.isNotEmpty)) {
+      // Blob URLs from the web file picker have no extension — ignore them so
+      // format detection falls back to magic bytes.
+      final hint = (path != null &&
+              path.isNotEmpty &&
+              !path.startsWith('blob:') &&
+              !path.startsWith('data:'))
+          ? path
+          : '';
+      if (pw.isNotEmpty || hint.isNotEmpty) {
         try {
-          _invoke('open_document_with_password', [bytes, path ?? '', pw]);
+          _invoke('open_document_with_password', [bytes, hint, pw]);
         } catch (_) {
-          if (path != null && path.isNotEmpty) {
-            _invoke('open_document_with_path', [bytes, path]);
+          if (hint.isNotEmpty) {
+            _invoke('open_document_with_path', [bytes, hint]);
           } else {
             _invoke('open_document', [bytes]);
           }

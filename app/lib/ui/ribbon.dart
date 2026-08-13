@@ -68,7 +68,7 @@ class WordRibbonState extends State<WordRibbon> {
             onShare: () => unawaited(widget.controller.shareWithApps()),
           ),
           Container(
-            height: WordTheme.ribbonHeight,
+            height: WordTheme.ribbonHeightFor(context),
             color: WordTheme.ribbonSurface,
             child: ClipRect(
               child: _buildTabContent(),
@@ -116,7 +116,7 @@ class _TabStrip extends StatelessWidget {
               scrollDirection: Axis.horizontal,
               child: Row(
                 children: [
-                  const SizedBox(width: WordTheme.trafficLightInset),
+                  SizedBox(width: WordTheme.leadingChromeInset(context)),
                   ...RibbonTab.values.map((tab) => _TabItem(
                         key: Key('ribbon_tab_${tab.name}'),
                         label: tab.label,
@@ -130,6 +130,7 @@ class _TabStrip extends StatelessWidget {
           _ShareButton(
             onPressed: onShare,
             tooltip: 'Share with another app',
+            iconOnly: WordTheme.phoneChrome(context),
           ),
           const SizedBox(width: 12),
         ],
@@ -152,12 +153,13 @@ class _TabItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final phone = WordTheme.phoneChrome(context);
     return RibbonFocusable(
       enabled: true,
       onActivate: onTap,
       builder: (context, {required hovered, required focused}) {
         return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14),
+          padding: EdgeInsets.symmetric(horizontal: phone ? 10 : 14),
           decoration: BoxDecoration(
             color: (hovered || focused)
                 ? WordTheme.ribbonHover
@@ -183,10 +185,15 @@ class _TabItem extends StatelessWidget {
 }
 
 class _ShareButton extends StatelessWidget {
-  const _ShareButton({this.onPressed, this.tooltip});
+  const _ShareButton({
+    this.onPressed,
+    this.tooltip,
+    this.iconOnly = false,
+  });
 
   final VoidCallback? onPressed;
   final String? tooltip;
+  final bool iconOnly;
 
   @override
   Widget build(BuildContext context) {
@@ -216,13 +223,15 @@ class _ShareButton extends StatelessWidget {
                   size: 16,
                   color: enabled ? WordTheme.ribbonText : WordTheme.ribbonTextDisabled,
                 ),
-                const SizedBox(width: 4),
-                Text(
-                  'Share',
-                  style: WordTheme.tabLabel.copyWith(
-                    color: enabled ? WordTheme.ribbonText : WordTheme.ribbonTextDisabled,
+                if (!iconOnly) ...[
+                  const SizedBox(width: 4),
+                  Text(
+                    'Share',
+                    style: WordTheme.tabLabel.copyWith(
+                      color: enabled ? WordTheme.ribbonText : WordTheme.ribbonTextDisabled,
+                    ),
                   ),
-                ),
+                ],
               ],
             ),
           );

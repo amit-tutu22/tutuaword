@@ -249,21 +249,30 @@ impl LayoutCache {
         if let Some(line) = pick_line_for_x_cache(&y_matches, x) {
             return Some((line.x, line.y, line.ascent + line.descent));
         }
-        map.lines.first().map(|line| (line.x, line.y, line.ascent + line.descent))
+        // Mirror LineMap::hit_test edge fallback: below → last, above → first.
+        let edge = if let Some(first) = map.lines.first() {
+            let first_top = first.y - first.ascent;
+            if y < first_top {
+                first
+            } else {
+                map.lines.last().unwrap_or(first)
+            }
+        } else {
+            return None;
+        };
+        Some((edge.x, edge.y, edge.ascent + edge.descent))
     }
 
+    /// Geometry for `(run_id, char_offset)` on [page] only.
+    ///
+    /// Deliberately does not search other pages — a hit on page N+1 with a
+    /// page-N query would leave Flutter's caret page stale after Enter
+    /// paginates. Callers that need cross-page lookup (e.g. syncCaretGeometry)
+    /// iterate pages themselves.
     pub fn caret_at(&self, page: u32, run_id: tw_model::NodeId, char_offset: usize) -> Option<(f32, f32, f32)> {
-        if let Some(map) = self.line_maps.get(&page) {
-            if let Some(geom) = map.caret_at(run_id, char_offset) {
-                return Some(geom);
-            }
-        }
-        for map in self.line_maps.values() {
-            if let Some(geom) = map.caret_at(run_id, char_offset) {
-                return Some(geom);
-            }
-        }
-        None
+        self.line_maps
+            .get(&page)
+            .and_then(|map| map.caret_at(run_id, char_offset))
     }
 
     pub fn selection_rects(&self, page: u32, start_x: f32, start_y: f32, end_x: f32, end_y: f32) -> Vec<f32> {

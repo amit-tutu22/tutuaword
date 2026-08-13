@@ -66,6 +66,9 @@ class HomeTab extends StatelessWidget {
     return ListenableBuilder(
       listenable: controller,
       builder: (context, _) {
+        final phone = WordTheme.phoneChrome(context);
+        final fontFamilyWidth = phone ? 96.0 : 120.0;
+        final fontSizeWidth = phone ? 40.0 : 48.0;
         return RibbonTabScroller(
           children: [
               RibbonGroup(
@@ -77,35 +80,64 @@ class HomeTab extends StatelessWidget {
                   label: 'Paste',
                   onPressed: () => controller.paste(),
                 ),
-                const SizedBox(width: 4),
-                Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    RibbonIconButton(
-                      icon: Icons.content_cut,
-                      tooltip: 'Cut',
-                      onPressed: controller.cutSelection,
-                      iconSize: 14,
-                    ),
-                    RibbonIconButton(
-                      icon: Icons.content_copy,
-                      tooltip: 'Copy',
-                      onPressed: controller.copySelection,
-                      iconSize: 14,
-                    ),
-                    RibbonToggleButton(
-                      key: const Key('format_painter'),
-                      icon: Icons.format_paint,
-                      tooltip: controller.formatPainterArmed
-                          ? 'Format Painter (armed — select text to paint, or click to cancel)'
-                          : 'Format Painter',
-                      selected: controller.formatPainterArmed,
-                      onPressed: controller.toggleFormatPainter,
-                      iconSize: 14,
-                    ),
-                  ],
-                ),
+                SizedBox(width: phone ? 2 : 4),
+                if (phone)
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      RibbonIconButton(
+                        icon: Icons.content_cut,
+                        tooltip: 'Cut',
+                        onPressed: controller.cutSelection,
+                        iconSize: 14,
+                      ),
+                      RibbonIconButton(
+                        icon: Icons.content_copy,
+                        tooltip: 'Copy',
+                        onPressed: controller.copySelection,
+                        iconSize: 14,
+                      ),
+                      RibbonToggleButton(
+                        key: const Key('format_painter'),
+                        icon: Icons.format_paint,
+                        tooltip: controller.formatPainterArmed
+                            ? 'Format Painter (armed — select text to paint, or click to cancel)'
+                            : 'Format Painter',
+                        selected: controller.formatPainterArmed,
+                        onPressed: controller.toggleFormatPainter,
+                        iconSize: 14,
+                      ),
+                    ],
+                  )
+                else
+                  Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      RibbonIconButton(
+                        icon: Icons.content_cut,
+                        tooltip: 'Cut',
+                        onPressed: controller.cutSelection,
+                        iconSize: 14,
+                      ),
+                      RibbonIconButton(
+                        icon: Icons.content_copy,
+                        tooltip: 'Copy',
+                        onPressed: controller.copySelection,
+                        iconSize: 14,
+                      ),
+                      RibbonToggleButton(
+                        key: const Key('format_painter'),
+                        icon: Icons.format_paint,
+                        tooltip: controller.formatPainterArmed
+                            ? 'Format Painter (armed — select text to paint, or click to cancel)'
+                            : 'Format Painter',
+                        selected: controller.formatPainterArmed,
+                        onPressed: controller.toggleFormatPainter,
+                        iconSize: 14,
+                      ),
+                    ],
+                  ),
               ],
             ),
           ),
@@ -118,7 +150,7 @@ class HomeTab extends StatelessWidget {
                   children: [
                     RibbonDropdown(
                       value: controller.fontFamily,
-                      width: 120,
+                      width: fontFamilyWidth,
                       items: kRibbonFontFamilies,
                       onSelected: controller.setFontFamily,
                       itemStyle: (family) => TextStyle(fontFamily: family, fontSize: 11),
@@ -126,7 +158,7 @@ class HomeTab extends StatelessWidget {
                     const SizedBox(width: 4),
                     RibbonDropdown(
                       value: formatRibbonFontSize(controller.fontSize),
-                      width: 48,
+                      width: fontSizeWidth,
                       items: kRibbonFontSizes,
                       onSelected: (size) => controller.setFontSize(double.parse(size)),
                     ),
@@ -340,28 +372,20 @@ class HomeTab extends StatelessWidget {
             label: 'Styles',
             child: Row(
               children: [
-                SizedBox(
-                  width: 420,
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      children: [
-                        for (final entry in _builtinGalleryStyles)
-                          StyleGalleryCard(
-                            label: entry.$1,
-                            previewStyle: entry.$2,
-                            selected: controller.activeParagraphStyle == entry.$1,
-                            onPressed: () => controller.applyParagraphStyle(entry.$1),
-                          ),
-                        StyleGalleryCard(
-                          label: 'No Spacing',
-                          previewStyle: const TextStyle(fontSize: 9, height: 1.0),
-                          selected: controller.activeParagraphStyle == 'No Spacing',
-                          onPressed: () => controller.applyParagraphStyle('No Spacing'),
-                        ),
-                      ],
-                    ),
+                for (final entry in _builtinGalleryStyles)
+                  StyleGalleryCard(
+                    label: entry.$1,
+                    previewStyle: entry.$2,
+                    selected: controller.activeParagraphStyle == entry.$1,
+                    onPressed: () => controller.applyParagraphStyle(entry.$1),
+                    compact: phone,
                   ),
+                StyleGalleryCard(
+                  label: 'No Spacing',
+                  previewStyle: const TextStyle(fontSize: 9, height: 1.0),
+                  selected: controller.activeParagraphStyle == 'No Spacing',
+                  onPressed: () => controller.applyParagraphStyle('No Spacing'),
+                  compact: phone,
                 ),
                 RibbonTextButton(
                   label: 'Styles\nPane',

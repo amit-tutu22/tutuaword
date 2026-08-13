@@ -12,7 +12,7 @@ class TwdocReader {
       if (content == null) {
         throw const FormatException('content.json missing from .twdoc');
       }
-      final jsonStr = utf8.decode(content.content as List<int>);
+      final jsonStr = utf8.decode(content.readBytes() ?? const <int>[]);
       final doc = jsonDecode(jsonStr) as Map<String, dynamic>;
       final sections = doc['sections'] as List<dynamic>? ?? [];
       final paragraphs = <String>[];
@@ -98,6 +98,6 @@ class TwdocWriter {
       ..addFile(ArchiveFile('styles.json', 0, utf8.encode('{}')))
       ..addFile(ArchiveFile('settings.json', 0, utf8.encode('{}')));
 
-    return Uint8List.fromList(ZipEncoder().encode(archive)!);
+    return ZipEncoder().encodeBytes(archive);
   }
 }

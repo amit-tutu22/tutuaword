@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
 import 'package:tutuaword/editor/web_key_listener.dart' show WebKeyListener, createWebKeyListener;
 
@@ -10,6 +9,10 @@ import 'package:tutuaword/editor/web_key_listener.dart' show WebKeyListener, cre
 /// Browsers deliver printable keys through a focused editable DOM node. This
 /// widget sits above the page canvas with [IgnorePointer] so clicks pass
 /// through, while it keeps keyboard focus for [TextField.onChanged].
+///
+/// Special keys (Enter, Tab, arrows, Backspace) are owned exclusively by
+/// [WebKeyListener] (DOM capture) so Flutter's key channel cannot double-fire
+/// the same keystroke.
 class WebGlyphTextInput extends StatefulWidget {
   const WebGlyphTextInput({super.key, required this.controller});
 
@@ -22,7 +25,6 @@ class WebGlyphTextInput extends StatefulWidget {
 class _WebGlyphTextInputState extends State<WebGlyphTextInput> {
   late final TextEditingController _textController;
   late final WebKeyListener _domKeys;
-  bool Function(KeyEvent event)? _keyboardHandler;
   String _lastFieldValue = '';
 
   @override
@@ -30,8 +32,6 @@ class _WebGlyphTextInputState extends State<WebGlyphTextInput> {
     super.initState();
     _textController = TextEditingController();
     _domKeys = createWebKeyListener(widget.controller)..attach();
-    _keyboardHandler = _onHardwareKey;
-    HardwareKeyboard.instance.addHandler(_keyboardHandler!);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       widget.controller.ensureGlyphCaret();
@@ -42,55 +42,8 @@ class _WebGlyphTextInputState extends State<WebGlyphTextInput> {
   @override
   void dispose() {
     _domKeys.dispose();
-    if (_keyboardHandler != null) {
-      HardwareKeyboard.instance.removeHandler(_keyboardHandler!);
-    }
     _textController.dispose();
     super.dispose();
-  }
-
-  bool _onHardwareKey(KeyEvent event) {
-    if (!widget.controller.webGlyphFocusNode.hasFocus) return false;
-    return _handleSpecialKey(event);
-  }
-
-  bool _handleSpecialKey(KeyEvent event) {
-    if (event is! KeyDownEvent) return false;
-    final key = event.logicalKey;
-    if (key == LogicalKeyboardKey.backspace) {
-      unawaited(widget.controller.deleteGlyphBackward());
-      return true;
-    }
-    if (key == LogicalKeyboardKey.delete) {
-      unawaited(widget.controller.deleteGlyphForward());
-      return true;
-    }
-    if (key == LogicalKeyboardKey.enter || key == LogicalKeyboardKey.numpadEnter) {
-      unawaited(widget.controller.insertGlyphParagraphBreak());
-      return true;
-    }
-    if (key == LogicalKeyboardKey.tab) {
-      if (widget.controller.isInList) {
-        if (HardwareKeyboard.instance.isShiftPressed) {
-          widget.controller.demoteListLevel();
-        } else {
-          widget.controller.promoteListLevel();
-        }
-      } else if (HardwareKeyboard.instance.isShiftPressed) {
-        widget.controller.decreaseIndent();
-      } else {
-        unawaited(widget.controller.insertGlyphCharacter('\t'));
-      }
-      return true;
-    }
-    if (key == LogicalKeyboardKey.arrowLeft ||
-        key == LogicalKeyboardKey.arrowRight ||
-        key == LogicalKeyboardKey.arrowUp ||
-        key == LogicalKeyboardKey.arrowDown) {
-      widget.controller.moveGlyphCaretByArrow(key);
-      return true;
-    }
-    return false;
   }
 
   void _onChanged(String value) {
@@ -125,25 +78,19 @@ class _WebGlyphTextInputState extends State<WebGlyphTextInput> {
   Widget build(BuildContext context) {
     return Positioned.fill(
       child: IgnorePointer(
-        child: Focus(
-          onKeyEvent: (node, event) {
-            if (_handleSpecialKey(event)) return KeyEventResult.handled;
-            return KeyEventResult.ignored;
-          },
-          child: TextField(
-            focusNode: widget.controller.webGlyphFocusNode,
-            controller: _textController,
-            autofocus: true,
-            style: const TextStyle(fontSize: 16, height: 1, color: Colors.transparent),
-            cursorColor: Colors.transparent,
-            showCursor: false,
-            enableInteractiveSelection: false,
-            decoration: const InputDecoration(
-              border: InputBorder.none,
-              contentPadding: EdgeInsets.zero,
-            ),
-            onChanged: _onChanged,
+        child: TextField(
+          focusNode: widget.controller.webGlyphFocusNode,
+          controller: _textController,
+          autofocus: true,
+          style: const TextStyle(fontSize: 16, height: 1, color: Colors.transparent),
+          cursorColor: Colors.transparent,
+          showCursor: false,
+          enableInteractiveSelection: false,
+          decoration: const InputDecoration(
+            border: InputBorder.none,
+            contentPadding: EdgeInsets.zero,
           ),
+          onChanged: _onChanged,
         ),
       ),
     );

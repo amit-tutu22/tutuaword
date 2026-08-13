@@ -47,6 +47,7 @@ fn anchor_origin_from_u8(value: u8) -> Option<tw_model::AnchorOrigin> {
         0 => Some(tw_model::AnchorOrigin::Column),
         1 => Some(tw_model::AnchorOrigin::Page),
         2 => Some(tw_model::AnchorOrigin::Margin),
+        3 => Some(tw_model::AnchorOrigin::Paragraph),
         _ => None,
     }
 }
@@ -77,12 +78,40 @@ fn format_from_extension(ext: &str) -> DetectedFormat {
     tw_core::format_from_extension(ext).unwrap_or(DetectedFormat::Unknown)
 }
 
+fn encode_spell_issues(issues: &[(String, usize, usize, Vec<String>)]) -> Vec<u8> {
+    #[derive(serde::Serialize)]
+    struct Issue<'a> {
+        word: &'a str,
+        start: usize,
+        end: usize,
+        suggestions: &'a [String],
+    }
+    let payload: Vec<Issue<'_>> = issues
+        .iter()
+        .map(|(word, start, end, suggestions)| Issue {
+            word,
+            start: *start,
+            end: *end,
+            suggestions,
+        })
+        .collect();
+    serde_json::to_vec(&payload).unwrap_or_default()
+}
+
 fn wait_for_bytes(session: &tw_core::Session, request_id: u64) -> Result<Vec<u8>, String> {
     match session.wait_for_response(request_id, Duration::from_secs(30)) {
         WaitOutcome::Matched(event) => match event {
             BridgeEvent::DocumentSaved { data, .. } => Ok(data),
-            BridgeEvent::SpellCheckResult { misspellings, .. } => {
-                Ok(misspellings.join("\n").into_bytes())
+            BridgeEvent::SpellCheckResult {
+                misspellings,
+                spell_issues,
+                ..
+            } => {
+                if spell_issues.is_empty() {
+                    Ok(misspellings.join("\n").into_bytes())
+                } else {
+                    Ok(encode_spell_issues(&spell_issues))
+                }
             }
             BridgeEvent::GrammarCheckResult { issues, .. } => {
                 Ok(issues.join("\n").into_bytes())
@@ -388,7 +417,7 @@ impl WasmSession {
         let session = self.session().expect("WasmSession not initialized");
         let run = parse_run_id(Some(run_id)).ok_or_else(|| "run id required".to_string())?;
         let field = parse_field_type_name(field_type)?;
-        self.enqueue_edit(session.insert_field_at(run, offset, field))
+        self.enqueue_edit(session.insert_field_at(run, offset, field, None))
     }
 
     pub fn insert_form_field_enqueue(

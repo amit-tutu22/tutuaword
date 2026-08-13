@@ -514,7 +514,7 @@ class MockDocumentEngine implements DocumentEngine {
         'signer_name': (sig['signer'] as Map?)?['name'] ?? '',
         'message': _signaturesTampered
             ? 'Document has changed since it was signed'
-            : 'Signature is valid',
+            : 'Self-attested signature intact (not certificate-backed)',
       };
     }).toList());
   }
@@ -778,7 +778,7 @@ class MockDocumentEngine implements DocumentEngine {
       ))
       ..addFile(ArchiveFile('EncryptionInfo', 9, 'encrypted'.codeUnits))
       ..addFile(ArchiveFile('EncryptedPackage', plaintext.length, plaintext));
-    return Uint8List.fromList(ZipEncoder().encode(archive)!);
+    return ZipEncoder().encodeBytes(archive);
   }
 
   /// Minimal PDF used by File→Print tests (F25.S1/S2).
@@ -1480,7 +1480,7 @@ class MockDocumentEngine implements DocumentEngine {
     final archive = Archive()
       ..addFile(ArchiveFile('[Content_Types].xml', contentTypes.length, contentTypes.codeUnits))
       ..addFile(ArchiveFile('word/document.xml', documentXml.length, documentXml.codeUnits));
-    return Uint8List.fromList(ZipEncoder().encode(archive)!);
+    return ZipEncoder().encodeBytes(archive);
   }
 
   String? _plainTextFromDocx(Uint8List bytes) {
@@ -1488,7 +1488,7 @@ class MockDocumentEngine implements DocumentEngine {
       final archive = ZipDecoder().decodeBytes(bytes);
       final doc = archive.findFile('word/document.xml');
       if (doc == null) return null;
-      final xml = utf8.decode(doc.content as List<int>);
+      final xml = utf8.decode(doc.readBytes() ?? const <int>[]);
       final matches = RegExp(r'<w:t[^>]*>([^<]*)</w:t>').allMatches(xml);
       return matches.map((m) => m.group(1) ?? '').join();
     } catch (_) {

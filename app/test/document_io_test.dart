@@ -10,7 +10,7 @@ Uint8List _minimalDocx(String documentXml) {
   final archive = Archive()
     ..addFile(ArchiveFile('word/document.xml', documentXml.length, documentXml.codeUnits))
     ..addFile(ArchiveFile('[Content_Types].xml', 8, '<Types/>'.codeUnits));
-  return Uint8List.fromList(ZipEncoder().encode(archive)!);
+  return ZipEncoder().encodeBytes(archive);
 }
 
 void main() {
@@ -64,7 +64,7 @@ void main() {
       ..addFile(ArchiveFile(r'word\document.xml', 52, '''
 <w:document><w:body><w:p><w:r><w:t>Backslash</w:t></w:r></w:p></w:body></w:document>
 '''.trim().codeUnits));
-    final docx = Uint8List.fromList(ZipEncoder().encode(archive)!);
+    final docx = ZipEncoder().encodeBytes(archive);
     final text = DocumentReader.extractText(docx, path: 'sample.docx');
     expect(text, contains('Backslash'));
   });

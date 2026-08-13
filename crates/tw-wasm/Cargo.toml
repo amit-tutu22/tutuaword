@@ -13,6 +13,10 @@ default = []
 wasm-bindgen = ["dep:wasm-bindgen"]
 
 [dependencies]
+# Web Crypto randomness on wasm32-unknown-unknown (ed25519/rand via tw-model).
+getrandom = { version = "0.2", features = ["js"] }
+# tw-docx → ms-offcrypto-writer → rand 0.9 → getrandom 0.3
+getrandom03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
 tw-core = { path = "../tw-core" }
 tw-edit = { path = "../tw-edit" }
 tw-layout = { path = "../tw-layout" }

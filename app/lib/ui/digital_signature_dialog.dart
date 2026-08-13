@@ -132,7 +132,8 @@ class _DigitalSignatureDialogState extends State<DigitalSignatureDialog> {
               ),
               const SizedBox(height: 6),
               const Text(
-                'Creates an Ed25519 signature over the current document content.',
+                'Creates a self-attested Ed25519 signature over the current document content. '
+                'This is not a certificate-backed digital signature.',
                 style: TextStyle(fontSize: 12, color: WordTheme.ribbonText),
               ),
               if (_error != null) ...[

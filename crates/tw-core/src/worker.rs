@@ -13,6 +13,7 @@ use tw_edit::{paste, Command, EditSession};
 use tw_layout::LayoutEngine;
 use tw_model::NodeId;
 use tw_pdf::PdfExporter;
+use tw_policy::{PolicyCapability, PolicyEngine};
 use tw_render::DisplayListBuilder;
 
 /// Reserved for the worker's initial document-ready event (not tied to a caller command).
@@ -268,6 +269,8 @@ pub(crate) struct WorkerCore {
     version: u64,
     current_page: u32,
     cached_pages: Vec<Arc<SinglePageSnapshot>>,
+    /// Tenant policy (defaults permissive for local/dev).
+    policy: PolicyEngine,
     /// A non-edit command pulled off the queue while batching consecutive edits;
     /// the driver must hand it back before reading the queue again.
     pending: Option<QueuedCommand>,
@@ -299,6 +302,7 @@ impl WorkerCore {
             version: 0,
             current_page: 0,
             cached_pages: Vec::new(),
+            policy: PolicyEngine::permissive(),
             pending: None,
         };
         core.rebuild(Relayout::Full)
@@ -561,6 +565,20 @@ impl WorkerCore {
                     password.as_deref(),
                 ) {
                     Ok(bundle) => {
+                        if let Some(pkg) = &bundle.docx_package {
+                            if tw_docx::package_has_vba_parts(pkg) {
+                                if let Err(message) = self
+                                    .policy
+                                    .require(PolicyCapability::OpenMacroDocument)
+                                {
+                                    self.events.send(BridgeEvent::Error {
+                                        request_id: req_id,
+                                        message,
+                                    });
+                                    return Flow::Continue;
+                                }
+                            }
+                        }
                         self.format_ctx = FormatContext::from_bundle(bundle.clone(), path_hint);
                         // Retain open password so subsequent DOCX saves stay encrypted (F22.S2).
                         self.format_ctx.encryption_password = password
@@ -699,6 +717,18 @@ impl WorkerCore {
                 bytes,
             } => match tw_docx::import(&bytes) {
                 Ok(result) => {
+                    if tw_docx::package_has_vba_parts(&result.package) {
+                        if let Err(message) = self
+                            .policy
+                            .require(PolicyCapability::OpenMacroDocument)
+                        {
+                            self.events.send(BridgeEvent::Error {
+                                request_id: req_id,
+                                message,
+                            });
+                            return Flow::Continue;
+                        }
+                    }
                     if paste::paste_fragment_at(
                         &mut self.session,
                         run_id,

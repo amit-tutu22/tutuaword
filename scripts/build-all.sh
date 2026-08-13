@@ -125,6 +125,8 @@ if [[ "$WITH_FLUTTER" -eq 1 ]]; then
   else
     step "Flutter pub get"
     (cd app && flutter pub get)
+    # Flutter SPM package defaults to iOS 13; file_picker needs 14.
+    bash scripts/patch-ios-spm-deployment.sh
 
     case "$(uname -s)" in
       Darwin)
@@ -137,16 +139,28 @@ if [[ "$WITH_FLUTTER" -eq 1 ]]; then
           (cd app && flutter build ios --simulator --no-codesign --no-pub)
         fi
         if have_android_ndk; then
-          step "Flutter build Android APK"
-          (cd app && flutter build apk --no-pub)
+          if [[ -f app/android/key.properties ]]; then
+            step "Flutter build Android APK (release)"
+            (cd app && flutter build apk --no-pub)
+          else
+            echo "skip Android release APK (android/key.properties missing — use debug or copy key.properties.example)"
+            step "Flutter build Android APK (debug)"
+            (cd app && flutter build apk --debug --no-pub)
+          fi
         fi
         ;;
       Linux)
         step "Flutter build Linux"
         (cd app && flutter build linux --no-pub)
         if have_android_ndk; then
-          step "Flutter build Android APK"
-          (cd app && flutter build apk --no-pub)
+          if [[ -f app/android/key.properties ]]; then
+            step "Flutter build Android APK (release)"
+            (cd app && flutter build apk --no-pub)
+          else
+            echo "skip Android release APK (android/key.properties missing — use debug or copy key.properties.example)"
+            step "Flutter build Android APK (debug)"
+            (cd app && flutter build apk --debug --no-pub)
+          fi
         fi
         ;;
       MINGW*|MSYS*|CYGWIN*)

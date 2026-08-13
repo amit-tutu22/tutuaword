@@ -1,7 +1,7 @@
 //! Caret geometry must follow the document position, not just click coordinates.
 
 use tw_layout::LayoutEngine;
-use tw_model::Document;
+use tw_model::{Document, NodeId};
 
 #[test]
 fn caret_x_advances_with_character_offset() {
@@ -65,4 +65,18 @@ fn caret_advances_across_space_character() {
 
     assert!(x_after_space > x_after_a, "caret should move across space");
     assert!(x_after_b >= x_after_space, "caret should not move left across offsets");
+}
+
+#[test]
+fn caret_at_unknown_run_returns_none() {
+    let mut engine = LayoutEngine::new();
+    let doc = Document::new();
+    let _ = engine.layout_document(&doc);
+    let map = engine.line_map(0).unwrap();
+    // Must not fall back to the first line — that pinned Enter-at-bottom carets
+    // to the top of the page when the new paragraph lived on page N+1.
+    assert!(
+        map.caret_at(NodeId::new(), 0).is_none(),
+        "unknown run must not resolve to another run's geometry"
+    );
 }

@@ -151,6 +151,8 @@ The software renderer consumes the same `DisplayList` format as the Flutter pain
 
 Automated tests verifying DOCX import/export fidelity using a curated corpus of real-world documents.
 
+For ad-hoc **sample-files.com** fixtures (open + layout + edit + round-trip outside the committed corpus), see [sample-files-smoke.md](sample-files-smoke.md) (`crates/tw-core/tests/sample_files_smoke.rs`, `$SAMPLE_DOCX_DIR`).
+
 ### Test Corpus
 
 100+ DOCX files organized by category (see [docx-compatibility.md](architecture/docx-compatibility.md#test-corpus)):

@@ -8,6 +8,37 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Xcode Run Script phases use a minimal PATH (no rustup). Ensure cargo is found
+# when this script is invoked from "Build Rust FFI" / CI shells.
+ensure_cargo_on_path() {
+  if command -v cargo >/dev/null 2>&1; then
+    return 0
+  fi
+  # shellcheck disable=SC1090,SC1091
+  if [[ -f "$HOME/.cargo/env" ]]; then
+    . "$HOME/.cargo/env"
+  fi
+  local candidates=(
+    "$HOME/.cargo/bin"
+    /opt/homebrew/bin
+    /usr/local/bin
+  )
+  local dir
+  for dir in "${candidates[@]}"; do
+    if [[ -x "$dir/cargo" ]]; then
+      export PATH="$dir:$PATH"
+      break
+    fi
+  done
+  if ! command -v cargo >/dev/null 2>&1; then
+    echo "error: cargo not found (Xcode PATH has no Rust toolchain)." >&2
+    echo "Install rustup (https://rustup.rs) or ensure ~/.cargo/bin is on PATH." >&2
+    exit 1
+  fi
+}
+
+ensure_cargo_on_path
+
 resolve_target_dir() {
   local dir
   dir=$(cargo metadata --format-version 1 --no-deps \

@@ -265,7 +265,9 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
   Widget build(BuildContext context) {
     final onCaretPage = widget.pageIndex == widget.controller.caretPage;
     final caret = onCaretPage ? widget.controller.caretGeometry : null;
-    final selection = onCaretPage ? widget.controller.selectionRects : const <GlyphSelectionRect>[];
+    final selection = widget.controller.hasGlyphSelection
+        ? widget.controller.selectionRectsForPage(widget.pageIndex)
+        : const <GlyphSelectionRect>[];
     // Rebind Tab before WidgetsApp's NextFocusIntent steals it.
     return Shortcuts(
       shortcuts: const <ShortcutActivator, Intent>{

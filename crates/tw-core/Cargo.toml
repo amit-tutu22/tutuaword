@@ -18,6 +18,7 @@ tw-html = { path = "../tw-html" }
 tw-markdown = { path = "../tw-markdown" }
 tw-pdf = { path = "../tw-pdf" }
 tw-spell = { path = "../tw-spell" }
+tw-policy = { path = "../tw-policy" }
 crossbeam-channel = { workspace = true }
 parking_lot = { workspace = true }
 serde = { workspace = true }

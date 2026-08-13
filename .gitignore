@@ -16,6 +16,7 @@ app/.flutter-plugins-dependencies
 
 # OS
 .DS_Store
+Screenshot*.png
 
 # Rust backup
 **/*.rs.bk

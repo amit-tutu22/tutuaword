@@ -16,12 +16,21 @@ const MAX_INCREMENTAL_REFLOW_PAGES: usize = 3;
 /// Gap between a square-wrapped image and text beside it.
 const IMAGE_TEXT_GAP: f32 = 8.0;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WrapKind {
+    /// Text flows beside the image (square / tight).
+    Square,
+    /// Text skips the image's vertical band entirely.
+    TopBottom,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct WrapObstacle {
     x: f32,
     y: f32,
     width: f32,
     height: f32,
+    kind: WrapKind,
 }
 
 /// Flow state at a block boundary. Everything downstream of a boundary is a pure
@@ -745,6 +754,7 @@ impl LayoutEngine {
                                 .max(0.0);
 
                             y += resolved_para.space_before.unwrap_or(0.0);
+                            y = advance_past_top_bottom(y, &wrap_obstacles);
 
                             if resolved_para.keep_with_next == Some(true) {
                                 let next_min = next_paragraph_min_height(doc, &section.blocks, block_idx);
@@ -1123,17 +1133,31 @@ impl LayoutEngine {
                         // Floating images are placed absolutely and take no
                         // room in the text flow; inline ones occupy a band.
                         if let Some(anchor) = image.anchor {
-                            let (ax, ay) = anchor_position(&format, anchor);
+                            let (ax, ay) =
+                                anchor_position(&format, anchor, column_flow.x, y);
                             current_boxes.push(LayoutBox::Image(layout_image(
                                 image, ax, ay, encoded.clone(),
                             )));
-                            if image.wrap == TextWrap::Square {
-                                wrap_obstacles.push(WrapObstacle {
-                                    x: ax,
-                                    y: ay,
-                                    width: frame_w,
-                                    height: frame_h,
-                                });
+                            match image.wrap {
+                                TextWrap::Square => {
+                                    wrap_obstacles.push(WrapObstacle {
+                                        x: ax,
+                                        y: ay,
+                                        width: frame_w,
+                                        height: frame_h,
+                                        kind: WrapKind::Square,
+                                    });
+                                }
+                                TextWrap::TopBottom => {
+                                    wrap_obstacles.push(WrapObstacle {
+                                        x: ax,
+                                        y: ay,
+                                        width: frame_w,
+                                        height: frame_h,
+                                        kind: WrapKind::TopBottom,
+                                    });
+                                }
+                                _ => {}
                             }
                             continue;
                         }
@@ -2343,16 +2367,45 @@ fn layout_image(
 }
 
 /// Resolves an anchor offset against the box it is measured from.
-fn anchor_position(format: &tw_model::SectionFormat, anchor: tw_model::ImageAnchor) -> (f32, f32) {
+///
+/// `paragraph`-relative origins use the current column/flow position — the
+/// floating drawing's host paragraph in Word.
+fn anchor_position(
+    format: &tw_model::SectionFormat,
+    anchor: tw_model::ImageAnchor,
+    column_x: f32,
+    flow_y: f32,
+) -> (f32, f32) {
     let x = match anchor.origin_x {
         AnchorOrigin::Page => anchor.x,
+        AnchorOrigin::Paragraph => column_x + anchor.x,
         AnchorOrigin::Column | AnchorOrigin::Margin => format.margin_left + anchor.x,
     };
     let y = match anchor.origin_y {
         AnchorOrigin::Page => anchor.y,
+        AnchorOrigin::Paragraph => flow_y + anchor.y,
         AnchorOrigin::Column | AnchorOrigin::Margin => format.margin_top + anchor.y,
     };
     (x.max(0.0), y.max(0.0))
+}
+
+fn advance_past_top_bottom(mut y: f32, obstacles: &[WrapObstacle]) -> f32 {
+    loop {
+        let mut advanced = false;
+        for obs in obstacles {
+            if obs.kind != WrapKind::TopBottom {
+                continue;
+            }
+            if y >= obs.y - 0.5 && y < obs.y + obs.height {
+                y = obs.y + obs.height + IMAGE_TEXT_GAP;
+                advanced = true;
+            }
+        }
+        if !advanced {
+            break;
+        }
+    }
+    y
 }
 
 fn square_wrap_inset_at_y(
@@ -2363,6 +2416,9 @@ fn square_wrap_inset_at_y(
 ) -> f32 {
     let mut left_inset = 0.0f32;
     for obs in obstacles {
+        if obs.kind != WrapKind::Square {
+            continue;
+        }
         if y >= obs.y - 0.5 && y < obs.y + obs.height {
             let obs_right = obs.x + obs.width + IMAGE_TEXT_GAP;
             if obs.x <= column_x + left_inset + 1.0 && obs_right > column_x {

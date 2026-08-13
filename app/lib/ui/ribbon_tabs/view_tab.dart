@@ -171,6 +171,23 @@ class ViewTab extends StatelessWidget {
                   ],
                 ),
               ),
+              RibbonGroup(
+                label: 'Help',
+                showDivider: false,
+                child: Row(
+                  children: [
+                    Builder(
+                      builder: (context) => RibbonLargeButton(
+                        key: const Key('view_about'),
+                        icon: Icons.info_outline,
+                        label: 'About\nTutuaword',
+                        tooltip: 'Help, support, and feedback',
+                        onPressed: () => controller.openAboutDialog(context),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
           ],
         );
       },
