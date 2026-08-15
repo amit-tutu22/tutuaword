@@ -68,8 +68,9 @@ class WordRibbonState extends State<WordRibbon> {
             onShare: () => unawaited(widget.controller.shareWithApps()),
           ),
           Container(
+            key: const Key('ribbon_body'),
             height: WordTheme.ribbonHeightFor(context),
-            color: WordTheme.ribbonSurface,
+            color: WordTheme.chrome(context).ribbonSurface,
             child: ClipRect(
               child: _buildTabContent(),
             ),
@@ -106,9 +107,10 @@ class _TabStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final chrome = WordTheme.chrome(context);
     return Container(
       height: WordTheme.tabStripHeight,
-      color: WordTheme.tabStripSurface,
+      color: chrome.tabStrip,
       child: Row(
         children: [
           Expanded(
@@ -154,6 +156,7 @@ class _TabItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final phone = WordTheme.phoneChrome(context);
+    final chrome = WordTheme.chrome(context);
     return RibbonFocusable(
       enabled: true,
       onActivate: onTap,
@@ -162,13 +165,13 @@ class _TabItem extends StatelessWidget {
           padding: EdgeInsets.symmetric(horizontal: phone ? 10 : 14),
           decoration: BoxDecoration(
             color: (hovered || focused)
-                ? WordTheme.ribbonHover
+                ? chrome.ribbonHover
                 : Colors.transparent,
             border: Border(
               bottom: BorderSide(
                 color: selected
-                    ? WordTheme.activeTabUnderline
-                    : (focused ? WordTheme.activeTabUnderline.withValues(alpha: 0.5) : Colors.transparent),
+                    ? chrome.activeTab
+                    : (focused ? chrome.activeTab.withValues(alpha: 0.5) : Colors.transparent),
                 width: selected || focused ? 2 : 0,
               ),
             ),
@@ -176,7 +179,7 @@ class _TabItem extends StatelessWidget {
           alignment: Alignment.center,
           child: Text(
             label,
-            style: selected ? WordTheme.tabLabelActive : WordTheme.tabLabel,
+            style: selected ? WordTheme.tabLabelActiveOf(context) : WordTheme.tabLabel,
           ),
         );
       },
@@ -211,9 +214,10 @@ class _ShareButton extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
             decoration: ribbonFocusDecoration(
               fill: (hovered || focused) && enabled
-                  ? WordTheme.ribbonHover
+                  ? WordTheme.chrome(context).ribbonHover
                   : Colors.transparent,
               focused: focused,
+              focusColor: WordTheme.chrome(context).activeTab,
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,

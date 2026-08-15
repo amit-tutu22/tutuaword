@@ -264,7 +264,7 @@ class _AutomaticRowState extends State<_AutomaticRow> {
         child: Container(
           width: double.infinity,
           padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
-          color: _hovered ? WordTheme.ribbonHover : Colors.transparent,
+          color: _hovered ? WordTheme.chrome(context).ribbonHover : Colors.transparent,
           child: Row(
             children: [
               SizedBox(
@@ -425,7 +425,7 @@ class _RibbonColorButtonState extends State<RibbonColorButton> {
 
   @override
   Widget build(BuildContext context) {
-    final bg = _hovered ? WordTheme.ribbonHover : Colors.transparent;
+    final bg = _hovered ? WordTheme.chrome(context).ribbonHover : Colors.transparent;
     return wrapRibbonTooltip(
       widget.tooltip,
       MouseRegion(

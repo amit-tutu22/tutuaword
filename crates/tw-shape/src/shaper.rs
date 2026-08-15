@@ -127,6 +127,10 @@ impl TextShaper {
         let mut segments: Vec<(String, FontId, usize)> = Vec::new();
 
         for (char_index, ch) in text.chars().enumerate() {
+            // Never shape C0 controls (except tab) — they become `.notdef` tofu.
+            if ch.is_control() && ch != '\t' {
+                continue;
+            }
             let font = if self.fonts.covers(font_id, ch) {
                 font_id
             } else if ch.is_whitespace() {

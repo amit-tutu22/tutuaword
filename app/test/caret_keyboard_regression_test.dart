@@ -3,9 +3,12 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tutuaword/bridge/document_engine.dart';
 import 'package:tutuaword/bridge/engine_types.dart';
+import 'package:tutuaword/bridge/mock_native_engine.dart';
 import 'package:tutuaword/editor/doc_range.dart';
+import 'package:tutuaword/editor/document_view.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
 import 'package:tutuaword/editor/glyph_editor_surface.dart';
+import 'package:tutuaword/ui/status_bar.dart';
 
 import 'editor_test_helpers.dart';
 
@@ -41,6 +44,25 @@ void main() {
       expect(controller.caretOffset, 3);
     });
 
+    test('Enter after typed line does not duplicate text on new line', () async {
+      final controller = createTestEditorController();
+      addTearDown(controller.dispose);
+      controller.ensureGlyphCaret();
+
+      await typeTextDirect(controller, 'dgdsdg');
+      expect(controller.caretOffset, 6);
+      await controller.insertGlyphParagraphBreak();
+      await controller.ensureLayoutReady();
+
+      expect(controller.documentText, 'dgdsdg\n');
+      expect(controller.documentText.split('\n').where((l) => l == 'dgdsdg').length, 1);
+
+      await controller.insertGlyphParagraphBreak();
+      await controller.ensureLayoutReady();
+      expect(controller.documentText, 'dgdsdg\n\n');
+      expect(controller.documentText.split('\n').where((l) => l == 'dgdsdg').length, 1);
+    });
+
     test('Enter serializes and does not drop held breaks', () async {
       final controller = createTestEditorController();
       addTearDown(controller.dispose);
@@ -53,8 +75,8 @@ void main() {
       await Future.wait(pending);
       await controller.ensureLayoutReady();
 
-      // Mock keeps body text as a single buffer; Enter must not corrupt caret.
       expect(controller.caretRunId, isNotNull);
+      expect(controller.documentText, '\n\n\n\n\n');
       expect(controller.caretOffset, 0);
       expect(controller.caretPage, 0);
     });
@@ -124,6 +146,22 @@ void main() {
       expect(controller.caretPage, 0);
     });
 
+    test('statusPage follows caret when scroll visible page differs', () {
+      final controller = createTestEditorController();
+      addTearDown(controller.dispose);
+      controller.setDisplayListForTest(fakeGlyphDisplayList(), pageCount: 2);
+      controller.ensureGlyphCaret();
+      controller.selectionController.setCaret(
+        controller.caretRunId!,
+        controller.caretOffset,
+        page: 1,
+      );
+      controller.setVisiblePage(0);
+      expect(controller.currentPage, 0);
+      expect(controller.caretPage, 1);
+      expect(controller.statusPage, 1);
+    });
+
     test('arrow down mid-page does not falsely jump pages', () async {
       final controller = createTestEditorController();
       addTearDown(controller.dispose);
@@ -134,6 +172,51 @@ void main() {
 
       controller.moveGlyphCaretByArrow(LogicalKeyboardKey.arrowDown);
       expect(controller.caretPage, 0);
+    });
+
+    test('arrow down requests scroll so the caret stays visible', () async {
+      final controller = createTestEditorController();
+      addTearDown(controller.dispose);
+      controller.setDisplayListForTest(fakeGlyphDisplayList(), pageCount: 2);
+      controller.ensureGlyphCaret();
+
+      controller.selectionController.setCaret(
+        controller.caretRunId!,
+        controller.caretOffset,
+        geometry: CaretGeometry(
+          x: controller.marginLeft + 20,
+          y: 640,
+          height: 14,
+        ),
+        page: 0,
+      );
+      controller.ensureCaretVisible();
+
+      final request = controller.view.caretScrollRequest;
+      expect(request, isNotNull);
+      expect(request!.page, 0);
+      expect(request.y, 640);
+    });
+
+    test('horizontal typing does not request caret scroll', () async {
+      final controller = createTestEditorController();
+      addTearDown(controller.dispose);
+
+      await typeTextDirect(controller, 'abc');
+      expect(controller.view.caretScrollRequest, isNull);
+    });
+
+    test('same-page arrow does not call engine setCurrentPageIndex', () async {
+      final engine = MockDocumentEngine();
+      final controller = createTestEditorController(engine: engine);
+      addTearDown(controller.dispose);
+      controller.setDisplayListForTest(fakeGlyphDisplayList(), pageCount: 2);
+      controller.ensureGlyphCaret();
+      engine.setCurrentPageIndexCount = 0;
+
+      controller.moveGlyphCaretByArrow(LogicalKeyboardKey.arrowLeft);
+
+      expect(engine.setCurrentPageIndexCount, 0);
     });
 
     test('Backspace and Delete edit around the caret', () async {
@@ -234,6 +317,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(controller.caretRunId, isNotNull);
+      expect(controller.documentText, '\n\n\n');
       expect(controller.caretOffset, 0);
     });
 
@@ -280,6 +364,130 @@ void main() {
       // Forward delete keeps the caret at the deletion index (end of "a").
       expect(controller.caretOffset, 1);
     });
+
+    testWidgets('caret below viewport scrolls the page down', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 480));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final controller = createTestEditorController();
+      addTearDown(controller.dispose);
+      controller.setDisplayListForTest(fakeGlyphDisplayList(), pageCount: 2);
+      await pumpTestDocumentView(tester, controller);
+
+      final bottomY = controller.pageHeight - controller.marginBottom - 4;
+      controller.hitTestAt(0, controller.marginLeft + 20, bottomY);
+      controller.selectionController.setCaret(
+        controller.caretRunId!,
+        controller.caretOffset,
+        geometry: CaretGeometry(
+          x: controller.marginLeft + 20,
+          y: bottomY,
+          height: 14,
+        ),
+        page: 0,
+      );
+      controller.ensureCaretVisible();
+      await tester.pump();
+      await tester.pumpAndSettle();
+
+      final pageList = find.byKey(const ValueKey('document-page-list'));
+      expect(pageList, findsOneWidget);
+      final listView = tester.widget<ListView>(pageList);
+      expect(
+        listView.controller?.offset ?? 0,
+        greaterThan(0),
+        reason: 'canvas should scroll down so the caret stays visible',
+      );
+    });
+
+    testWidgets('arrow down onto next page scrolls canvas', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 480));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final controller = createTestEditorController();
+      addTearDown(controller.dispose);
+      controller.setDisplayListForTest(fakeGlyphDisplayList(), pageCount: 2);
+      await pumpTestDocumentView(tester, controller);
+
+      final bottomY = controller.pageHeight - controller.marginBottom - 4;
+      controller.hitTestAt(0, controller.marginLeft + 20, bottomY);
+      controller.selectionController.setCaret(
+        controller.caretRunId!,
+        controller.caretOffset,
+        geometry: CaretGeometry(
+          x: controller.marginLeft + 20,
+          y: bottomY,
+          height: 14,
+        ),
+        page: 0,
+      );
+
+      controller.moveGlyphCaretByArrow(LogicalKeyboardKey.arrowDown);
+      expect(controller.caretPage, 1);
+      await tester.pump();
+      await tester.pumpAndSettle();
+
+      final pageList = find.byKey(const ValueKey('document-page-list'));
+      final listView = tester.widget<ListView>(pageList);
+      expect(
+        listView.controller?.offset ?? 0,
+        greaterThan(0),
+        reason: 'canvas should follow the caret onto the next page',
+      );
+    });
+
+    testWidgets('status bar shows caret page when scroll still shows page 1 sliver',
+        (tester) async {
+      final controller = createTestEditorController();
+      addTearDown(controller.dispose);
+      controller.setDisplayListForTest(fakeGlyphDisplayList(), pageCount: 2);
+      controller.ensureGlyphCaret();
+      controller.selectionController.setCaret(
+        controller.caretRunId!,
+        controller.caretOffset,
+        geometry: CaretGeometry(
+          x: controller.marginLeft + 20,
+          y: controller.marginTop + 20,
+          height: 14,
+        ),
+        page: 1,
+      );
+      controller.setVisiblePage(0);
+      expect(controller.statusPage, 1);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(body: WordStatusBar(controller: controller)),
+        ),
+      );
+
+      expect(find.textContaining('Page 2 of 2'), findsOneWidget);
+    });
+
+    testWidgets('already-visible caret does not scroll the page', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 480));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final controller = createTestEditorController();
+      addTearDown(controller.dispose);
+      controller.setDisplayListForTest(fakeGlyphDisplayList());
+      await pumpTestDocumentView(tester, controller);
+
+      final pageList = find.byKey(const ValueKey('document-page-list'));
+      final listView = tester.widget<ListView>(pageList);
+      expect(listView.controller?.offset ?? 0, 0);
+
+      controller.ensureGlyphCaret();
+      controller.ensureCaretVisible();
+      await tester.pump();
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<ListView>(pageList).controller?.offset ?? 0,
+        0,
+        reason: 'caret at the top of the page is already visible',
+      );
+    });
   });
 
   group('cross-page selection rects helper', () {
@@ -320,6 +528,47 @@ void main() {
       );
       expect(range.isCollapsed, isFalse);
       expect(range.page, 1);
+    });
+  });
+
+  group('caret reveal scroll math', () {
+    test('scrolls down when caret is below the viewport', () {
+      final target = scrollOffsetToRevealCaret(
+        caretTop: 620,
+        caretBottom: 634,
+        viewportTop: 0,
+        viewportHeight: 480,
+        minExtent: 0,
+        maxExtent: 2000,
+      );
+      expect(target, greaterThan(0));
+      expect(target, 634 + 16 - 480);
+    });
+
+    test('does not scroll when caret is already visible', () {
+      expect(
+        scrollOffsetToRevealCaret(
+          caretTop: 120,
+          caretBottom: 134,
+          viewportTop: 0,
+          viewportHeight: 480,
+          minExtent: 0,
+          maxExtent: 2000,
+        ),
+        isNull,
+      );
+    });
+
+    test('scrolls up when caret is above the viewport', () {
+      final target = scrollOffsetToRevealCaret(
+        caretTop: 40,
+        caretBottom: 54,
+        viewportTop: 200,
+        viewportHeight: 480,
+        minExtent: 0,
+        maxExtent: 2000,
+      );
+      expect(target, 40 - 16);
     });
   });
 }

@@ -3872,6 +3872,39 @@ pub extern "C" fn tw_last_request_id() -> u64 {
     LAST_REQUEST_ID.load(Ordering::Relaxed)
 }
 
+/// Caret landing point after the most recent successful paragraph split.
+/// Returns 0 when present, -1 when there is no session, -3 when no split caret yet.
+#[no_mangle]
+pub extern "C" fn tw_last_split_caret(
+    out_run_id: *mut std::os::raw::c_char,
+    run_id_cap: usize,
+    out_offset: *mut u32,
+) -> i32 {
+    guard_ffi(|| {
+        let guard = SESSION.lock();
+        let Some(session) = guard.as_ref() else {
+            return -1;
+        };
+        let Some((run_id, offset)) = session.last_split_caret() else {
+            return -3;
+        };
+        let run_uuid = run_id.as_uuid().to_string();
+        let bytes = run_uuid.as_bytes();
+        if run_id_cap == 0 || out_run_id.is_null() {
+            return -3;
+        }
+        let copy_len = bytes.len().min(run_id_cap.saturating_sub(1));
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_run_id as *mut u8, copy_len);
+            *out_run_id.add(copy_len) = 0;
+            if !out_offset.is_null() {
+                *out_offset = offset as u32;
+            }
+        }
+        0
+    })
+}
+
 /// Deliver any worker events that have arrived since the last call to the
 /// callback registered with `tw_init`, and settle the matching async result
 /// slots. A host that never blocks in one of the wrapper exports must call this

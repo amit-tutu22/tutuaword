@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:tutuaword/ui/app_chrome_theme.dart';
 
 /// Microsoft Word for Mac design tokens.
 abstract final class WordTheme {
@@ -104,4 +105,11 @@ abstract final class WordTheme {
     color: Color(0xFF555555),
     height: 1.0,
   );
+
+  /// Live chrome colors from the app theme (falls back to Word Blue).
+  static TutuawordChrome chrome(BuildContext context) => TutuawordChrome.of(context);
+
+  static TextStyle tabLabelActiveOf(BuildContext context) => tabLabelActive.copyWith(
+        color: chrome(context).activeTab,
+      );
 }

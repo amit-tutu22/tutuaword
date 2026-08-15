@@ -75,7 +75,7 @@ class _AppBootstrapState extends State<AppBootstrap> {
   Widget build(BuildContext context) {
     if (_error != null) {
       return Scaffold(
-        backgroundColor: WordTheme.tabStripSurface,
+        backgroundColor: WordTheme.chrome(context).tabStrip,
         body: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 480),
@@ -126,7 +126,7 @@ class _AppBootstrapState extends State<AppBootstrap> {
 
   Widget _loadingScaffold(String message) {
     return Scaffold(
-      backgroundColor: WordTheme.canvasGray,
+      backgroundColor: WordTheme.chrome(context).canvas,
       body: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,

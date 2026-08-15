@@ -102,42 +102,53 @@ class _ChartDataDialogState extends State<ChartDataDialog> {
     }
   }
 
+  /// Always mutate growable copies — engine/JSON lists can be fixed-length on
+  /// some platforms, and [List.filled] defaults to fixed-length too.
   void _addCategory() {
     _rebuildControllers(() {
-      final n = _data.categories.length + 1;
-      _data.categories.add('Category $n');
+      final categories = List<String>.from(_data.categories);
+      final n = categories.length + 1;
+      categories.add('Category $n');
+      _data.categories = categories;
       for (final s in _data.series) {
-        s.values.add(0);
+        final values = List<double>.from(s.values)..add(0);
+        s.values = values;
       }
     });
   }
 
   void _removeCategory(int index) {
     if (_data.categories.length <= 1) return;
+    if (index < 0 || index >= _data.categories.length) return;
     _rebuildControllers(() {
-      _data.categories.removeAt(index);
+      final categories = List<String>.from(_data.categories)..removeAt(index);
+      _data.categories = categories;
       for (final s in _data.series) {
-        s.values.removeAt(index);
+        if (index >= s.values.length) continue;
+        s.values = List<double>.from(s.values)..removeAt(index);
       }
     });
   }
 
   void _addSeries() {
     _rebuildControllers(() {
-      final n = _data.series.length + 1;
-      _data.series.add(
+      final series = List<ChartSeriesModel>.from(_data.series);
+      final n = series.length + 1;
+      series.add(
         ChartSeriesModel(
           name: 'Series $n',
-          values: List<double>.filled(_data.categories.length, 0),
+          values: List<double>.generate(_data.categories.length, (_) => 0),
         ),
       );
+      _data.series = series;
     });
   }
 
   void _removeSeries(int index) {
     if (_data.series.length <= 1) return;
+    if (index < 0 || index >= _data.series.length) return;
     _rebuildControllers(() {
-      _data.series.removeAt(index);
+      _data.series = List<ChartSeriesModel>.from(_data.series)..removeAt(index);
     });
   }
 

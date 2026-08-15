@@ -110,7 +110,7 @@ class RibbonGroup extends StatelessWidget {
           Container(
             width: 1,
             margin: const EdgeInsets.symmetric(vertical: 4),
-            color: WordTheme.groupDivider,
+            color: WordTheme.chrome(context).groupDivider,
           ),
       ],
     );
@@ -160,14 +160,14 @@ class _RibbonIconButtonState extends State<RibbonIconButton> {
         onActivate: widget.onPressed,
         builder: (context, {required hovered, required focused}) {
           final bg = (hovered || focused) && enabled
-              ? WordTheme.ribbonHover
+              ? WordTheme.chrome(context).ribbonHover
               : Colors.transparent;
           return Container(
             padding: EdgeInsets.symmetric(
               horizontal: 4,
               vertical: phone ? 1 : 2,
             ),
-            decoration: ribbonFocusDecoration(fill: bg, focused: focused),
+            decoration: ribbonFocusDecoration(fill: bg, focused: focused, focusColor: WordTheme.chrome(context).activeTab),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -229,13 +229,13 @@ class _RibbonToggleButtonState extends State<RibbonToggleButton> {
         builder: (context, {required hovered, required focused}) {
           Color bg = Colors.transparent;
           if (widget.selected) {
-            bg = WordTheme.ribbonSelected;
+            bg = WordTheme.chrome(context).ribbonSelected;
           } else if ((hovered || focused) && enabled) {
-            bg = WordTheme.ribbonHover;
+            bg = WordTheme.chrome(context).ribbonHover;
           }
           return Container(
             padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-            decoration: ribbonFocusDecoration(fill: bg, focused: focused),
+            decoration: ribbonFocusDecoration(fill: bg, focused: focused, focusColor: WordTheme.chrome(context).activeTab),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -296,14 +296,14 @@ class _RibbonTextToggleButtonState extends State<RibbonTextToggleButton> {
         builder: (context, {required hovered, required focused}) {
           Color bg = Colors.transparent;
           if (widget.selected) {
-            bg = WordTheme.ribbonSelected;
+            bg = WordTheme.chrome(context).ribbonSelected;
           } else if ((hovered || focused) && enabled) {
-            bg = WordTheme.ribbonHover;
+            bg = WordTheme.chrome(context).ribbonHover;
           }
           return Container(
             constraints: const BoxConstraints(minWidth: 22, minHeight: 22),
             padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 2),
-            decoration: ribbonFocusDecoration(fill: bg, focused: focused),
+            decoration: ribbonFocusDecoration(fill: bg, focused: focused, focusColor: WordTheme.chrome(context).activeTab),
             alignment: Alignment.center,
             child: Text(
               widget.text,
@@ -362,7 +362,7 @@ class _RibbonLargeButtonState extends State<RibbonLargeButton> {
         onActivate: activate,
         builder: (context, {required hovered, required focused}) {
           final fill = (hovered || focused) && enabled
-              ? WordTheme.ribbonHover
+              ? WordTheme.chrome(context).ribbonHover
               : Colors.transparent;
           return Row(
             mainAxisSize: MainAxisSize.min,
@@ -374,6 +374,7 @@ class _RibbonLargeButtonState extends State<RibbonLargeButton> {
                   decoration: ribbonFocusDecoration(
                     fill: fill,
                     focused: focused,
+                    focusColor: WordTheme.chrome(context).activeTab,
                     borderRadius: const BorderRadius.horizontal(
                       left: Radius.circular(3),
                     ),
@@ -487,11 +488,11 @@ class _RibbonDropdownState extends State<RibbonDropdown> {
           height: 22,
           padding: const EdgeInsets.symmetric(horizontal: 6),
           decoration: BoxDecoration(
-            color: (hovered || focused) ? WordTheme.ribbonHover : Colors.white,
+            color: (hovered || focused) ? WordTheme.chrome(context).ribbonHover : Colors.white,
             border: Border.all(
               color: focused
-                  ? WordTheme.activeTabUnderline
-                  : WordTheme.groupDivider,
+                  ? WordTheme.chrome(context).activeTab
+                  : WordTheme.chrome(context).groupDivider,
               width: focused ? 1.5 : 1,
             ),
             borderRadius: BorderRadius.circular(2),
@@ -592,9 +593,9 @@ class _StyleGalleryCardState extends State<StyleGalleryCard> {
         enabled: enabled,
         onActivate: widget.onPressed,
         builder: (context, {required hovered, required focused}) {
-          Color borderColor = WordTheme.groupDivider;
+          Color borderColor = WordTheme.chrome(context).groupDivider;
           if (widget.selected || focused) {
-            borderColor = WordTheme.activeTabUnderline;
+            borderColor = WordTheme.chrome(context).activeTab;
           } else if (hovered && enabled) {
             borderColor = WordTheme.ribbonText;
           }
@@ -604,7 +605,7 @@ class _StyleGalleryCardState extends State<StyleGalleryCard> {
             margin: const EdgeInsets.symmetric(horizontal: 2),
             padding: const EdgeInsets.all(4),
             decoration: BoxDecoration(
-              color: widget.selected ? WordTheme.ribbonSelected : Colors.white,
+              color: widget.selected ? WordTheme.chrome(context).ribbonSelected : Colors.white,
               border: Border.all(
                 color: borderColor,
                 width: focused ? 1.5 : 1,
@@ -667,11 +668,11 @@ class _RibbonTextButtonState extends State<RibbonTextButton> {
         onActivate: widget.onPressed,
         builder: (context, {required hovered, required focused}) {
           final bg = (hovered || focused) && enabled
-              ? WordTheme.ribbonHover
+              ? WordTheme.chrome(context).ribbonHover
               : Colors.transparent;
           return Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: ribbonFocusDecoration(fill: bg, focused: focused),
+            decoration: ribbonFocusDecoration(fill: bg, focused: focused, focusColor: WordTheme.chrome(context).activeTab),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [

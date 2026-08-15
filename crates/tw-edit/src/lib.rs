@@ -9,6 +9,7 @@ pub mod command_json;
 pub mod command_builders;
 mod normalize;
 pub mod paste;
+pub mod paste_normalize;
 pub mod range;
 mod replace;
 mod session;
@@ -2196,6 +2197,70 @@ fn set_office_math(
 }
 
 fn insert_text(
+    doc: &mut Document,
+    run_id: NodeId,
+    offset: usize,
+    text: &str,
+) -> Result<EditResult, EditError> {
+    let normalized = paste_normalize::normalize_paste_text(text);
+    if normalized.is_empty() {
+        return Ok(EditResult {
+            affected_nodes: vec![run_id],
+            ..Default::default()
+        });
+    }
+    // Paste / bulk insert: turn line breaks into real paragraphs so `\n` is
+    // never shaped as a `.notdef` tofu box.
+    if normalized.contains('\n') {
+        return insert_text_as_paragraphs(doc, run_id, offset, &normalized);
+    }
+    insert_text_single(doc, run_id, offset, &normalized)
+}
+
+fn insert_text_as_paragraphs(
+    doc: &mut Document,
+    run_id: NodeId,
+    offset: usize,
+    text: &str,
+) -> Result<EditResult, EditError> {
+    let lines = paste_normalize::split_paste_lines(text);
+    if lines.is_empty() {
+        return Ok(EditResult {
+            affected_nodes: vec![run_id],
+            ..Default::default()
+        });
+    }
+
+    let mut affected = Vec::new();
+    let mut current_run = run_id;
+    let mut current_offset = offset;
+
+    for (i, line) in lines.iter().enumerate() {
+        if !line.is_empty() {
+            let result = insert_text_single(doc, current_run, current_offset, line)?;
+            affected.extend(result.affected_nodes);
+            current_offset += line.chars().count();
+        }
+        if i + 1 < lines.len() {
+            let result = split_paragraph_at(doc, current_run, current_offset)?;
+            let new_run = result
+                .affected_nodes
+                .first()
+                .copied()
+                .ok_or(EditError::InvalidRange)?;
+            affected.extend(result.affected_nodes);
+            current_run = new_run;
+            current_offset = 0;
+        }
+    }
+
+    Ok(EditResult {
+        affected_nodes: affected,
+        ..Default::default()
+    })
+}
+
+fn insert_text_single(
     doc: &mut Document,
     run_id: NodeId,
     offset: usize,

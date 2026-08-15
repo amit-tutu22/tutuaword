@@ -102,8 +102,9 @@ class _EditorScreenState extends State<EditorScreen> {
       onDigitalSignatures: () =>
           unawaited(_controller.manageDigitalSignatures(context)),
       onShowAbout: () => unawaited(_controller.openAboutDialog(context)),
+      onShowSettings: () => unawaited(_controller.openSettingsDialog(context)),
       child: Material(
-        color: WordTheme.tabStripSurface,
+        color: WordTheme.chrome(context).tabStrip,
         child: Shortcuts(
           shortcuts: const <ShortcutActivator, Intent>{
             SingleActivator(LogicalKeyboardKey.keyF, meta: true): _OpenFindIntent(),
@@ -114,6 +115,18 @@ class _EditorScreenState extends State<EditorScreen> {
             SingleActivator(LogicalKeyboardKey.keyA, control: true): _SelectAllDocumentIntent(),
             SingleActivator(LogicalKeyboardKey.keyP, meta: true): _PrintDocumentIntent(),
             SingleActivator(LogicalKeyboardKey.keyP, control: true): _PrintDocumentIntent(),
+            SingleActivator(LogicalKeyboardKey.keyS, meta: true): _SaveDocumentIntent(),
+            SingleActivator(LogicalKeyboardKey.keyS, control: true): _SaveDocumentIntent(),
+            SingleActivator(LogicalKeyboardKey.keyX, meta: true): _CutIntent(),
+            SingleActivator(LogicalKeyboardKey.keyX, control: true): _CutIntent(),
+            SingleActivator(LogicalKeyboardKey.keyC, meta: true): _CopyIntent(),
+            SingleActivator(LogicalKeyboardKey.keyC, control: true): _CopyIntent(),
+            SingleActivator(LogicalKeyboardKey.keyV, meta: true): _PasteIntent(),
+            SingleActivator(LogicalKeyboardKey.keyV, control: true): _PasteIntent(),
+            SingleActivator(LogicalKeyboardKey.keyV, meta: true, shift: true, alt: true):
+                _PasteMatchStyleIntent(),
+            SingleActivator(LogicalKeyboardKey.keyV, control: true, shift: true, alt: true):
+                _PasteMatchStyleIntent(),
             SingleActivator(LogicalKeyboardKey.digit8, control: true, shift: true):
                 _ToggleFormattingMarksIntent(),
             SingleActivator(LogicalKeyboardKey.digit8, meta: true, shift: true):
@@ -142,6 +155,36 @@ class _EditorScreenState extends State<EditorScreen> {
               _PrintDocumentIntent: CallbackAction<_PrintDocumentIntent>(
                 onInvoke: (_) {
                   unawaited(_controller.printDocument(context: context));
+                  return null;
+                },
+              ),
+              _SaveDocumentIntent: CallbackAction<_SaveDocumentIntent>(
+                onInvoke: (_) {
+                  unawaited(_controller.saveDocument());
+                  return null;
+                },
+              ),
+              _CutIntent: CallbackAction<_CutIntent>(
+                onInvoke: (_) {
+                  unawaited(_controller.cutSelection());
+                  return null;
+                },
+              ),
+              _CopyIntent: CallbackAction<_CopyIntent>(
+                onInvoke: (_) {
+                  unawaited(_controller.copySelection());
+                  return null;
+                },
+              ),
+              _PasteIntent: CallbackAction<_PasteIntent>(
+                onInvoke: (_) {
+                  unawaited(_controller.paste());
+                  return null;
+                },
+              ),
+              _PasteMatchStyleIntent: CallbackAction<_PasteMatchStyleIntent>(
+                onInvoke: (_) {
+                  unawaited(_controller.paste(plainText: true));
                   return null;
                 },
               ),
@@ -194,6 +237,26 @@ class _SelectAllDocumentIntent extends Intent {
 
 class _PrintDocumentIntent extends Intent {
   const _PrintDocumentIntent();
+}
+
+class _SaveDocumentIntent extends Intent {
+  const _SaveDocumentIntent();
+}
+
+class _CutIntent extends Intent {
+  const _CutIntent();
+}
+
+class _CopyIntent extends Intent {
+  const _CopyIntent();
+}
+
+class _PasteIntent extends Intent {
+  const _PasteIntent();
+}
+
+class _PasteMatchStyleIntent extends Intent {
+  const _PasteMatchStyleIntent();
 }
 
 class _ToggleFormattingMarksIntent extends Intent {

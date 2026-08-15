@@ -26,6 +26,7 @@ class EditorMenuBar extends StatelessWidget {
     required this.onInspectDocument,
     required this.onDigitalSignatures,
     required this.onShowAbout,
+    required this.onShowSettings,
     required this.child,
   });
 
@@ -46,6 +47,7 @@ class EditorMenuBar extends StatelessWidget {
   final VoidCallback onInspectDocument;
   final VoidCallback onDigitalSignatures;
   final VoidCallback onShowAbout;
+  final VoidCallback onShowSettings;
   final Widget child;
 
   static const _appName = 'tutuaword';
@@ -88,6 +90,11 @@ class EditorMenuBar extends StatelessWidget {
             PlatformMenuItem(
               label: 'About Tutuaword',
               onSelected: onShowAbout,
+            ),
+            PlatformMenuItem(
+              label: 'Settings…',
+              shortcut: const SingleActivator(LogicalKeyboardKey.comma, meta: true),
+              onSelected: onShowSettings,
             ),
           ],
         ),

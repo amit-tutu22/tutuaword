@@ -64,5 +64,28 @@ void main() {
       expect(controller.documentText.toLowerCase(), contains('bold'));
       expect(controller.bold, isFalse);
     });
+
+    testWidgets('paste plain multiline keeps all lines without tofu controls', (tester) async {
+      final controller = createTestEditorController();
+      addTearDown(controller.dispose);
+      controller.ensureGlyphCaret();
+
+      const wingding = '\uF035';
+      const arrowPua = '\uF0E0';
+      final payload = EditorClipboardPayload(
+        plainText: 'Assess ${arrowPua} Migrate\nHyperSDK\nBank-grade HA/DR$wingding',
+      );
+      await controller.pastePayload(payload, plainText: true);
+      await controller.ensureLayoutReady();
+
+      expect(controller.documentText, contains('Assess'));
+      expect(controller.documentText, contains('Migrate'));
+      expect(controller.documentText, contains('HyperSDK'));
+      expect(controller.documentText, contains('Bank-grade HA/DR'));
+      expect(controller.documentText, isNot(contains(wingding)));
+      expect(controller.documentText, isNot(contains(arrowPua)));
+      expect(controller.documentText, contains('→'));
+      expect(controller.documentText, contains('•'));
+    });
   });
 }

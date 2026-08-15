@@ -13,6 +13,8 @@ pub struct PasteSegment {
 }
 
 /// Insert plain text at a caret position (same as [`Command::InsertText`]).
+///
+/// Line breaks become paragraph splits; Wingdings/PUA symbols are normalized.
 pub fn paste_plain_at(
     session: &mut EditSession,
     run_id: NodeId,

@@ -1,5 +1,5 @@
-import 'dart:convert';
 import 'dart:typed_data';
+import 'dart:ui' show Color;
 
 import 'package:path/path.dart' as p;
 import 'package:tutuaword/editor/document_templates.dart';
@@ -22,6 +22,7 @@ class DocumentSessionStore {
   List<RecentDocumentEntry> _recentEntries = const [];
   List<String> _recentSymbolIds = const [];
   Duration _autosaveInterval = defaultAutosaveInterval;
+  Color? _chromeAccent;
   List<UserTemplateEntry> _userTemplates = const [];
   final Map<String, Uint8List> _userTemplateBytes = {};
 
@@ -92,6 +93,12 @@ class DocumentSessionStore {
 
   Future<void> saveAutosaveInterval(Duration interval) async {
     _autosaveInterval = interval;
+  }
+
+  Color? loadChromeAccent() => _chromeAccent;
+
+  Future<void> saveChromeAccent(Color color) async {
+    _chromeAccent = color;
   }
 
   List<UserTemplateEntry> loadUserTemplates() => List.unmodifiable(_userTemplates);

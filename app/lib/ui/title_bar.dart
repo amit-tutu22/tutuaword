@@ -25,7 +25,8 @@ class WordTitleBar extends StatelessWidget {
       // Light glyphs: the system clock and indicators sit on the blue bar.
       value: SystemUiOverlayStyle.light,
       child: Container(
-        color: WordTheme.titleBarBlue,
+        key: const Key('title_bar_chrome'),
+        color: WordTheme.chrome(context).titleBar,
         padding: EdgeInsets.only(
           top: viewPadding.top,
           left: viewPadding.left,
@@ -126,6 +127,21 @@ class WordTitleBar extends StatelessWidget {
             contentPadding: EdgeInsets.zero,
           ),
         ),
+        PopupMenuItem<void>(
+          onTap: () {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (context.mounted) {
+                controller.openSettingsDialog(context);
+              }
+            });
+          },
+          child: const ListTile(
+            dense: true,
+            leading: Icon(Icons.settings_outlined, size: 18),
+            title: Text('Settings', style: TextStyle(fontSize: 13)),
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
       ],
     );
   }
@@ -179,13 +195,19 @@ class WordTitleBar extends StatelessWidget {
               onPressed: () => controller.printDocument(context: context),
             ),
             const Spacer(),
-            _QuickAccessIcon(
-              key: const Key('title_bar_search'),
-              icon: Icons.search,
-              tooltip: 'Find',
-              onPressed: controller.openFindPane,
-            ),
-            const SizedBox(width: 12),
+        _QuickAccessIcon(
+          key: const Key('title_bar_search'),
+          icon: Icons.search,
+          tooltip: 'Find',
+          onPressed: controller.openFindPane,
+        ),
+        _QuickAccessIcon(
+          key: const Key('title_bar_settings'),
+          icon: Icons.settings_outlined,
+          tooltip: 'Settings',
+          onPressed: () => controller.openSettingsDialog(context),
+        ),
+        const SizedBox(width: 12),
           ],
         ),
       ],

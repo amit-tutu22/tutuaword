@@ -3,6 +3,7 @@ import 'dart:html' as html;
 
 import 'package:flutter/services.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
+import 'package:tutuaword/editor/editor_input.dart';
 
 abstract class WebKeyListener {
   void attach();
@@ -40,32 +41,28 @@ class WebKeyListenerImpl implements WebKeyListener {
 
     if (key == 'Backspace') {
       event.preventDefault();
-      unawaited(_controller.deleteGlyphBackward());
+      _controller.markWebSpecialKeyConsumed();
+      unawaited(_controller.handleEditorInput(const EditorInputEvent.backspace()));
       return;
     }
     if (key == 'Delete') {
       event.preventDefault();
-      unawaited(_controller.deleteGlyphForward());
+      _controller.markWebSpecialKeyConsumed();
+      unawaited(_controller.handleEditorInput(const EditorInputEvent.delete()));
       return;
     }
     if (key == 'Enter') {
       event.preventDefault();
-      unawaited(_controller.insertGlyphParagraphBreak());
+      _controller.markWebSpecialKeyConsumed();
+      unawaited(_controller.handleEditorInput(const EditorInputEvent.newline()));
       return;
     }
     if (key == 'Tab') {
       event.preventDefault();
-      if (_controller.isInList) {
-        if (event.shiftKey) {
-          _controller.demoteListLevel();
-        } else {
-          _controller.promoteListLevel();
-        }
-      } else if (event.shiftKey) {
-        _controller.decreaseIndent();
-      } else {
-        unawaited(_controller.insertGlyphCharacter('\t'));
-      }
+      _controller.markWebSpecialKeyConsumed();
+      unawaited(
+        _controller.handleEditorInput(EditorInputEvent.tab(shift: event.shiftKey)),
+      );
       return;
     }
     if (key == 'ArrowLeft' ||
@@ -73,7 +70,8 @@ class WebKeyListenerImpl implements WebKeyListener {
         key == 'ArrowUp' ||
         key == 'ArrowDown') {
       event.preventDefault();
-      _controller.moveGlyphCaretByArrow(_arrowKey(key));
+      _controller.markWebSpecialKeyConsumed();
+      unawaited(_controller.handleEditorInput(_arrowEvent(key)));
       return;
     }
 
@@ -82,7 +80,7 @@ class WebKeyListenerImpl implements WebKeyListener {
 
     event.preventDefault();
     _controller.ensureGlyphCaret();
-    unawaited(_controller.insertGlyphCharacter(key));
+    unawaited(_controller.handleEditorInput(EditorInputEvent.character(key)));
   }
 
   bool _shouldCapture(html.KeyboardEvent event) {
@@ -110,18 +108,18 @@ class WebKeyListenerImpl implements WebKeyListener {
   }
 }
 
-LogicalKeyboardKey _arrowKey(String key) {
+EditorInputEvent _arrowEvent(String key) {
   switch (key) {
     case 'ArrowLeft':
-      return LogicalKeyboardKey.arrowLeft;
+      return const EditorInputEvent.arrowLeft();
     case 'ArrowRight':
-      return LogicalKeyboardKey.arrowRight;
+      return const EditorInputEvent.arrowRight();
     case 'ArrowUp':
-      return LogicalKeyboardKey.arrowUp;
+      return const EditorInputEvent.arrowUp();
     case 'ArrowDown':
-      return LogicalKeyboardKey.arrowDown;
+      return const EditorInputEvent.arrowDown();
     default:
-      return LogicalKeyboardKey.arrowRight;
+      return const EditorInputEvent.arrowRight();
   }
 }
 

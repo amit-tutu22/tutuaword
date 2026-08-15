@@ -88,6 +88,7 @@ export const twengine_is_page_stale: (a: number, b: number) => number;
 export const twengine_is_read_only: (a: number) => number;
 export const twengine_last_error: (a: number) => [number, number];
 export const twengine_last_request_id: (a: number) => number;
+export const twengine_last_split_caret: (a: number) => [number, number];
 export const twengine_latest_chart_id: (a: number) => [number, number, number, number];
 export const twengine_latest_office_math_run_id: (a: number) => [number, number, number, number];
 export const twengine_merge_table_cells: (a: number, b: number, c: number) => [number, number, number];

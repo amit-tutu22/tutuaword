@@ -1,9 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:ui' show Color;
 
 import 'package:path/path.dart' as p;
 import 'package:tutuaword/editor/document_templates.dart';
+import 'package:tutuaword/ui/app_chrome_theme.dart';
 
 /// Persists autosave drafts, recent file paths, and session settings on disk.
 class DocumentSessionStore {
@@ -176,25 +178,42 @@ class DocumentSessionStore {
     return next.take(maxRecentFiles).toList();
   }
 
-  Duration loadAutosaveInterval() {
-    if (!_settingsFile.existsSync()) return defaultAutosaveInterval;
+  Map<String, dynamic> _loadSettingsMap() {
+    if (!_settingsFile.existsSync()) return <String, dynamic>{};
     try {
-      final decoded =
-          jsonDecode(_settingsFile.readAsStringSync()) as Map<String, dynamic>;
-      final seconds = decoded['autosaveIntervalSeconds'];
-      if (seconds is int && seconds > 0) {
-        return Duration(seconds: seconds);
+      final decoded = jsonDecode(_settingsFile.readAsStringSync());
+      if (decoded is Map<String, dynamic>) {
+        return Map<String, dynamic>.from(decoded);
       }
     } catch (_) {}
+    return <String, dynamic>{};
+  }
+
+  Future<void> _saveSettingsMap(Map<String, dynamic> map) async {
+    _root.createSync(recursive: true);
+    _settingsFile.writeAsStringSync('${jsonEncode(map)}\n', flush: true);
+  }
+
+  Duration loadAutosaveInterval() {
+    final seconds = _loadSettingsMap()['autosaveIntervalSeconds'];
+    if (seconds is int && seconds > 0) {
+      return Duration(seconds: seconds);
+    }
     return defaultAutosaveInterval;
   }
 
   Future<void> saveAutosaveInterval(Duration interval) async {
-    await _root.create(recursive: true);
-    await _settingsFile.writeAsString(
-      '${jsonEncode({'autosaveIntervalSeconds': interval.inSeconds})}\n',
-      flush: true,
-    );
+    final map = _loadSettingsMap();
+    map['autosaveIntervalSeconds'] = interval.inSeconds;
+    await _saveSettingsMap(map);
+  }
+
+  Color? loadChromeAccent() => colorFromHex(_loadSettingsMap()['chromeAccent'] as String?);
+
+  Future<void> saveChromeAccent(Color color) async {
+    final map = _loadSettingsMap();
+    map['chromeAccent'] = colorToHex(color);
+    await _saveSettingsMap(map);
   }
 
   /// Load user templates from `templates/index.json` (F24.S3).

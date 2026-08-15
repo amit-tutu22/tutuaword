@@ -2,9 +2,16 @@
 class ChartDataModel {
   ChartDataModel({
     required this.kind,
-    required this.categories,
-    required this.series,
-  });
+    required List<String> categories,
+    required List<ChartSeriesModel> series,
+  })  : categories = List<String>.from(categories),
+        series = [
+          for (final s in series)
+            ChartSeriesModel(
+              name: s.name,
+              values: List<double>.from(s.values),
+            ),
+        ];
 
   /// Serde name: column / bar / line / pie.
   String kind;
@@ -23,7 +30,8 @@ class ChartDataModel {
   factory ChartDataModel.sample({int chartType = 0}) {
     return ChartDataModel(
       kind: kindFromType(chartType),
-      categories: const [
+      // Growable lists — the editor dialog mutates with add/removeAt.
+      categories: [
         'Category 1',
         'Category 2',
         'Category 3',
@@ -80,7 +88,8 @@ class ChartDataModel {
 }
 
 class ChartSeriesModel {
-  ChartSeriesModel({required this.name, required this.values});
+  ChartSeriesModel({required this.name, required List<double> values})
+      : values = List<double>.from(values);
 
   String name;
   List<double> values;

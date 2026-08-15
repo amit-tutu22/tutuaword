@@ -729,6 +729,9 @@ typedef TwSelectionRectsDart = int Function(int, double, double, double, double,
 typedef TwLastRequestIdNative = Uint64 Function();
 typedef TwLastRequestIdDart = int Function();
 
+typedef TwLastSplitCaretNative = Int32 Function(Pointer<Utf8>, IntPtr, Pointer<Uint32>);
+typedef TwLastSplitCaretDart = int Function(Pointer<Utf8>, int, Pointer<Uint32>);
+
 typedef TwFreeBufferNative = Void Function(Pointer<Uint8>, IntPtr);
 typedef TwFreeBufferDart = void Function(Pointer<Uint8>, int);
 
@@ -885,6 +888,7 @@ class NativeEngine {
   late final TwHitTestDart hitTest;
   late final TwDocumentTailHitDart documentTailHit;
   late final TwLastRequestIdDart lastRequestIdNative;
+  late final TwLastSplitCaretDart lastSplitCaretNative;
   late final TwCaretGeometryDart caretGeometry;
   late final TwCaretAtPositionDart caretAtPositionNative;
   late final TwSelectionRectsDart selectionRects;
@@ -1253,6 +1257,8 @@ class NativeEngine {
           lib.lookupFunction<TwDocumentTailHitNative, TwDocumentTailHitDart>('tw_document_tail_hit');
       engine.lastRequestIdNative =
           lib.lookupFunction<TwLastRequestIdNative, TwLastRequestIdDart>('tw_last_request_id');
+      engine.lastSplitCaretNative =
+          lib.lookupFunction<TwLastSplitCaretNative, TwLastSplitCaretDart>('tw_last_split_caret');
       engine.caretGeometry =
           lib.lookupFunction<TwCaretGeometryNative, TwCaretGeometryDart>('tw_caret_geometry');
       engine.caretAtPositionNative = lib.lookupFunction<TwCaretAtPositionNative, TwCaretAtPositionDart>(
@@ -2236,11 +2242,27 @@ extension NativeEngineOps on NativeEngine {
         )));
   }
 
-  Future<bool> splitParagraphAsync(String runId, int offset) async {
-    return enqueueEdit(() => dispatchCommand(CommandCodec.splitParagraphAt(
+  Future<HitTestResult?> splitParagraphAsync(String runId, int offset) async {
+    final ok = await enqueueEdit(() => dispatchCommand(CommandCodec.splitParagraphAt(
           runId: runId,
           offset: offset,
         )));
+    if (!ok) return null;
+    return fetchLastSplitCaret();
+  }
+
+  HitTestResult? fetchLastSplitCaret() {
+    final runIdBuf = calloc<Uint8>(64);
+    final offsetOut = calloc<Uint32>();
+    try {
+      final result = lastSplitCaretNative(runIdBuf.cast<Utf8>(), 64, offsetOut);
+      if (result != 0) return null;
+      final caretRunId = runIdBuf.cast<Utf8>().toDartString();
+      return HitTestResult(runId: caretRunId, charOffset: offsetOut.value);
+    } finally {
+      calloc.free(runIdBuf);
+      calloc.free(offsetOut);
+    }
   }
 
   Future<bool> applyCharFormatJsonAsync({

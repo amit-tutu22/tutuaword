@@ -8,6 +8,7 @@ import 'package:tutuaword/bridge/engine_types.dart';
 import 'package:tutuaword/editor/document_painter.dart';
 import 'package:tutuaword/editor/display_list.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
+import 'package:tutuaword/editor/editor_input.dart';
 import 'package:tutuaword/editor/formatting_marks.dart';
 import 'package:tutuaword/editor/image_hit_test.dart';
 import 'package:tutuaword/editor/key_event_text.dart';
@@ -41,7 +42,7 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
   bool _movingImage = false;
 
   void _requestEditorFocus() {
-    if (kIsWeb) {
+    if (EditorController.usesSoftKeyboardGlyphInput) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) widget.controller.focusGlyphInput();
       });
@@ -76,65 +77,29 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
   KeyEventResult _handleKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
     final key = event.logicalKey;
-    if (key == LogicalKeyboardKey.backspace) {
-      unawaited(widget.controller.deleteGlyphBackward());
-      return KeyEventResult.handled;
-    }
-    if (key == LogicalKeyboardKey.delete) {
-      unawaited(widget.controller.deleteGlyphForward());
-      return KeyEventResult.handled;
-    }
-    if (key == LogicalKeyboardKey.enter || key == LogicalKeyboardKey.numpadEnter) {
-      unawaited(widget.controller.insertGlyphParagraphBreak());
-      return KeyEventResult.handled;
-    }
-    // Tab must be handled here: Flutter steals it for focus traversal when
-    // ignored, and `event.character` is often null for Tab on macOS.
-    if (key == LogicalKeyboardKey.tab) {
-      if (widget.controller.isInList) {
-        if (HardwareKeyboard.instance.isShiftPressed) {
-          widget.controller.demoteListLevel();
-        } else {
-          widget.controller.promoteListLevel();
-        }
-      } else if (HardwareKeyboard.instance.isShiftPressed) {
-        widget.controller.decreaseIndent();
-      } else {
-        unawaited(widget.controller.insertGlyphCharacter('\t'));
-      }
-      return KeyEventResult.handled;
-    }
-    if (key == LogicalKeyboardKey.arrowLeft ||
-        key == LogicalKeyboardKey.arrowRight ||
-        key == LogicalKeyboardKey.arrowUp ||
-        key == LogicalKeyboardKey.arrowDown) {
-      widget.controller.moveGlyphCaretByArrow(key);
-      return KeyEventResult.handled;
-    }
-    // On macOS, `event.character` can be null/empty for some whitespace keys
-    // (notably Space). On web, character is usually null for all keys.
     String? char = printableCharacterFromKeyEvent(event);
     if (char == null &&
         (key == LogicalKeyboardKey.space || key.keyLabel.toLowerCase() == 'space')) {
       char = ' ';
     }
-    if (char == '\t') {
-      unawaited(widget.controller.insertGlyphCharacter('\t'));
-      return KeyEventResult.handled;
-    }
-    // Never treat Enter / Return as a printable character (avoids □ tofu).
-    if (char == '\n' || char == '\r') {
-      unawaited(widget.controller.insertGlyphParagraphBreak());
-      return KeyEventResult.handled;
-    }
     if (char != null &&
         char.isNotEmpty &&
         !HardwareKeyboard.instance.isControlPressed &&
-        !HardwareKeyboard.instance.isMetaPressed) {
-      unawaited(widget.controller.insertGlyphCharacter(char));
+        !HardwareKeyboard.instance.isMetaPressed &&
+        char != '\n' &&
+        char != '\r' &&
+        char != '\t') {
+      unawaited(widget.controller.handleEditorInput(EditorInputEvent.character(char)));
       return KeyEventResult.handled;
     }
-    return KeyEventResult.ignored;
+    final input = EditorInputEvent.fromLogicalKey(
+      key,
+      shift: HardwareKeyboard.instance.isShiftPressed,
+      character: char,
+    );
+    if (input == null) return KeyEventResult.ignored;
+    unawaited(widget.controller.handleEditorInput(input));
+    return KeyEventResult.handled;
   }
 
   void _onPointerDown(PointerDownEvent event) {
@@ -280,21 +245,15 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
         actions: <Type, Action<Intent>>{
           _InsertTabIntent: CallbackAction<_InsertTabIntent>(
             onInvoke: (_) {
-              if (widget.controller.isInList) {
-                widget.controller.promoteListLevel();
-              } else {
-                unawaited(widget.controller.insertGlyphCharacter('\t'));
-              }
+              unawaited(widget.controller.handleEditorInput(const EditorInputEvent.tab()));
               return null;
             },
           ),
           _OutdentIntent: CallbackAction<_OutdentIntent>(
             onInvoke: (_) {
-              if (widget.controller.isInList) {
-                widget.controller.demoteListLevel();
-              } else {
-                widget.controller.decreaseIndent();
-              }
+              unawaited(
+                widget.controller.handleEditorInput(const EditorInputEvent.tab(shift: true)),
+              );
               return null;
             },
           ),
@@ -305,7 +264,7 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
             },
           ),
         },
-        child: kIsWeb
+        child: EditorController.usesSoftKeyboardGlyphInput
             ? _buildEditorStack(caret: caret, selection: selection)
             : Focus(
                 focusNode: _focusNode,

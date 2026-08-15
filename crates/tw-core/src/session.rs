@@ -1309,6 +1309,10 @@ impl Session {
         self.layout_cache.read().hit_test(page, x, y)
     }
 
+    pub fn last_split_caret(&self) -> Option<(NodeId, usize)> {
+        self.layout_cache.read().last_split_caret()
+    }
+
     pub fn document_tail_hit(&self, page: u32) -> Option<tw_layout::HitTestResult> {
         self.layout_cache.read().document_tail_hit(page)
     }

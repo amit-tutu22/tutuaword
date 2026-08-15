@@ -15,22 +15,23 @@ Edit menu where noted.
 |-------|--------|---------|
 | Ctrl/Cmd+N | New document | macOS File menu |
 | Ctrl/Cmd+O | Open document | macOS File menu |
-| Ctrl/Cmd+S | Save | macOS File menu |
+| Ctrl/Cmd+S | Save | App + File menu |
 | Ctrl/Cmd+Z | Undo | macOS Edit menu |
 | Ctrl/Cmd+Shift+Z | Redo | macOS Edit menu |
-| Ctrl/Cmd+X | Cut | macOS Edit menu |
-| Ctrl/Cmd+C | Copy | macOS Edit menu |
-| Ctrl/Cmd+V | Paste | macOS Edit menu |
-| Ctrl/Cmd+Alt+Shift+V | Paste and Match Style | macOS Edit menu |
+| Ctrl/Cmd+X | Cut | App + Edit menu |
+| Ctrl/Cmd+C | Copy | App + Edit menu |
+| Ctrl/Cmd+V | Paste | App + Edit menu |
+| Ctrl/Cmd+Alt+Shift+V | Paste and Match Style | App + Edit menu |
 | Ctrl/Cmd+A | Select all | App + Edit menu |
 | Ctrl/Cmd+F | Find | App + Edit menu |
 | Ctrl/Cmd+G | Go To | App + Edit menu |
+| Ctrl/Cmd+P | Print | App |
 
 Notes:
 
-- Non-macOS builds rely on the `Shortcuts` map in `editor_screen.dart` for Find /
-  Go To / Select All. File/Edit menu accelerators are macOS `PlatformMenuBar` only.
-- Printing, Bold/Italic/Underline, Find-and-Replace, and other chords in
+- App bindings live in the `Shortcuts` map in `editor_screen.dart` (Cmd and Ctrl).
+  On macOS they are also mirrored on the `PlatformMenuBar` Edit/File menus.
+- Bold/Italic/Underline, Find-and-Replace, and other chords in
   `text-engine.md` are **not** wired yet.
 
 ## Editor (glyph surface)

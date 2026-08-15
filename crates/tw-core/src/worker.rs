@@ -816,8 +816,16 @@ impl WorkerCore {
                 let mut affected_nodes: Vec<NodeId> = Vec::new();
                 let mut tx = self.session.begin_transaction(None);
                 for command in commands {
+                    let is_split = matches!(&command, Command::SplitParagraphAt { .. });
                     match tx.apply(command) {
                         Ok(result) => {
+                            if is_split {
+                                if let Some(&run_id) = result.affected_nodes.first() {
+                                    self.layout_cache
+                                        .write()
+                                        .set_last_split_caret(run_id, 0);
+                                }
+                            }
                             affected_nodes.extend(result.affected_nodes);
                         }
                         Err(e) => {

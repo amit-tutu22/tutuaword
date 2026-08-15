@@ -64,13 +64,22 @@ fn parse_html(html: &str) -> Document {
                     flush_paragraph(&doc.styles, &mut blocks, &mut current_runs, None);
                     heading_level = Some(level);
                 }
-            } else if matches!(name, "p" | "div") {
+            } else if matches!(name, "p" | "div" | "li" | "tr")
+                || (name == "br" && !tag.starts_with('/'))
+            {
+                // Block boundaries (and <br>) become real paragraphs — never
+                // store a literal `\n` run that would paint as tofu.
                 flush_paragraph(
                     &doc.styles,
                     &mut blocks,
                     &mut current_runs,
                     heading_level.take(),
                 );
+            } else if matches!(name, "td" | "th") && !tag.starts_with('/') {
+                if !current_runs.is_empty() {
+                    // Separate table cells with a space when they share a line.
+                    push_decoded_text(&mut current_runs, &current_format, " ");
+                }
             } else if matches!(name, "b" | "strong") {
                 current_format.bold = if tag.starts_with('/') {
                     None
@@ -83,21 +92,16 @@ fn parse_html(html: &str) -> Document {
                 } else {
                     Some(true)
                 };
-            } else if name == "br" && !tag.starts_with('/') {
-                current_runs.push(Run::new_text("\n"));
             }
+        } else if ch == '&' {
+            let entity = read_html_entity(&mut chars);
+            let decoded = decode_entity(&entity);
+            push_decoded_text(&mut current_runs, &current_format, &decoded);
         } else if !ch.is_whitespace() || !current_runs.is_empty() {
-            let mut run = Run::new_text(ch.to_string());
-            run.format = current_format.clone();
-            if let Some(last) = current_runs.last_mut() {
-                if last.format == run.format && last.revision.is_none() {
-                    if let Some(text) = last.text_mut() {
-                        text.push(ch);
-                        continue;
-                    }
-                }
+            let mapped = tw_edit_map_char(ch);
+            if let Some(mapped) = mapped {
+                push_decoded_text(&mut current_runs, &current_format, &mapped.to_string());
             }
-            current_runs.push(run);
         }
     }
     flush_paragraph(
@@ -114,6 +118,92 @@ fn parse_html(html: &str) -> Document {
         section.blocks = blocks;
     }
     doc
+}
+
+fn push_decoded_text(runs: &mut Vec<Run>, format: &CharFormat, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    let mut run = Run::new_text(text.to_string());
+    run.format = format.clone();
+    if let Some(last) = runs.last_mut() {
+        if last.format == run.format && last.revision.is_none() {
+            if let Some(existing) = last.text_mut() {
+                existing.push_str(text);
+                return;
+            }
+        }
+    }
+    runs.push(run);
+}
+
+fn tw_edit_map_char(ch: char) -> Option<char> {
+    // Keep a local subset so tw-html does not depend on tw-edit.
+    match ch {
+        '\n' | '\r' => None,
+        '\t' => Some('\t'),
+        '\u{00A0}' => Some(' '),
+        '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}' | '\u{00AD}' => None,
+        '\u{F0E0}' | '\u{F0E1}' | '\u{F0E2}' | '\u{F0E3}' | '\u{F0E4}' | '\u{F0E5}'
+        | '\u{F0E6}' | '\u{F0E7}' | '\u{F0E8}' | '\u{F0E9}' | '\u{F0EA}' | '\u{F0EB}'
+        | '\u{F0EC}' | '\u{F0ED}' | '\u{F0EE}' | '\u{F0EF}' => Some('→'),
+        '\u{F0B6}' | '\u{F0B7}' | '\u{F0A7}' | '\u{F0A8}' | '\u{F035}' => Some('•'),
+        c if ('\u{F000}'..='\u{F8FF}').contains(&c) => Some('·'),
+        c if c.is_control() => None,
+        c => Some(c),
+    }
+}
+
+fn read_html_entity(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> String {
+    let mut entity = String::from("&");
+    while let Some(&next) = chars.peek() {
+        entity.push(next);
+        chars.next();
+        if next == ';' || entity.len() > 16 {
+            break;
+        }
+        if next != '#' && !next.is_ascii_alphanumeric() && next != 'x' && next != 'X' {
+            break;
+        }
+    }
+    entity
+}
+
+fn decode_entity(entity: &str) -> String {
+    match entity {
+        "&nbsp;" => " ".into(),
+        "&lt;" => "<".into(),
+        "&gt;" => ">".into(),
+        "&amp;" => "&".into(),
+        "&quot;" => "\"".into(),
+        "&#39;" | "&apos;" => "'".into(),
+        "&rarr;" | "&rightarrow;" => "→".into(),
+        "&larr;" | "&leftarrow;" => "←".into(),
+        "&bull;" | "&middot;" => "•".into(),
+        "&mdash;" => "—".into(),
+        "&ndash;" => "–".into(),
+        "&hellip;" => "…".into(),
+        other if other.starts_with("&#x") || other.starts_with("&#X") => {
+            let hex = other
+                .trim_start_matches("&#x")
+                .trim_start_matches("&#X")
+                .trim_end_matches(';');
+            u32::from_str_radix(hex, 16)
+                .ok()
+                .and_then(char::from_u32)
+                .map(|c| tw_edit_map_char(c).unwrap_or(c).to_string())
+                .unwrap_or_else(|| other.to_string())
+        }
+        other if other.starts_with("&#") => {
+            let num = other.trim_start_matches("&#").trim_end_matches(';');
+            num.parse::<u32>()
+                .ok()
+                .and_then(char::from_u32)
+                .map(|c| tw_edit_map_char(c).unwrap_or(c).to_string())
+                .unwrap_or_else(|| other.to_string())
+        }
+        other => other.to_string(),
+    }
 }
 
 /// Local name of an HTML tag (`"/strong class=x"` → `"strong"`).

@@ -1206,6 +1206,13 @@ impl WasmSession {
             .map(|r| (r.run_id.as_uuid().to_string(), r.char_offset as u32))
     }
 
+    pub fn last_split_caret(&self) -> Option<(String, u32)> {
+        let session = self.session().expect("WasmSession not initialized");
+        session
+            .last_split_caret()
+            .map(|(run_id, offset)| (run_id.as_uuid().to_string(), offset as u32))
+    }
+
     pub fn caret_geometry(&self, page: u32, x: f32, y: f32) -> Option<(f32, f32, f32)> {
         let session = self.session().expect("WasmSession not initialized");
         session.caret_geometry(page, x, y)
@@ -2466,6 +2473,12 @@ pub mod bindgen_exports {
                 .map(|(run, offset)| {
                     serde_json::json!({ "run_id": run, "offset": offset }).to_string()
                 })
+        }
+
+        pub fn last_split_caret(&self) -> Option<String> {
+            self.session.last_split_caret().map(|(run, offset)| {
+                serde_json::json!({ "run_id": run, "offset": offset }).to_string()
+            })
         }
 
         pub fn caret_geometry(&self, page: u32, x: f32, y: f32) -> Option<String> {

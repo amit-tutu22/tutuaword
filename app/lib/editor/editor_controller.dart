@@ -25,6 +25,7 @@ import 'package:tutuaword/bridge/mock_native_engine.dart';
 import 'package:tutuaword/bridge/print_layout_settings.dart';
 import 'package:tutuaword/bridge/outline_entry.dart';
 import 'package:tutuaword/bridge/semantic_node.dart';
+import 'package:tutuaword/editor/editor_input.dart';
 import 'package:tutuaword/editor/controllers/document_session_controller.dart';
 import 'package:tutuaword/editor/controllers/engine_host.dart';
 import 'package:tutuaword/editor/controllers/find_controller.dart';
@@ -53,6 +54,7 @@ import 'package:tutuaword/editor/document_templates.dart';
 import 'package:tutuaword/editor/document_view_layout.dart';
 import 'package:tutuaword/ui/goto_dialog.dart';
 import 'package:tutuaword/ui/about_dialog.dart';
+import 'package:tutuaword/ui/settings_dialog.dart';
 import 'package:tutuaword/ui/zoom_dialog.dart';
 import 'package:tutuaword/bridge/mail_merge_csv.dart';
 import 'package:tutuaword/bridge/ai_client.dart';
@@ -277,19 +279,44 @@ class EditorController extends ChangeNotifier {
   bool get isEngineConnected => _host.isConnected;
   bool get usesGlyphRendering => _host.isConnected;
 
-  /// Focus target for [WebGlyphTextInput] on Flutter web.
+  /// Focus target for the hidden glyph [TextField] (web + mobile soft keyboard).
   final FocusNode webGlyphFocusNode = FocusNode();
 
+  /// When the DOM key listener handles Enter/Tab/arrows, skip the next
+  /// [TextField.onChanged] so the same keystroke cannot fire twice.
+  bool _webSkipNextFieldChange = false;
+
+  void markWebSpecialKeyConsumed() {
+    _webSkipNextFieldChange = true;
+  }
+
+  bool consumeWebSkipNextFieldChange() {
+    if (!_webSkipNextFieldChange) return false;
+    _webSkipNextFieldChange = false;
+    return true;
+  }
+
   void focusGlyphInput() {
-    if (!kIsWeb) return;
+    if (!usesSoftKeyboardGlyphInput) return;
     if (!webGlyphFocusNode.canRequestFocus) return;
+    // Already focused — re-requesting on every tap makes iOS recreate the
+    // keyboard keyplane (TUIKeyplane / UIKeyboardImpl constraint spam).
+    if (webGlyphFocusNode.hasFocus) return;
     webGlyphFocusNode.requestFocus();
-    // Flutter web sometimes drops DOM focus after rebuild; retry once.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (webGlyphFocusNode.canRequestFocus && !webGlyphFocusNode.hasFocus) {
-        webGlyphFocusNode.requestFocus();
-      }
-    });
+    // Web sometimes drops DOM focus after rebuild; retry once.
+    if (kIsWeb) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (webGlyphFocusNode.canRequestFocus && !webGlyphFocusNode.hasFocus) {
+          webGlyphFocusNode.requestFocus();
+        }
+      });
+    }
+  }
+
+  /// Hidden TextField overlay for web and mobile soft-keyboard input.
+  static bool get usesSoftKeyboardGlyphInput {
+    if (kIsWeb) return true;
+    return Platform.isIOS || Platform.isAndroid;
   }
 
   bool get preferTextRendering => false;
@@ -392,6 +419,9 @@ class EditorController extends ChangeNotifier {
 
   // ── View ──────────────────────────────────────────────────────────────────
   int get currentPage => _view.currentPage;
+
+  /// Page number for the status bar: caret page while editing, else scroll page.
+  int get statusPage => caretRunId != null ? caretPage : currentPage;
   bool get printPreview => _view.printPreview;
   DocumentViewLayout get viewLayout => _view.layout;
   bool get isReadMode => _view.isReadMode;
@@ -446,7 +476,9 @@ class EditorController extends ChangeNotifier {
   }
 
   void _selectPage(int page) {
+    final before = _view.currentPage;
     _view.setCurrentPage(page, pageCount);
+    if (_view.currentPage == before) return;
     _host.engine?.setCurrentPageIndex(_view.currentPage);
   }
 
@@ -496,6 +528,9 @@ class EditorController extends ChangeNotifier {
 
   Future<void> openAboutDialog(BuildContext context) =>
       TutuawordAboutDialog.show(context);
+
+  Future<void> openSettingsDialog(BuildContext context) =>
+      AppSettingsDialog.show(context);
 
   void zoomToOnePage() {
     _view.zoomToOnePage(pageWidth: pageWidth, pageHeight: pageHeight);
@@ -709,7 +744,65 @@ class EditorController extends ChangeNotifier {
 
   void ensureGlyphCaret() => _selection.ensureGlyphCaret();
   void hitTestAt(int pageIndex, double x, double y) => _selection.hitTestAt(pageIndex, x, y);
-  void moveGlyphCaretByArrow(LogicalKeyboardKey key) => _selection.moveGlyphCaretByArrow(key);
+  void moveGlyphCaretByArrow(LogicalKeyboardKey key) {
+    _selection.moveGlyphCaretByArrow(key);
+    // Selection already notified this frame; queue without a second notify.
+    ensureCaretVisible(notify: false);
+  }
+
+  /// Single dispatcher for keyboard input — every path must call this.
+  Future<void> handleEditorInput(EditorInputEvent event) async {
+    switch (event.kind) {
+      case EditorInputKind.character:
+        await insertGlyphCharacter(event.character!);
+      case EditorInputKind.newline:
+        await insertGlyphParagraphBreak();
+      case EditorInputKind.tab:
+        if (isInList) {
+          if (event.shift) {
+            demoteListLevel();
+          } else {
+            promoteListLevel();
+          }
+        } else if (event.shift) {
+          decreaseIndent();
+        } else {
+          await insertGlyphCharacter('\t');
+        }
+      case EditorInputKind.backspace:
+        await deleteGlyphBackward();
+      case EditorInputKind.delete:
+        await deleteGlyphForward();
+      case EditorInputKind.arrowLeft:
+        moveGlyphCaretByArrow(LogicalKeyboardKey.arrowLeft);
+      case EditorInputKind.arrowRight:
+        moveGlyphCaretByArrow(LogicalKeyboardKey.arrowRight);
+      case EditorInputKind.arrowUp:
+        moveGlyphCaretByArrow(LogicalKeyboardKey.arrowUp);
+      case EditorInputKind.arrowDown:
+        moveGlyphCaretByArrow(LogicalKeyboardKey.arrowDown);
+    }
+  }
+
+  /// Scroll the canvas so the caret stays on-screen after it moves.
+  ///
+  /// When [notify] is false the request is queued for the end of this frame
+  /// (the caller already notified, or will notify next).
+  void ensureCaretVisible({bool notify = true}) {
+    final page = _selection.caretPage;
+    if (page != _view.currentPage) {
+      _selectPage(page);
+    }
+    final geom = _selection.caretGeometry;
+    if (geom != null) {
+      _view.requestScrollToCaret(page: page, y: geom.y, height: geom.height);
+    } else {
+      _view.requestScrollToPage(page);
+      return;
+    }
+    if (notify) notifyListeners();
+  }
+
   void beginGlyphSelection(int p, double x, double y) => _selection.beginGlyphSelection(p, x, y);
   void updateGlyphSelection(int p, double x, double y) => _selection.updateGlyphSelection(p, x, y);
   void endGlyphSelection(int p, double x, double y) => _selection.endGlyphSelection(p, x, y);
@@ -1549,7 +1642,17 @@ class EditorController extends ChangeNotifier {
         _rollbackCaret(runId, from: optimistic, to: offset);
       } else if (_selection.caretRunId == runId &&
           _selection.caretOffset == optimistic) {
+        final pageBefore = _selection.caretPage;
+        final yBefore = _selection.caretGeometry?.y;
         _selection.syncCaretGeometry();
+        final yAfter = _selection.caretGeometry?.y;
+        final movedVertically = _selection.caretPage != pageBefore ||
+            yAfter == null ||
+            yBefore == null ||
+            (yAfter - yBefore).abs() > 0.5;
+        if (movedVertically) {
+          ensureCaretVisible(notify: false);
+        }
       }
       notifyListeners();
     });
@@ -1569,60 +1672,25 @@ class EditorController extends ChangeNotifier {
     await _runGlyphMutation(() async {
       final runId = _selection.defaultRunId();
       if (runId == null) return;
-      final pageBefore = _selection.caretPage;
-      final margin = _host.marginLeft;
+      _selection.syncCaretGeometry();
       final splitOffset = _selection.caretOffset;
-      final prevY = _selection.caretGeometry?.y ??
-          (_host.marginTop + _formatting.fontSize);
+      HitTestResult? newCaret;
       // Full refresh: Enter may soft-paginate onto a new page; dirty-page-only
       // refresh leaves pageCount stale so cross-page caret sync cannot see it.
-      final edit = _host.performNativeEdit(
-        () => _host.engine!.splitParagraphAsync(runId, splitOffset),
-        full: true,
-      );
+      final edit = _host.performNativeEdit(() async {
+        newCaret = await _host.engine!.splitParagraphAsync(runId, splitOffset);
+        return newCaret != null;
+      }, full: true);
       await edit;
       await _host.ensureLayoutReady();
 
-      // Empty Enter at offset 0 moves the caret run onto the new paragraph
-      // (same run id). Require a real Y advance or page change — equality
-      // alone left the caret stuck when layout/sync returned the old Y.
-      _selection.afterInsert(runId, 0);
-      _selection.syncCaretGeometry();
-      final landedY = _selection.caretGeometry?.y;
-      final pageAfter = _selection.caretPage;
-      final resolvedSameRun = _selection.caretRunId == runId && landedY != null;
-      final advancedOrNewPage = resolvedSameRun &&
-          (pageAfter > pageBefore || (landedY ?? 0) > prevY + 0.5);
-
-      if (!advancedOrNewPage) {
-        // End-of-text / mid-run Enter creates a different run id — probe below
-        // the break, then the next page if the probe jumps upward or past the
-        // content bottom.
-        final contentBottom = _host.pageHeight - _host.marginBottom;
-        final nextY = prevY + _formatting.fontSize * 1.4;
-        hitTestAt(
-          pageBefore,
-          margin,
-          nextY.clamp(_host.marginTop, contentBottom),
-        );
-        final probeY = _selection.caretGeometry?.y ?? prevY;
-        final needsNextPage =
-            probeY < prevY - 0.5 || nextY > contentBottom + 0.5;
-        if (needsNextPage && pageBefore + 1 < pageCount) {
-          hitTestAt(
-            pageBefore + 1,
-            margin,
-            _host.marginTop + _formatting.fontSize,
-          );
-        }
-        final newRun = _selection.caretRunId ?? runId;
-        _selection.afterInsert(newRun, 0);
+      if (newCaret != null) {
+        _selection.setCaret(newCaret!.runId, newCaret!.charOffset);
         _selection.syncCaretGeometry();
       }
+      _selection.collapseToCaret();
 
-      if (_selection.caretPage != _view.currentPage) {
-        jumpToPage(_selection.caretPage);
-      }
+      ensureCaretVisible(notify: false);
       _session.markDocumentDirty();
       notifyListeners();
     });
@@ -4030,10 +4098,11 @@ class EditorController extends ChangeNotifier {
     if (payload.docxBytes != null && payload.docxBytes!.isNotEmpty) {
       final edit = _host.performNativeEdit(
         () => _host.engine!.tryPasteDocxAsync(runId, _selection.caretOffset, payload.docxBytes!),
-        dirtyPage: _selection.caretPage,
+        full: true,
       );
       if (await edit) {
-        _selection.afterInsert(runId, _selection.caretOffset + (payload.plainText?.length ?? 0));
+        await _host.ensureLayoutReady();
+        _selection.syncCaretGeometry();
         return true;
       }
     }
@@ -4041,10 +4110,11 @@ class EditorController extends ChangeNotifier {
     if (html != null && html.isNotEmpty) {
       final edit = _host.performNativeEdit(
         () => _host.engine!.tryPasteHtmlAsync(runId, _selection.caretOffset, html),
-        dirtyPage: _selection.caretPage,
+        full: true,
       );
       if (await edit) {
-        _selection.afterInsert(runId, _selection.caretOffset + (payload.plainText?.length ?? 0));
+        await _host.ensureLayoutReady();
+        _selection.syncCaretGeometry();
         return true;
       }
     }
@@ -4053,13 +4123,59 @@ class EditorController extends ChangeNotifier {
 
   Future<bool> _tryPastePlain(String runId, String? text) async {
     if (text == null || text.isEmpty) return false;
+    final normalized = _normalizeClipboardText(text);
+    if (normalized.isEmpty) return false;
+    final wantsFull = normalized.contains('\n') || normalized.contains('\r');
     final edit = _host.performNativeEdit(
-      () => _host.engine!.tryInsertTextAsync(runId, _selection.caretOffset, text),
-      dirtyPage: _selection.caretPage,
+      () => _host.engine!.tryInsertTextAsync(runId, _selection.caretOffset, normalized),
+      dirtyPage: wantsFull ? null : _selection.caretPage,
+      full: wantsFull,
     );
     if (!await edit) return false;
-    _selection.afterInsert(runId, _selection.caretOffset + text.length);
+    // Multi-paragraph paste moves the caret onto a new run; sync from geometry.
+    if (wantsFull) {
+      await _host.ensureLayoutReady();
+      _selection.syncCaretGeometry();
+    } else {
+      _selection.afterInsert(runId, _selection.caretOffset + normalized.length);
+    }
     return true;
+  }
+
+  /// Map Word Wingdings/PUA and strip controls that paint as tofu boxes.
+  static String _normalizeClipboardText(String text) {
+    final normalizedBreaks = text.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    final out = StringBuffer();
+    for (final ch in normalizedBreaks.runes) {
+      if (ch == 0x0A || ch == 0x09) {
+        out.writeCharCode(ch);
+        continue;
+      }
+      if (ch == 0xA0) {
+        out.writeCharCode(0x20);
+        continue;
+      }
+      if (ch == 0x200B || ch == 0x200C || ch == 0x200D || ch == 0xFEFF || ch == 0xAD) {
+        continue;
+      }
+      if (ch >= 0xF0E0 && ch <= 0xF0EF) {
+        out.write('→');
+        continue;
+      }
+      if (ch == 0xF035 || ch == 0xF0B6 || ch == 0xF0B7 || ch == 0xF0A7 || ch == 0xF0A8) {
+        out.write('•');
+        continue;
+      }
+      if (ch >= 0xF000 && ch <= 0xF8FF) {
+        out.write('·');
+        continue;
+      }
+      if (ch < 0x20 || (ch >= 0x7F && ch <= 0x9F)) {
+        continue;
+      }
+      out.writeCharCode(ch);
+    }
+    return out.toString();
   }
 
   @override

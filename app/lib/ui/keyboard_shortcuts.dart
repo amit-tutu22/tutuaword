@@ -36,7 +36,7 @@ const kWiredShortcuts = <WiredShortcut>[
     id: 'save',
     chord: 'Ctrl/Cmd+S',
     action: 'Save',
-    scope: 'menu',
+    scope: 'app',
   ),
   WiredShortcut(
     id: 'undo',
@@ -54,25 +54,25 @@ const kWiredShortcuts = <WiredShortcut>[
     id: 'cut',
     chord: 'Ctrl/Cmd+X',
     action: 'Cut',
-    scope: 'menu',
+    scope: 'app',
   ),
   WiredShortcut(
     id: 'copy',
     chord: 'Ctrl/Cmd+C',
     action: 'Copy',
-    scope: 'menu',
+    scope: 'app',
   ),
   WiredShortcut(
     id: 'paste',
     chord: 'Ctrl/Cmd+V',
     action: 'Paste',
-    scope: 'menu',
+    scope: 'app',
   ),
   WiredShortcut(
     id: 'paste_match',
     chord: 'Ctrl/Cmd+Alt+Shift+V',
     action: 'Paste and Match Style',
-    scope: 'menu',
+    scope: 'app',
   ),
   WiredShortcut(
     id: 'select_all',
@@ -90,6 +90,12 @@ const kWiredShortcuts = <WiredShortcut>[
     id: 'goto',
     chord: 'Ctrl/Cmd+G',
     action: 'Go To',
+    scope: 'app',
+  ),
+  WiredShortcut(
+    id: 'print',
+    chord: 'Ctrl/Cmd+P',
+    action: 'Print',
     scope: 'app',
   ),
   WiredShortcut(

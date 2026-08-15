@@ -29,12 +29,12 @@ class SecondaryDocumentWindow extends StatelessWidget {
       builder: (context, _) {
         return Material(
           key: const Key('secondary_document_window'),
-          color: WordTheme.tabStripSurface,
+          color: WordTheme.chrome(context).tabStrip,
           child: Column(
             children: [
               Container(
                 height: WordTheme.titleBarHeight,
-                color: WordTheme.titleBarBlue,
+                color: WordTheme.chrome(context).titleBar,
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 child: Row(
                   children: [

@@ -34,6 +34,67 @@ void main() {
     expect(controller.documentText, 'hi');
   });
 
+  testWidgets('enterText hello newline does not duplicate the line', (tester) async {
+    final controller = EditorController.forTest();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Stack(
+            children: [
+              WebGlyphTextInput(controller: controller),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    controller.ensureGlyphCaret();
+    controller.webGlyphFocusNode.requestFocus();
+    await tester.pump();
+
+    // Multiline field delivers Return as '\n' via onChanged (not onSubmitted).
+    await tester.enterText(find.byType(TextField), 'hello\n');
+    await tester.pumpAndSettle();
+
+    expect(controller.documentText, 'hello\n');
+    expect(controller.documentText, isNot(contains('hellohello')));
+  });
+
+  testWidgets('WebGlyphTextInput does not cover canvas pointer hits', (tester) async {
+    final controller = EditorController.forTest();
+    addTearDown(controller.dispose);
+    var taps = 0;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Stack(
+            children: [
+              Positioned.fill(
+                child: GestureDetector(
+                  key: const Key('canvas'),
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => taps++,
+                  child: const ColoredBox(color: Colors.white),
+                ),
+              ),
+              WebGlyphTextInput(controller: controller),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('canvas')));
+    await tester.pump();
+
+    expect(taps, 1);
+  });
+
   testWidgets('WebGlyphTextInput keeps focus after document click refocus', (tester) async {
     final controller = EditorController.forTest();
     addTearDown(controller.dispose);
@@ -44,7 +105,14 @@ void main() {
           body: Stack(
             children: [
               WebGlyphTextInput(controller: controller),
-              const SizedBox.expand(key: Key('doc')),
+              Positioned.fill(
+                child: GestureDetector(
+                  key: const Key('doc'),
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {},
+                  child: const ColoredBox(color: Colors.transparent),
+                ),
+              ),
             ],
           ),
         ),
@@ -52,10 +120,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const Key('doc')));
+    await tester.tap(find.byKey(const Key('doc')), warnIfMissed: false);
     await tester.pumpAndSettle();
 
-    controller.focusGlyphInput();
+    controller.webGlyphFocusNode.requestFocus();
     await tester.pump();
 
     expect(controller.webGlyphFocusNode.hasFocus, isTrue);

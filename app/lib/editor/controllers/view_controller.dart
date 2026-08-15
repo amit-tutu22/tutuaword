@@ -21,6 +21,7 @@ class ViewController extends ChangeNotifier {
   bool _preferOutlineTab = false;
   String _statusSuffix = '';
   int? _scrollRequestPage;
+  CaretScrollRequest? _caretScrollRequest;
 
   double get zoom => _zoom;
   int get currentPage => _currentPage;
@@ -40,13 +41,16 @@ class ViewController extends ChangeNotifier {
   bool get showFormattingMarks => _showFormattingMarks;
   String get statusSuffix => _statusSuffix;
   int? get scrollRequestPage => _scrollRequestPage;
+  CaretScrollRequest? get caretScrollRequest => _caretScrollRequest;
 
   void setStatusSuffix(String value) {
     _statusSuffix = value;
   }
 
   void setCurrentPage(int page, int pageCount) {
-    _currentPage = page.clamp(0, pageCount - 1);
+    final clamped = page.clamp(0, pageCount - 1);
+    if (clamped == _currentPage) return;
+    _currentPage = clamped;
     notifyListeners();
   }
 
@@ -207,7 +211,19 @@ class ViewController extends ChangeNotifier {
 
   void requestScrollToPage(int page) {
     _scrollRequestPage = page;
+    _caretScrollRequest = null;
     notifyListeners();
+  }
+
+  /// Queue a caret-follow scroll. Does not notify — the caller already did, or
+  /// [DocumentView] drains this at the end of the frame.
+  void requestScrollToCaret({
+    required int page,
+    required double y,
+    required double height,
+  }) {
+    _caretScrollRequest = CaretScrollRequest(page: page, y: y, height: height);
+    _scrollRequestPage = null;
   }
 
   int? takeScrollRequest() {
@@ -216,12 +232,33 @@ class ViewController extends ChangeNotifier {
     return page;
   }
 
+  CaretScrollRequest? takeCaretScrollRequest() {
+    final request = _caretScrollRequest;
+    _caretScrollRequest = null;
+    return request;
+  }
+
   void reset() {
     _currentPage = 0;
     _printPreview = false;
     _layout = DocumentViewLayout.printLayout;
     _pageColumns = 1;
     _splitView = false;
+    _scrollRequestPage = null;
+    _caretScrollRequest = null;
     notifyListeners();
   }
+}
+
+/// One-shot request to scroll the document canvas so the caret stays visible.
+class CaretScrollRequest {
+  const CaretScrollRequest({
+    required this.page,
+    required this.y,
+    required this.height,
+  });
+
+  final int page;
+  final double y;
+  final double height;
 }

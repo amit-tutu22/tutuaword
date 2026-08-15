@@ -94,4 +94,48 @@ void main() {
     expect(result, isNotNull);
     expect(result!.categories.length, 5);
   });
+
+  testWidgets('ChartDataDialog can remove a category after adding a series', (
+    tester,
+  ) async {
+    ChartDataModel? result;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) {
+            return TextButton(
+              onPressed: () async {
+                result = await ChartDataDialog.show(
+                  context,
+                  initial: ChartDataModel.sample(),
+                );
+              },
+              child: const Text('Open'),
+            );
+          },
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('chart_data_add_series')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('chart_data_series_name_2')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('chart_data_remove_category_3')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('chart_data_category_3')), findsNothing);
+
+    await tester.tap(find.byKey(const Key('chart_data_ok')));
+    await tester.pumpAndSettle();
+
+    expect(result, isNotNull);
+    expect(result!.categories.length, 3);
+    expect(result!.series.length, 3);
+    for (final series in result!.series) {
+      expect(series.values.length, 3);
+    }
+  });
 }

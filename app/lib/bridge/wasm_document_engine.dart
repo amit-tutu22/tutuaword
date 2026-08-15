@@ -223,7 +223,7 @@ class WasmDocumentEngine implements DocumentEngine {
       );
 
   @override
-  Future<bool> splitParagraphAsync(String runId, int offset) =>
+  Future<HitTestResult?> splitParagraphAsync(String runId, int offset) =>
       _inner.splitParagraphAsync(runId, offset);
 
   @override

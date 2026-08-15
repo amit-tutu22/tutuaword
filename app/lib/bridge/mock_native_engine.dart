@@ -85,6 +85,7 @@ class MockDocumentEngine implements DocumentEngine {
   double _imageAnchorY = 0;
   String? _lastError;
   String? _encryptionPassword;
+  int setCurrentPageIndexCount = 0;
   int _imageAnchorOriginX = 0;
   int _imageAnchorOriginY = 0;
   double _imageRotationDeg = 0;
@@ -808,13 +809,46 @@ class MockDocumentEngine implements DocumentEngine {
 
   CaretGeometry _geomForOffset(String runId, int offset) {
     final buffer = _bufferForRun(runId);
-    final x = _marginLeft + (offset * _charWidth);
+    final (line, col) = _lineColumnForOffset(buffer, offset);
+    final x = _marginLeft + col * _charWidth;
     final y = switch (runId) {
       _ when runId == headerRunId => _marginTop * 0.25 + _lineHeight,
       _ when runId == footerRunId => _pageHeight() - _marginBottom * 0.75,
-      _ => _marginTop + _lineHeight,
+      _ => _marginTop + (line + 1) * _lineHeight,
     };
     return CaretGeometry(x: x, y: y, height: _lineHeight);
+  }
+
+  int _lineCount(String text) {
+    if (text.isEmpty) return 1;
+    return '\n'.allMatches(text).length + 1;
+  }
+
+  (int line, int col) _lineColumnForOffset(String text, int offset) {
+    final clamped = offset.clamp(0, text.length);
+    final before = text.substring(0, clamped);
+    final parts = before.split('\n');
+    return (parts.length - 1, parts.last.length);
+  }
+
+  int _offsetForLineColumn(String text, int line, int col) {
+    var currentLine = 0;
+    var i = 0;
+    while (i < text.length && currentLine < line) {
+      if (text[i] == '\n') currentLine++;
+      i++;
+    }
+    if (currentLine < line) return text.length;
+    final lineStart = i;
+    final nextNl = text.indexOf('\n', lineStart);
+    final lineEnd = nextNl == -1 ? text.length : nextNl;
+    final colClamped = col.clamp(0, lineEnd - lineStart);
+    return lineStart + colClamped;
+  }
+
+  int _lineIndexFromY(double y) {
+    final raw = ((y - _marginTop - _lineHeight) / _lineHeight).round();
+    return raw.clamp(0, _lineCount(_text) - 1);
   }
 
   double _pageHeight() => (_sectionFormat['page_height'] as num).toDouble();
@@ -830,7 +864,9 @@ class MockDocumentEngine implements DocumentEngine {
       final offset = ((x - _marginLeft) / _charWidth).round().clamp(0, _footerText.length);
       return HitTestResult(runId: footerRunId, charOffset: offset);
     }
-    final offset = ((x - _marginLeft) / _charWidth).round().clamp(0, _text.length);
+    final line = _lineIndexFromY(y);
+    final col = ((x - _marginLeft) / _charWidth).round();
+    final offset = _offsetForLineColumn(_text, line, col).clamp(0, _text.length);
     return HitTestResult(runId: defaultRunId, charOffset: offset);
   }
 
@@ -848,7 +884,9 @@ class MockDocumentEngine implements DocumentEngine {
       final offset = ((x - _marginLeft) / _charWidth).round().clamp(0, _footerText.length);
       return _geomForOffset(footerRunId, offset);
     }
-    final offset = ((x - _marginLeft) / _charWidth).round().clamp(0, _text.length);
+    final line = _lineIndexFromY(y);
+    final col = ((x - _marginLeft) / _charWidth).round();
+    final offset = _offsetForLineColumn(_text, line, col).clamp(0, _text.length);
     return _geomForOffset(defaultRunId, offset);
   }
 
@@ -910,12 +948,20 @@ class MockDocumentEngine implements DocumentEngine {
   }
 
   void _insert(String runId, int offset, String text) {
-    if (text.isNotEmpty) _pushUndo();
+    if (text.isEmpty) return;
+    _pushUndo();
+    // Mirror engine paste normalize: CRLF → LF, strip junk controls / map PUA.
+    final normalized = text
+        .replaceAll('\r\n', '\n')
+        .replaceAll('\r', '\n')
+        .replaceAllMapped(RegExp(r'[\uF0E0-\uF0EF]'), (_) => '→')
+        .replaceAllMapped(RegExp(r'[\uF035\uF0B6\uF0B7\uF0A7\uF0A8]'), (_) => '•')
+        .replaceAllMapped(RegExp(r'[\uF000-\uF8FF]'), (_) => '·');
     final buffer = _bufferForRun(runId);
     final off = offset.clamp(0, buffer.length);
-    _setBufferForRun(runId, buffer.substring(0, off) + text + buffer.substring(off));
-    if (_trackChanges && text.isNotEmpty) {
-      _trackedRevisions.add(_TrackedRevision(runId: runId, offset: off, text: text));
+    _setBufferForRun(runId, buffer.substring(0, off) + normalized + buffer.substring(off));
+    if (_trackChanges && normalized.isNotEmpty) {
+      _trackedRevisions.add(_TrackedRevision(runId: runId, offset: off, text: normalized));
     }
     _version++;
   }
@@ -1002,9 +1048,15 @@ class MockDocumentEngine implements DocumentEngine {
   }
 
   @override
-  Future<bool> splitParagraphAsync(String runId, int offset) async {
-    _insert(runId, offset, '\n');
-    return true;
+  Future<HitTestResult?> splitParagraphAsync(String runId, int offset) async {
+    final buffer = _bufferForRun(runId);
+    final off = offset.clamp(0, buffer.length);
+    _insert(runId, off, '\n');
+    final caretOffset = off == 0 ? 0 : off + 1;
+    return HitTestResult(
+      runId: runId,
+      charOffset: caretOffset.clamp(0, _bufferForRun(runId).length),
+    );
   }
 
   void _mergeCharFormatPatch(Map<String, dynamic> patch) {
@@ -1788,7 +1840,10 @@ class MockDocumentEngine implements DocumentEngine {
   }
 
   @override
-  bool setCurrentPageIndex(int page) => true;
+  bool setCurrentPageIndex(int page) {
+    setCurrentPageIndexCount++;
+    return true;
+  }
 
   @override
   Future<bool> applyHeading1StyleAsync({String? caretRunId}) async =>

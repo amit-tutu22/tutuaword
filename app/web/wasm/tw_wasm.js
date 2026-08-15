@@ -1259,6 +1259,18 @@ export class TwEngine {
         return ret;
     }
     /**
+     * @returns {string | undefined}
+     */
+    last_split_caret() {
+        const ret = wasm.twengine_last_split_caret(this.__wbg_ptr);
+        let v1;
+        if (ret[0] !== 0) {
+            v1 = getStringFromWasm0(ret[0], ret[1]).slice();
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        }
+        return v1;
+    }
+    /**
      * @returns {string}
      */
     latest_chart_id() {

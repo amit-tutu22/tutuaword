@@ -2,6 +2,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:tutuaword/editor/controllers/view_controller.dart';
 import 'package:tutuaword/editor/display_list.dart';
 import 'package:tutuaword/editor/document_painter.dart';
 import 'package:tutuaword/editor/document_view_layout.dart';
@@ -26,6 +27,28 @@ class DocumentView extends StatefulWidget {
 
 /// Vertical gap between pages in the continuous scroll, in unscaled points.
 const double _pageGap = 24.0;
+
+/// Scroll offset that reveals [caretTop, caretBottom], or null if already visible.
+double? scrollOffsetToRevealCaret({
+  required double caretTop,
+  required double caretBottom,
+  required double viewportTop,
+  required double viewportHeight,
+  required double minExtent,
+  required double maxExtent,
+  double margin = 16,
+}) {
+  if (viewportHeight <= 0) return null;
+  final viewBottom = viewportTop + viewportHeight;
+  double? target;
+  if (caretBottom > viewBottom - margin) {
+    target = caretBottom + margin - viewportHeight;
+  } else if (caretTop < viewportTop + margin) {
+    target = caretTop - margin;
+  }
+  if (target == null) return null;
+  return target.clamp(minExtent, maxExtent);
+}
 
 class _DocumentViewState extends State<DocumentView> {
   /// Per-page display lists. Every page of a layout version shares one atlas,
@@ -60,6 +83,8 @@ class _DocumentViewState extends State<DocumentView> {
 
   /// Decoded document images shared across pages, keyed by asset id.
   final Map<String, ui.Image> _images = {};
+
+  bool _pendingScrollArmed = false;
 
   @override
   void initState() {
@@ -106,13 +131,24 @@ class _DocumentViewState extends State<DocumentView> {
         if (mounted) _ensureAtlasTexture(widget.controller.displayVersion);
       });
     }
-    final scrollPage = widget.controller.view.takeScrollRequest();
-    if (scrollPage != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _scrollToPage(scrollPage);
-      });
-    }
+    _armPendingScroll();
     if (mounted) setState(() {});
+  }
+
+  void _armPendingScroll() {
+    if (_pendingScrollArmed) return;
+    _pendingScrollArmed = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _pendingScrollArmed = false;
+      if (!mounted) return;
+      final caretScroll = widget.controller.view.takeCaretScrollRequest();
+      if (caretScroll != null) {
+        _scrollToKeepCaretVisible(caretScroll);
+        return;
+      }
+      final scrollPage = widget.controller.view.takeScrollRequest();
+      if (scrollPage != null) _scrollToPage(scrollPage);
+    });
   }
 
   double get _pageGapEffective {
@@ -133,7 +169,14 @@ class _DocumentViewState extends State<DocumentView> {
     if (extent <= 0 || !_scrollController.hasClients) return;
     final row = (_scrollController.offset / extent).floor();
     final columns = widget.controller.pageColumns.clamp(1, 3);
-    widget.controller.setVisiblePage(row * columns);
+    final visiblePage = row * columns;
+    // Caret-follow scroll may leave a sliver of the previous page in view;
+    // do not reset currentPage away from the caret's page.
+    if (widget.controller.caretRunId != null &&
+        visiblePage != widget.controller.caretPage) {
+      return;
+    }
+    widget.controller.setVisiblePage(visiblePage);
   }
 
   Future<void> _loadPage(int index) async {
@@ -253,6 +296,55 @@ class _DocumentViewState extends State<DocumentView> {
     }
   }
 
+  double get _listPaddingTop {
+    final gap = _pageGapEffective;
+    if (WordTheme.phoneChrome(context)) {
+      return gap * _effectiveScale(widget.controller);
+    }
+    return gap;
+  }
+
+  /// Maps a page-space caret Y into ListView scroll space.
+  double get _caretYScale {
+    final controller = widget.controller;
+    final zoom = _effectiveScale(controller);
+    if (WordTheme.phoneChrome(context)) return zoom;
+    final columns = controller.pageColumns.clamp(1, 3);
+    final gap = _pageGapEffective;
+    final rowWidth = columns * (controller.pageWidth + gap);
+    final fit = _viewportWidth > 0 && rowWidth > _viewportWidth
+        ? _viewportWidth / rowWidth
+        : 1.0;
+    return zoom * fit;
+  }
+
+  double _pageTopInScrollSpace(int page) {
+    final columns = widget.controller.pageColumns.clamp(1, 3);
+    final row = page.clamp(0, widget.controller.pageCount - 1) ~/ columns;
+    return _listPaddingTop + row * _pageExtent;
+  }
+
+  void _scrollToKeepCaretVisible(CaretScrollRequest request) {
+    if (!_scrollController.hasClients) return;
+    final scale = _caretYScale;
+    final pageTop = _pageTopInScrollSpace(request.page);
+    final caretTop = pageTop + (request.y - request.height) * scale;
+    final caretBottom = pageTop + request.y * scale;
+    final position = _scrollController.position;
+    final target = scrollOffsetToRevealCaret(
+      caretTop: caretTop,
+      caretBottom: caretBottom,
+      viewportTop: position.pixels,
+      viewportHeight: position.viewportDimension,
+      minExtent: position.minScrollExtent,
+      maxExtent: position.maxScrollExtent,
+    );
+    if (target == null) return;
+    if ((target - position.pixels).abs() < 1) return;
+    // Jump: key-repeat / IME bursts must not restart a 120ms animation.
+    _scrollController.jumpTo(target);
+  }
+
   @override
   Widget build(BuildContext context) {
     final controller = widget.controller;
@@ -287,7 +379,7 @@ class _DocumentViewState extends State<DocumentView> {
               }
               final canvasBg = controller.isWebLayout || controller.isReadMode
                   ? Colors.white
-                  : WordTheme.canvasGray;
+                  : WordTheme.chrome(context).canvas;
               final body = Container(
                 color: canvasBg,
                 child: controller.showRuler &&
@@ -481,7 +573,7 @@ class _DocumentViewState extends State<DocumentView> {
             onTap: controller.toggleSplitView,
             child: Container(
               height: 6,
-              color: WordTheme.groupDivider,
+              color: WordTheme.chrome(context).groupDivider,
               alignment: Alignment.center,
               child: Container(
                 width: 40,
@@ -613,7 +705,8 @@ class _DocumentViewState extends State<DocumentView> {
             );
           },
         ),
-        if (kIsWeb) WebGlyphTextInput(controller: controller),
+        if (EditorController.usesSoftKeyboardGlyphInput)
+          WebGlyphTextInput(controller: controller),
       ],
     );
   }
@@ -712,7 +805,8 @@ class _DocumentViewState extends State<DocumentView> {
             );
           },
         ),
-        if (kIsWeb) WebGlyphTextInput(controller: controller),
+        if (EditorController.usesSoftKeyboardGlyphInput)
+          WebGlyphTextInput(controller: controller),
       ],
     );
   }

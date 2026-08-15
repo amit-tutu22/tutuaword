@@ -123,7 +123,7 @@ abstract class DocumentEngine {
     String endRunId,
     int endOffset,
   );
-  Future<bool> splitParagraphAsync(String runId, int offset);
+  Future<HitTestResult?> splitParagraphAsync(String runId, int offset);
   Future<bool> applyCharFormatJsonAsync({
     required String startRunId,
     required int startOffset,

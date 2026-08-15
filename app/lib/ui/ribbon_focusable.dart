@@ -94,13 +94,17 @@ BoxDecoration ribbonFocusDecoration({
   required Color fill,
   required bool focused,
   BorderRadius? borderRadius,
+  Color? focusColor,
 }) {
   final radius = borderRadius ?? BorderRadius.circular(3);
   return BoxDecoration(
     color: fill,
     borderRadius: radius,
     border: focused
-        ? Border.all(color: WordTheme.activeTabUnderline, width: 1.5)
+        ? Border.all(
+            color: focusColor ?? WordTheme.activeTabUnderline,
+            width: 1.5,
+          )
         : null,
   );
 }

@@ -93,6 +93,7 @@ export class TwEngine {
     is_read_only(): boolean;
     last_error(): string;
     last_request_id(): number;
+    last_split_caret(): string | undefined;
     latest_chart_id(): string;
     latest_office_math_run_id(): string;
     merge_table_cells(caret_run_id: string): number;
@@ -245,6 +246,7 @@ export interface InitOutput {
     readonly twengine_is_read_only: (a: number) => number;
     readonly twengine_last_error: (a: number) => [number, number];
     readonly twengine_last_request_id: (a: number) => number;
+    readonly twengine_last_split_caret: (a: number) => [number, number];
     readonly twengine_latest_chart_id: (a: number) => [number, number, number, number];
     readonly twengine_latest_office_math_run_id: (a: number) => [number, number, number, number];
     readonly twengine_merge_table_cells: (a: number, b: number, c: number) => [number, number, number];

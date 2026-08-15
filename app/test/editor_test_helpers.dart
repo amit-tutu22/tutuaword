@@ -10,6 +10,7 @@ import 'package:tutuaword/bridge/document_session_store.dart';
 import 'package:tutuaword/bridge/mock_native_engine.dart';
 import 'package:tutuaword/editor/document_view.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
+import 'package:tutuaword/editor/editor_input.dart';
 import 'package:tutuaword/editor/recent_symbols.dart';
 import 'package:tutuaword/editor/text_to_speech.dart';
 
@@ -197,16 +198,26 @@ Future<void> typeText(
   await tester.pumpAndSettle();
 }
 
-/// Inserts [text] directly via the controller (no widget keyboard).
+/// Inserts [text] directly via the input dispatcher (no widget keyboard).
 Future<void> typeTextDirect(EditorController controller, String text) async {
   controller.ensureGlyphCaret();
   for (final ch in text.split('')) {
     if (ch == '\n') {
-      await controller.insertGlyphParagraphBreak();
+      await controller.handleEditorInput(const EditorInputEvent.newline());
     } else {
-      await controller.insertGlyphCharacter(ch);
+      await controller.handleEditorInput(EditorInputEvent.character(ch));
     }
   }
+  await controller.ensureLayoutReady();
+}
+
+/// Sends one [EditorInputEvent] through the dispatcher (no widget keyboard).
+Future<void> sendEditorInputDirect(
+  EditorController controller,
+  EditorInputEvent event,
+) async {
+  controller.ensureGlyphCaret();
+  await controller.handleEditorInput(event);
   await controller.ensureLayoutReady();
 }
 

@@ -680,11 +680,28 @@ class WasmEngine {
             endOffset: endOffset,
           )));
 
-  Future<bool> splitParagraphAsync(String runId, int offset) =>
-      enqueueEdit(() => dispatchCommand(CommandCodec.splitParagraphAt(
-            runId: runId,
-            offset: offset,
-          )));
+  Future<HitTestResult?> splitParagraphAsync(String runId, int offset) async {
+    final ok = await enqueueEdit(() => dispatchCommand(CommandCodec.splitParagraphAt(
+          runId: runId,
+          offset: offset,
+        )));
+    if (!ok) return null;
+    return _fetchLastSplitCaret();
+  }
+
+  HitTestResult? _fetchLastSplitCaret() {
+    try {
+      final json = callMethodOrNull(_engine, 'last_split_caret', []);
+      if (json == null) return null;
+      final map = jsonDecode(json.toString()) as Map<String, dynamic>;
+      return HitTestResult(
+        runId: map['run_id'] as String,
+        charOffset: map['offset'] as int,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
 
   Future<bool> applyCharFormatJsonAsync({
     required String startRunId,

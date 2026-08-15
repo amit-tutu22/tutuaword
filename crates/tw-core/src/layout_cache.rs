@@ -14,6 +14,8 @@ pub struct LayoutCache {
     page_count: u32,
     document: Arc<Document>,
     document_version: u64,
+    /// Caret landing point after the most recent successful paragraph split.
+    last_split_caret: Option<(NodeId, usize)>,
 }
 
 impl LayoutCache {
@@ -310,6 +312,14 @@ impl LayoutCache {
             .map(|line| line.width)
             .unwrap_or(0.0)
     }
+
+    pub fn set_last_split_caret(&mut self, run_id: NodeId, offset: usize) {
+        self.last_split_caret = Some((run_id, offset));
+    }
+
+    pub fn last_split_caret(&self) -> Option<(NodeId, usize)> {
+        self.last_split_caret
+    }
 }
 
 impl Default for LayoutCache {
@@ -322,6 +332,7 @@ impl Default for LayoutCache {
             page_count: 0,
             document: Arc::new(Document::default()),
             document_version: 0,
+            last_split_caret: None,
         }
     }
 }

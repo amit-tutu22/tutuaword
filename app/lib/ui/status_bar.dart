@@ -14,7 +14,7 @@ class WordStatusBar extends StatelessWidget {
     return Tooltip(
       message: controller.statusText,
       child: Container(
-        color: WordTheme.statusBarSurface,
+        color: WordTheme.chrome(context).statusBar,
         padding: EdgeInsets.only(
           bottom: viewPadding.bottom,
           left: viewPadding.left + 8,
@@ -33,7 +33,7 @@ class WordStatusBar extends StatelessWidget {
       children: [
         Expanded(
           child: Text(
-            'Page ${controller.currentPage + 1} of ${controller.pageCount} · ${controller.wordCount} words',
+            'Page ${controller.statusPage + 1} of ${controller.pageCount} · ${controller.wordCount} words',
             style: WordTheme.statusBarText,
             overflow: TextOverflow.ellipsis,
             maxLines: 1,
@@ -175,14 +175,14 @@ class WordStatusBar extends StatelessWidget {
             scrollDirection: Axis.horizontal,
             child: Row(
               children: [
-                _StatusItem('Page ${controller.currentPage + 1} of ${controller.pageCount}'),
-                _divider(),
+                _StatusItem('Page ${controller.statusPage + 1} of ${controller.pageCount}'),
+                _divider(context),
                 _StatusItem('${controller.wordCount} words'),
-                _divider(),
+                _divider(context),
                 const Icon(Icons.check_circle_outline, size: 12, color: Color(0xFF555555)),
-                _divider(),
+                _divider(context),
                 _StatusItem('English (India)'),
-                _divider(),
+                _divider(context),
                 _StatusItem(controller.accessibilityStatusLabel),
               ],
             ),
@@ -214,7 +214,7 @@ class WordStatusBar extends StatelessWidget {
           selected: controller.isWebLayout,
           onPressed: controller.setWebLayout,
         ),
-        _divider(),
+        _divider(context),
         IconButton(
           icon: const Icon(Icons.remove, size: 14),
           padding: EdgeInsets.zero,
@@ -249,11 +249,11 @@ class WordStatusBar extends StatelessWidget {
     );
   }
 
-  Widget _divider() => Container(
+  Widget _divider(BuildContext context) => Container(
         width: 1,
         height: 14,
         margin: const EdgeInsets.symmetric(horizontal: 8),
-        color: WordTheme.groupDivider,
+        color: WordTheme.chrome(context).groupDivider,
       );
 }
 
@@ -303,8 +303,10 @@ class _ViewModeButtonState extends State<_ViewModeButton> {
             margin: const EdgeInsets.symmetric(horizontal: 1),
             decoration: BoxDecoration(
               color: widget.selected
-                  ? WordTheme.ribbonSelected
-                  : (_hovered ? WordTheme.ribbonHover : Colors.transparent),
+                  ? WordTheme.chrome(context).ribbonSelected
+                  : (_hovered
+                      ? WordTheme.chrome(context).ribbonHover
+                      : Colors.transparent),
               borderRadius: BorderRadius.circular(2),
             ),
             child: Icon(
