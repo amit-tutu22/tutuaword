@@ -205,6 +205,11 @@ class EditorMenuBar extends StatelessWidget {
             ),
             PlatformMenuItem(
               label: 'Save as DOCX…',
+              shortcut: const SingleActivator(
+                LogicalKeyboardKey.keyS,
+                meta: true,
+                shift: true,
+              ),
               onSelected: () => onSaveAs('docx'),
             ),
             PlatformMenuItem(

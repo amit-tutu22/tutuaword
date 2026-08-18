@@ -131,6 +131,19 @@ Notes:
 - A page is the scroll unit in this viewport, so Page Up / Page Down move one
   page and preserve the caret's column.
 
+## macOS and iOS
+
+The same Dart bindings serve every platform, with two differences worth knowing:
+
+- **macOS reserves Cmd+M for Minimize** (the Window menu's system item), so
+  Increase indent is reachable there as Ctrl+M. Every other chord accepts either
+  modifier.
+- **iOS and iPadOS route keys through the hidden text field.** The document
+  canvas has no `Focus` on those platforms, so hardware keystrokes arrive at
+  `WebGlyphTextInput`'s focus node: editing keys are handled there and Cmd chords
+  are passed up to the `Shortcuts` map. An iPad Magic Keyboard has no Home/End,
+  so Cmd+Left / Cmd+Right are the line-edge chords there, as in Word.
+
 ## Ribbon keyboard navigation
 
 The ribbon (`WordRibbon`) is wrapped in a `FocusTraversalGroup` with

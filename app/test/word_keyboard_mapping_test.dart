@@ -3,9 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tutuaword/bridge/mock_native_engine.dart';
-import 'package:tutuaword/editor/controllers/formatting_controller.dart';
-import 'package:tutuaword/editor/editor_input.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
+import 'package:tutuaword/editor/editor_input.dart';
 import 'package:tutuaword/editor/editor_screen.dart';
 import 'package:tutuaword/editor/web_glyph_text_input.dart';
 import 'package:tutuaword/ui/keyboard_shortcuts.dart';
@@ -62,10 +61,18 @@ Future<void> _sendMetaChord(
   await tester.pumpAndSettle();
 }
 
-/// Runs [body] as if the binary were the macOS or iOS build.
-void _asPlatform(TargetPlatform platform) {
+/// Runs [body] as if the binary were the macOS or iOS build. The override has
+/// to be cleared inside the test body — the framework checks it on the way out.
+Future<void> _onPlatform(
+  TargetPlatform platform,
+  Future<void> Function() body,
+) async {
   debugDefaultTargetPlatformOverride = platform;
-  addTearDown(() => debugDefaultTargetPlatformOverride = null);
+  try {
+    await body();
+  } finally {
+    debugDefaultTargetPlatformOverride = null;
+  }
 }
 
 void main() {
@@ -428,61 +435,67 @@ void main() {
   group('macOS build — Cmd carries the chords', () {
     testWidgets('Cmd+B, Cmd+I and Cmd+U toggle character formatting',
         (tester) async {
-      _asPlatform(TargetPlatform.macOS);
       final controller = createTestEditorController();
       addTearDown(controller.dispose);
       controller.setDisplayListForTest(fakeGlyphDisplayList());
-      await tester.pumpWidget(
-        MaterialApp(home: EditorScreen(controller: controller)),
-      );
-      await tester.pumpAndSettle();
 
-      await _sendMetaChord(tester, LogicalKeyboardKey.keyB);
-      expect(controller.bold, isTrue);
+      await _onPlatform(TargetPlatform.macOS, () async {
+        await tester.pumpWidget(
+          MaterialApp(home: EditorScreen(controller: controller)),
+        );
+        await tester.pumpAndSettle();
 
-      await _sendMetaChord(tester, LogicalKeyboardKey.keyI);
-      expect(controller.italic, isTrue);
+        await _sendMetaChord(tester, LogicalKeyboardKey.keyB);
+        expect(controller.bold, isTrue);
 
-      await _sendMetaChord(tester, LogicalKeyboardKey.keyU);
-      expect(controller.underline, isTrue);
+        await _sendMetaChord(tester, LogicalKeyboardKey.keyI);
+        expect(controller.italic, isTrue);
+
+        await _sendMetaChord(tester, LogicalKeyboardKey.keyU);
+        expect(controller.underline, isTrue);
+      });
     });
 
     testWidgets('Cmd+Shift+Z redoes what Cmd+Z undid', (tester) async {
-      _asPlatform(TargetPlatform.macOS);
       final controller = createTestEditorController();
       addTearDown(controller.dispose);
       controller.setDisplayListForTest(fakeGlyphDisplayList());
-      await tester.pumpWidget(
-        MaterialApp(home: EditorScreen(controller: controller)),
-      );
-      await tester.pumpAndSettle();
 
-      await typeTextDirect(controller, 'abc');
-      await _sendMetaChord(tester, LogicalKeyboardKey.keyZ);
-      await controller.ensureLayoutReady();
-      expect(controller.documentText, 'ab');
+      await _onPlatform(TargetPlatform.macOS, () async {
+        await tester.pumpWidget(
+          MaterialApp(home: EditorScreen(controller: controller)),
+        );
+        await tester.pumpAndSettle();
 
-      await _sendMetaChord(tester, LogicalKeyboardKey.keyZ, shift: true);
-      await controller.ensureLayoutReady();
-      expect(controller.documentText, 'abc');
+        await typeTextDirect(controller, 'abc');
+        await _sendMetaChord(tester, LogicalKeyboardKey.keyZ);
+        await controller.ensureLayoutReady();
+        expect(controller.documentText, 'ab');
+
+        await _sendMetaChord(tester, LogicalKeyboardKey.keyZ, shift: true);
+        await controller.ensureLayoutReady();
+        expect(controller.documentText, 'abc');
+      });
     });
 
     testWidgets('a Cmd chord never types its letter', (tester) async {
-      _asPlatform(TargetPlatform.macOS);
       final controller = createTestEditorController();
       addTearDown(controller.dispose);
       controller.setDisplayListForTest(fakeGlyphDisplayList());
-      await tester.pumpWidget(
-        MaterialApp(home: EditorScreen(controller: controller)),
-      );
-      await tester.pumpAndSettle();
-      controller.ensureGlyphCaret();
 
-      await _sendMetaChord(tester, LogicalKeyboardKey.keyB);
-      await _sendMetaChord(tester, LogicalKeyboardKey.keyL);
-      await controller.ensureLayoutReady();
+      await _onPlatform(TargetPlatform.macOS, () async {
+        await tester.pumpWidget(
+          MaterialApp(home: EditorScreen(controller: controller)),
+        );
+        await tester.pumpAndSettle();
+        controller.ensureGlyphCaret();
 
-      expect(controller.documentText, isEmpty);
+        await _sendMetaChord(tester, LogicalKeyboardKey.keyB);
+        await _sendMetaChord(tester, LogicalKeyboardKey.keyL);
+        await controller.ensureLayoutReady();
+
+        expect(controller.documentText, isEmpty);
+      });
     });
   });
 
@@ -507,8 +520,10 @@ void main() {
                   },
                 ),
               },
-              child: Stack(
-                children: [WebGlyphTextInput(controller: controller)],
+              child: Material(
+                child: Stack(
+                  children: [WebGlyphTextInput(controller: controller)],
+                ),
               ),
             ),
           ),
@@ -519,53 +534,59 @@ void main() {
     }
 
     testWidgets('Cmd chords bubble past the hidden text field', (tester) async {
-      _asPlatform(TargetPlatform.iOS);
       final controller = createTestEditorController();
       addTearDown(controller.dispose);
       controller.setDisplayListForTest(fakeGlyphDisplayList());
-      final fired = await pumpOverlay(tester, controller);
 
-      await _sendMetaChord(tester, LogicalKeyboardKey.keyB);
-      await _sendMetaChord(tester, LogicalKeyboardKey.keyS, shift: true);
+      await _onPlatform(TargetPlatform.iOS, () async {
+        final fired = await pumpOverlay(tester, controller);
 
-      expect(fired, contains(WordChord.bold));
-      expect(fired, contains(WordChord.saveAs));
+        await _sendMetaChord(tester, LogicalKeyboardKey.keyB);
+        await _sendMetaChord(tester, LogicalKeyboardKey.keyS, shift: true);
+
+        expect(fired, contains(WordChord.bold));
+        expect(fired, contains(WordChord.saveAs));
+      });
     });
 
     testWidgets('Cmd+Left and Cmd+Right reach the line edges', (tester) async {
       // An iPad Magic Keyboard has no Home/End, so Word uses Cmd+Arrow there.
-      _asPlatform(TargetPlatform.iOS);
       final controller = createTestEditorController();
       addTearDown(controller.dispose);
       controller.setDisplayListForTest(fakeGlyphDisplayList());
-      await pumpOverlay(tester, controller);
-      await typeTextDirect(controller, 'alpha beta');
 
-      await _sendMetaChord(tester, LogicalKeyboardKey.arrowLeft);
-      expect(controller.caretOffset, 0);
+      await _onPlatform(TargetPlatform.iOS, () async {
+        await pumpOverlay(tester, controller);
+        await typeTextDirect(controller, 'alpha beta');
 
-      await _sendMetaChord(tester, LogicalKeyboardKey.arrowRight);
-      expect(controller.caretOffset, 'alpha beta'.length);
+        await _sendMetaChord(tester, LogicalKeyboardKey.arrowLeft);
+        expect(controller.caretOffset, 0);
+
+        await _sendMetaChord(tester, LogicalKeyboardKey.arrowRight);
+        expect(controller.caretOffset, 'alpha beta'.length);
+      });
     });
 
     testWidgets('Shift+Enter keeps the break inside the paragraph',
         (tester) async {
-      _asPlatform(TargetPlatform.iOS);
       final controller = createTestEditorController();
       addTearDown(controller.dispose);
       controller.setDisplayListForTest(fakeGlyphDisplayList());
-      await pumpOverlay(tester, controller);
-      await typeTextDirect(controller, 'first');
-      final runBefore = controller.caretRunId;
 
-      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
-      await tester.pumpAndSettle();
-      await controller.ensureLayoutReady();
+      await _onPlatform(TargetPlatform.iOS, () async {
+        await pumpOverlay(tester, controller);
+        await typeTextDirect(controller, 'first');
+        final runBefore = controller.caretRunId;
 
-      expect(controller.caretRunId, runBefore);
-      expect(controller.documentText, contains('\n'));
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+        await tester.pumpAndSettle();
+        await controller.ensureLayoutReady();
+
+        expect(controller.caretRunId, runBefore);
+        expect(controller.documentText, contains('\n'));
+      });
     });
   });
 
