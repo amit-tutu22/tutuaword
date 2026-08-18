@@ -32,6 +32,11 @@ abstract class DocumentEngine {
   String? fetchBookmarks();
   /// JSON `{ url, anchor, text, tooltip }` when [runId] is a hyperlink.
   String? fetchHyperlinkAt(String runId);
+
+  /// Where Ctrl+Up / Ctrl+Down should land from [runId], as JSON
+  /// `{ start: {run, offset}, prev: {run, offset}?, next: {run, offset}? }` —
+  /// the caret's own paragraph start and its neighbours', null at the edges.
+  String? fetchParagraphNav(String runId, int offset);
   /// JSON semantic accessibility tree (F21.S1).
   String? fetchSemanticTree();
   /// JSON accessibility checker issues (F21.S4).
@@ -279,6 +284,16 @@ abstract class DocumentEngine {
   Future<bool> applyBulletListStyleAsync({String? caretRunId});
   Future<bool> applyNumberedListStyleAsync({String? caretRunId});
   Future<bool> adjustListLevelAsync({String? caretRunId, required int delta});
+
+  /// Alt+Shift+Up (−1) / Down (+1) — move the caret's paragraph among its
+  /// siblings. False when it is already the first or last of its section.
+  /// [caretOffset] only matters to engines that keep several paragraphs in one
+  /// run; the native engine finds the paragraph from [caretRunId] alone.
+  Future<bool> moveBlockAsync({
+    String? caretRunId,
+    int caretOffset = 0,
+    required int delta,
+  });
   Future<bool> restartNumberingAsync({String? caretRunId});
   Future<bool> continueNumberingAsync({String? caretRunId});
   Future<bool> insertTableBlockAsync(int rows, int cols, {String? caretRunId});

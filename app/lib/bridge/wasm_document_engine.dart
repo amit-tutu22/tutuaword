@@ -74,6 +74,10 @@ class WasmDocumentEngine implements DocumentEngine {
   String? fetchHyperlinkAt(String runId) => _inner.fetchHyperlinkAt(runId);
 
   @override
+  String? fetchParagraphNav(String runId, int offset) =>
+      _inner.fetchParagraphNav(runId);
+
+  @override
   String? fetchSemanticTree() => _inner.fetchSemanticTree();
 
   @override
@@ -576,6 +580,14 @@ class WasmDocumentEngine implements DocumentEngine {
   @override
   Future<bool> adjustListLevelAsync({String? caretRunId, required int delta}) =>
       _inner.adjustListLevelAsync(caretRunId: caretRunId, delta: delta);
+
+  @override
+  Future<bool> moveBlockAsync({
+    String? caretRunId,
+    int caretOffset = 0,
+    required int delta,
+  }) =>
+      _inner.moveBlockAsync(caretRunId: caretRunId, delta: delta);
 
   @override
   Future<bool> restartNumberingAsync({String? caretRunId}) =>

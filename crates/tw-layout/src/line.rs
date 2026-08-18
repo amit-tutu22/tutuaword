@@ -206,6 +206,7 @@ pub fn layout_paragraph(
             glyphs: Vec::new(),
             paragraph_id: para.id,
             run_map: vec![(x, x, para.runs[0].id, 0)],
+            run_map_chars: vec![0],
             list_marker: None,
             justify_stops: Vec::new(),
             decorations: Vec::new(),
@@ -388,6 +389,7 @@ pub fn layout_paragraph(
             glyphs: Vec::new(),
             paragraph_id: para.id,
             run_map: vec![(x, x, para.runs[0].id, 0)],
+            run_map_chars: vec![0],
             list_marker: None,
             justify_stops: Vec::new(),
             decorations: Vec::new(),
@@ -812,6 +814,7 @@ fn blank_line(
             .first()
             .map(|run| vec![(x, x, run.id, 0)])
             .unwrap_or_default(),
+        run_map_chars: para.runs.first().map(|_| vec![0]).unwrap_or_default(),
         list_marker: None,
         justify_stops: Vec::new(),
         decorations: Vec::new(),
@@ -843,6 +846,7 @@ fn shape_line(
     let mut cursor_x = x;
     let mut glyphs = Vec::new();
     let mut run_map = Vec::new();
+    let mut run_map_chars = Vec::new();
     let line_end_byte = line_start_byte + line_text.len();
 
     let segments = run_segments_for_range(para, line_start_byte, line_end_byte, field_context);
@@ -1054,6 +1058,7 @@ fn shape_line(
         }
 
         run_map.push((seg_start_x, cursor_x, run.id, char_offset));
+        run_map_chars.push(segment_text.chars().count());
     }
 
     let ascent = line_ascent.max(default_size);
@@ -1070,6 +1075,7 @@ fn shape_line(
         glyphs,
         paragraph_id: para.id,
         run_map,
+        run_map_chars,
         list_marker: None,
         justify_stops,
         decorations,

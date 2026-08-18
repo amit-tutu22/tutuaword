@@ -50,6 +50,11 @@ pub struct TextLine {
     pub glyphs: Vec<PositionedGlyph>,
     pub paragraph_id: NodeId,
     pub run_map: Vec<(f32, f32, NodeId, usize)>,
+    /// Character count of each `run_map` segment, parallel to `run_map`.
+    ///
+    /// Blank characters (spaces, tabs) rasterize to empty bitmaps and never
+    /// reach `glyphs`, so a caret offset cannot be recovered by counting glyphs.
+    pub run_map_chars: Vec<usize>,
     pub list_marker: Option<String>,
     /// X positions immediately after a space character, used for justification.
     pub justify_stops: Vec<f32>,
@@ -295,7 +300,11 @@ impl LineMap {
 fn line_end_offset(line: &TextLine) -> Option<(NodeId, usize)> {
     let last_index = line.run_map.len().checked_sub(1)?;
     let &(x_start, x_end, run_id, char_offset) = line.run_map.get(last_index)?;
-    let seg_chars = segment_char_count(line, last_index, x_start, x_end);
+    let seg_chars = line
+        .run_map_chars
+        .get(last_index)
+        .copied()
+        .unwrap_or_else(|| segment_char_count(line, last_index, x_start, x_end));
     Some((run_id, char_offset + seg_chars))
 }
 

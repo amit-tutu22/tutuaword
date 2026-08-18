@@ -838,6 +838,7 @@ pub fn apply(
         )?,
         Command::RestoreFindReplace { segments } => restore_find_replace(doc, segments)?,
         Command::DeleteBlock { id } => block_ops::delete_block(doc, *id)?,
+        Command::MoveBlock { id, delta } => block_ops::move_block(doc, *id, *delta)?,
         Command::InsertBlockBefore {
             before_block_id,
             block,

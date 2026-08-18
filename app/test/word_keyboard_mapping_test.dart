@@ -61,6 +61,28 @@ Future<void> _sendMetaChord(
   await tester.pumpAndSettle();
 }
 
+/// Presses [key] with an arbitrary modifier set, for chords that carry no
+/// Ctrl/Cmd at all (Word's function keys and its Alt+Shift outline chords).
+Future<void> _sendChord(
+  WidgetTester tester,
+  LogicalKeyboardKey key, {
+  bool control = false,
+  bool meta = false,
+  bool shift = false,
+  bool alt = false,
+}) async {
+  if (control) await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+  if (meta) await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+  if (shift) await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+  if (alt) await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+  await tester.sendKeyEvent(key);
+  if (alt) await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+  if (shift) await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+  if (meta) await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+  if (control) await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+  await tester.pumpAndSettle();
+}
+
 /// Runs [body] as if the binary were the macOS or iOS build. The override has
 /// to be cleared inside the test body — the framework checks it on the way out.
 Future<void> _onPlatform(
@@ -590,6 +612,419 @@ void main() {
     });
   });
 
+  group('Chords wired on top of the first pass', () {
+    /// Mounts only the `Shortcuts` map, so a chord that resolves to the wrong
+    /// intent — or to none — is visible without any controller state.
+    Future<List<WordChord>> pumpChordProbe(WidgetTester tester) async {
+      final fired = <WordChord>[];
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Shortcuts(
+            shortcuts: kWordChordShortcuts,
+            child: Actions(
+              actions: <Type, Action<Intent>>{
+                WordChordIntent: CallbackAction<WordChordIntent>(
+                  onInvoke: (intent) {
+                    fired.add(intent.chord);
+                    return null;
+                  },
+                ),
+              },
+              child: const Focus(autofocus: true, child: SizedBox()),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      return fired;
+    }
+
+    testWidgets('each new chord resolves to its own command', (tester) async {
+      final fired = await pumpChordProbe(tester);
+
+      await _sendCtrlChord(tester, LogicalKeyboardKey.keyC, shift: true);
+      await _sendCtrlChord(tester, LogicalKeyboardKey.keyV, shift: true);
+      await _sendCtrlChord(tester, LogicalKeyboardKey.keyV, alt: true);
+      await _sendCtrlChord(tester, LogicalKeyboardKey.keyX, shift: true);
+      await _sendCtrlChord(tester, LogicalKeyboardKey.keyH, shift: true);
+      await _sendCtrlChord(tester, LogicalKeyboardKey.keyL, shift: true);
+      await _sendCtrlChord(tester, LogicalKeyboardKey.bracketRight);
+      await _sendCtrlChord(tester, LogicalKeyboardKey.bracketLeft);
+      await _sendCtrlChord(tester, LogicalKeyboardKey.space, shift: true);
+      await _sendCtrlChord(tester, LogicalKeyboardKey.minus);
+      await _sendCtrlChord(tester, LogicalKeyboardKey.minus, shift: true);
+      await _sendCtrlChord(tester, LogicalKeyboardKey.keyC, alt: true);
+      await _sendCtrlChord(tester, LogicalKeyboardKey.keyR, alt: true);
+      await _sendCtrlChord(tester, LogicalKeyboardKey.keyT, alt: true);
+      await _sendCtrlChord(tester, LogicalKeyboardKey.period, alt: true);
+      await _sendCtrlChord(tester, LogicalKeyboardKey.keyF, alt: true);
+      await _sendCtrlChord(tester, LogicalKeyboardKey.keyD, alt: true);
+      await _sendCtrlChord(tester, LogicalKeyboardKey.f2);
+      await _sendChord(tester, LogicalKeyboardKey.f3, shift: true);
+      await _sendChord(tester, LogicalKeyboardKey.f7);
+      await _sendChord(tester, LogicalKeyboardKey.f12);
+      await _sendChord(tester, LogicalKeyboardKey.keyD, shift: true, alt: true);
+      await _sendChord(tester, LogicalKeyboardKey.keyP, shift: true, alt: true);
+      await _sendChord(
+        tester,
+        LogicalKeyboardKey.arrowLeft,
+        shift: true,
+        alt: true,
+      );
+      await _sendChord(
+        tester,
+        LogicalKeyboardKey.arrowRight,
+        shift: true,
+        alt: true,
+      );
+
+      expect(fired, <WordChord>[
+        WordChord.copyFormatting,
+        WordChord.pasteFormatting,
+        WordChord.pasteSpecial,
+        WordChord.strikethrough,
+        WordChord.hiddenText,
+        WordChord.bulletList,
+        WordChord.growFont,
+        WordChord.shrinkFont,
+        WordChord.nonbreakingSpace,
+        WordChord.optionalHyphen,
+        WordChord.nonbreakingHyphen,
+        WordChord.copyright,
+        WordChord.registered,
+        WordChord.trademark,
+        WordChord.ellipsis,
+        WordChord.footnote,
+        WordChord.endnote,
+        WordChord.printPreview,
+        WordChord.changeCase,
+        WordChord.spelling,
+        WordChord.saveAs,
+        WordChord.dateField,
+        WordChord.pageNumberField,
+        WordChord.promoteOutline,
+        WordChord.demoteOutline,
+      ]);
+    });
+
+    testWidgets('Ctrl+Shift+X and Ctrl+Shift+H reach the run format',
+        (tester) async {
+      final controller = createTestEditorController();
+      addTearDown(controller.dispose);
+      controller.setDisplayListForTest(fakeGlyphDisplayList());
+      await tester.pumpWidget(
+        MaterialApp(home: EditorScreen(controller: controller)),
+      );
+      await tester.pumpAndSettle();
+
+      await _sendCtrlChord(tester, LogicalKeyboardKey.keyX, shift: true);
+      expect(controller.strikethrough, isTrue);
+
+      await _sendCtrlChord(tester, LogicalKeyboardKey.keyH, shift: true);
+      expect(controller.hidden, isTrue);
+    });
+
+    testWidgets('Ctrl+Alt+C types a copyright sign, not a "c"', (tester) async {
+      final controller = createTestEditorController();
+      addTearDown(controller.dispose);
+      controller.setDisplayListForTest(fakeGlyphDisplayList());
+      await tester.pumpWidget(
+        MaterialApp(home: EditorScreen(controller: controller)),
+      );
+      await tester.pumpAndSettle();
+      controller.ensureGlyphCaret();
+
+      await _sendCtrlChord(tester, LogicalKeyboardKey.keyC, alt: true);
+      await controller.ensureLayoutReady();
+
+      expect(controller.documentText, '\u00A9');
+    });
+
+    testWidgets('Shift+F3 walks lower → Title → UPPER → lower', (tester) async {
+      final controller = createTestEditorController();
+      addTearDown(controller.dispose);
+      await typeTextDirect(controller, 'alpha beta');
+      await controller.selectAll();
+
+      await controller.cycleChangeCase();
+      expect(controller.documentText, 'Alpha Beta');
+
+      await controller.cycleChangeCase();
+      expect(controller.documentText, 'ALPHA BETA');
+
+      await controller.cycleChangeCase();
+      expect(controller.documentText, 'alpha beta');
+    });
+
+    test('Alt+Shift+Arrow is an outline chord off Apple platforms', () {
+      // The editor surface must let it through so the list re-levels; on macOS
+      // and iPadOS the OS convention wins and it stays word-wise selection.
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      try {
+        expect(
+          _kindFor(LogicalKeyboardKey.arrowLeft, shift: true, alt: true),
+          isNull,
+        );
+        expect(
+          _kindFor(LogicalKeyboardKey.arrowLeft, alt: true),
+          EditorInputKind.wordLeft,
+        );
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      try {
+        expect(
+          _kindFor(LogicalKeyboardKey.arrowRight, shift: true, alt: true),
+          EditorInputKind.wordRight,
+        );
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    });
+  });
+
+  group('Paragraph motion and paragraph-level chords', () {
+    /// Three paragraphs the mock engine reports as newline-separated text.
+    EditorController threeParagraphController() {
+      final controller = createTestEditorController(
+        engine: MockDocumentEngine(initialText: 'alpha\nbeta\ngamma'),
+      );
+      controller.ensureGlyphCaret();
+      return controller;
+    }
+
+    testWidgets('Ctrl+Up goes to this paragraph start, then the previous one',
+        (tester) async {
+      final controller = threeParagraphController();
+      addTearDown(controller.dispose);
+      await sendEditorInputDirect(
+        controller,
+        const EditorInputEvent.documentEnd(),
+      );
+      expect(controller.caretOffset, 'alpha\nbeta\ngamma'.length);
+
+      await sendEditorInputDirect(
+        controller,
+        const EditorInputEvent.paragraphUp(),
+      );
+      expect(controller.caretOffset, 'alpha\nbeta\n'.length);
+
+      await sendEditorInputDirect(
+        controller,
+        const EditorInputEvent.paragraphUp(),
+      );
+      expect(controller.caretOffset, 'alpha\n'.length);
+    });
+
+    testWidgets('Ctrl+Down lands on the next paragraph start', (tester) async {
+      final controller = threeParagraphController();
+      addTearDown(controller.dispose);
+      await sendEditorInputDirect(
+        controller,
+        const EditorInputEvent.documentStart(),
+      );
+
+      await sendEditorInputDirect(
+        controller,
+        const EditorInputEvent.paragraphDown(),
+      );
+      expect(controller.caretOffset, 'alpha\n'.length);
+
+      await sendEditorInputDirect(
+        controller,
+        const EditorInputEvent.paragraphDown(),
+      );
+      expect(controller.caretOffset, 'alpha\nbeta\n'.length);
+    });
+
+    testWidgets('Ctrl+Shift+Down selects to the end of the paragraph',
+        (tester) async {
+      final controller = threeParagraphController();
+      addTearDown(controller.dispose);
+      await sendEditorInputDirect(
+        controller,
+        const EditorInputEvent.documentStart(),
+      );
+
+      await sendEditorInputDirect(
+        controller,
+        const EditorInputEvent.paragraphDown(shift: true),
+      );
+
+      expect(controller.hasGlyphSelection, isTrue);
+      expect(controller.selectedText, 'alpha\n');
+    });
+
+    test('Ctrl+Arrow and Option+Arrow both mean paragraph motion', () {
+      expect(
+        _kindFor(LogicalKeyboardKey.arrowUp, control: true),
+        EditorInputKind.paragraphUp,
+      );
+      expect(
+        _kindFor(LogicalKeyboardKey.arrowDown, control: true),
+        EditorInputKind.paragraphDown,
+      );
+      expect(
+        _kindFor(LogicalKeyboardKey.arrowUp, shift: true),
+        EditorInputKind.arrowUp,
+      );
+
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      try {
+        expect(
+          _kindFor(LogicalKeyboardKey.arrowDown, alt: true),
+          EditorInputKind.paragraphDown,
+        );
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    });
+
+    test('Alt+Shift+Up/Down is a command chord on every platform', () {
+      for (final platform in const [
+        TargetPlatform.windows,
+        TargetPlatform.macOS,
+        TargetPlatform.iOS,
+      ]) {
+        debugDefaultTargetPlatformOverride = platform;
+        try {
+          expect(
+            _kindFor(LogicalKeyboardKey.arrowUp, shift: true, alt: true),
+            isNull,
+            reason: 'Alt+Shift+Up must reach the move-paragraph chord',
+          );
+          expect(
+            _kindFor(LogicalKeyboardKey.arrowDown, shift: true, alt: true),
+            isNull,
+          );
+        } finally {
+          debugDefaultTargetPlatformOverride = null;
+        }
+      }
+    });
+
+    testWidgets('Alt+Shift+Up moves the paragraph above its neighbour',
+        (tester) async {
+      final controller = threeParagraphController();
+      addTearDown(controller.dispose);
+      controller.setDisplayListForTest(fakeGlyphDisplayList());
+      await tester.pumpWidget(
+        MaterialApp(home: EditorScreen(controller: controller)),
+      );
+      await tester.pumpAndSettle();
+      await sendEditorInputDirect(
+        controller,
+        const EditorInputEvent.documentEnd(),
+      );
+
+      await _sendChord(
+        tester,
+        LogicalKeyboardKey.arrowUp,
+        shift: true,
+        alt: true,
+      );
+      await controller.ensureLayoutReady();
+
+      expect(controller.documentText, 'alpha\ngamma\nbeta');
+    });
+
+    testWidgets('Alt+Shift+Down moves it back, and undo restores the order',
+        (tester) async {
+      final controller = threeParagraphController();
+      addTearDown(controller.dispose);
+      await sendEditorInputDirect(
+        controller,
+        const EditorInputEvent.documentStart(),
+      );
+
+      await controller.moveParagraph(direction: 1);
+      await controller.ensureLayoutReady();
+      expect(controller.documentText, 'beta\nalpha\ngamma');
+
+      await controller.undo();
+      await controller.ensureLayoutReady();
+      expect(controller.documentText, 'alpha\nbeta\ngamma');
+    });
+
+    testWidgets('moving past the first paragraph reports the edge',
+        (tester) async {
+      final controller = threeParagraphController();
+      addTearDown(controller.dispose);
+      await sendEditorInputDirect(
+        controller,
+        const EditorInputEvent.documentStart(),
+      );
+
+      await controller.moveParagraph(direction: -1);
+      await controller.ensureLayoutReady();
+
+      expect(controller.documentText, 'alpha\nbeta\ngamma');
+      expect(controller.statusText, contains('already at the edge'));
+    });
+
+    testWidgets('Ctrl+T hangs the first line, Ctrl+Shift+T pulls it back',
+        (tester) async {
+      final controller = createTestEditorController();
+      addTearDown(controller.dispose);
+      controller.setDisplayListForTest(fakeGlyphDisplayList());
+      await tester.pumpWidget(
+        MaterialApp(home: EditorScreen(controller: controller)),
+      );
+      await tester.pumpAndSettle();
+
+      await _sendCtrlChord(tester, LogicalKeyboardKey.keyT);
+      expect(controller.indentLeft, 36);
+      expect(controller.indentFirstLine, -36);
+
+      await _sendCtrlChord(tester, LogicalKeyboardKey.keyT, shift: true);
+      expect(controller.indentLeft, 0);
+      expect(controller.indentFirstLine, 0);
+    });
+
+    testWidgets('Ctrl+0 toggles the 12 pt space above the paragraph',
+        (tester) async {
+      final controller = createTestEditorController();
+      addTearDown(controller.dispose);
+      controller.setDisplayListForTest(fakeGlyphDisplayList());
+      await tester.pumpWidget(
+        MaterialApp(home: EditorScreen(controller: controller)),
+      );
+      await tester.pumpAndSettle();
+
+      await _sendCtrlChord(tester, LogicalKeyboardKey.digit0);
+      expect(controller.spaceBefore, 12);
+
+      await _sendCtrlChord(tester, LogicalKeyboardKey.digit0);
+      expect(controller.spaceBefore, 0);
+    });
+
+    testWidgets('Ctrl+Q drops the direct paragraph formatting', (tester) async {
+      final controller = createTestEditorController();
+      addTearDown(controller.dispose);
+      controller.setDisplayListForTest(fakeGlyphDisplayList());
+      await tester.pumpWidget(
+        MaterialApp(home: EditorScreen(controller: controller)),
+      );
+      await tester.pumpAndSettle();
+
+      await _sendCtrlChord(tester, LogicalKeyboardKey.keyE);
+      await _sendCtrlChord(tester, LogicalKeyboardKey.keyM);
+      await _sendCtrlChord(tester, LogicalKeyboardKey.digit2);
+      expect(controller.alignment, TextAlign.center);
+      expect(controller.indentLeft, 36);
+      expect(controller.lineSpacing, LineSpacingMode.double_);
+
+      await _sendCtrlChord(tester, LogicalKeyboardKey.keyQ);
+
+      expect(controller.alignment, TextAlign.left);
+      expect(controller.indentLeft, 0);
+      expect(controller.spaceBefore, 0);
+      expect(controller.lineSpacing, LineSpacingMode.single);
+    });
+  });
+
   group('Chord catalog', () {
     test('every spec registers both Ctrl and Cmd unless it is a function key',
         () {
@@ -629,6 +1064,21 @@ void main() {
         'Ctrl/Cmd+K',
         'Home, End',
         'Shift+Enter',
+        'Ctrl/Cmd+Shift+C',
+        'Ctrl/Cmd+Shift+V',
+        'Shift+F3',
+        'Alt+Shift+Left',
+        'Alt+Shift+Right',
+        'Ctrl/Cmd+Shift+Space',
+        'F7',
+        'F12',
+        'Alt+Shift+Up',
+        'Alt+Shift+Down',
+        'Ctrl/Cmd+Q',
+        'Ctrl/Cmd+T',
+        'Ctrl/Cmd+Shift+T',
+        'Ctrl/Cmd+0',
+        'Ctrl+Up, Ctrl+Down',
       ]) {
         expect(labels, contains(required));
       }

@@ -320,6 +320,16 @@ class WasmEngine {
     }
   }
 
+  String? fetchParagraphNav(String runId) {
+    try {
+      final json = _invoke('paragraph_nav_json', [runId]) as String?;
+      if (json == null || json.isEmpty) return null;
+      return json;
+    } catch (_) {
+      return null;
+    }
+  }
+
   String? fetchSemanticTree() {
     try {
       return _invoke('semantic_tree_json', []) as String?;
@@ -1035,6 +1045,9 @@ class WasmEngine {
 
   Future<bool> adjustListLevelAsync({String? caretRunId, required int delta}) =>
       enqueueEdit(() => _enqueueNamed('adjust_list_level', [caretRunId ?? '', delta]));
+
+  Future<bool> moveBlockAsync({String? caretRunId, required int delta}) =>
+      enqueueEdit(() => _enqueueNamed('move_block', [caretRunId ?? '', delta]));
 
   Future<bool> restartNumberingAsync({String? caretRunId}) =>
       enqueueEdit(() => _enqueueNamed('restart_numbering', [caretRunId ?? '']));

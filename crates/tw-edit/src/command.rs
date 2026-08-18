@@ -522,6 +522,12 @@ pub enum Command {
     DeleteBlock {
         id: NodeId,
     },
+    /// Move a block among its siblings — Word's Alt+Shift+Up / Down. Negative
+    /// [`delta`] moves it earlier in the section.
+    MoveBlock {
+        id: NodeId,
+        delta: i32,
+    },
     InsertBlock {
         after_block_id: NodeId,
         block: tw_model::Block,
@@ -1202,6 +1208,12 @@ impl Command {
                     })
                 }
             }
+            // Moving the block back the same distance restores the order, so no
+            // undo metadata is needed.
+            Command::MoveBlock { id, delta } => Ok(Command::MoveBlock {
+                id: *id,
+                delta: -*delta,
+            }),
             Command::InsertBlock { .. } | Command::InsertBlockBefore { .. } => {
                 let new_id = result
                     .created_node_id

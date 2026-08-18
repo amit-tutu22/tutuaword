@@ -1654,6 +1654,56 @@ class MockDocumentEngine implements DocumentEngine {
     return jsonEncode(stored);
   }
 
+  /// `[start, end)` of the newline-delimited paragraph holding [offset].
+  (int, int) _paragraphBoundsAt(String buffer, int offset) {
+    final at = offset.clamp(0, buffer.length);
+    final start = buffer.lastIndexOf('\n', at > 0 ? at - 1 : 0) + 1;
+    final next = buffer.indexOf('\n', at);
+    return (start, next < 0 ? buffer.length : next);
+  }
+
+  @override
+  String? fetchParagraphNav(String runId, int offset) {
+    final buffer = _bufferForRun(runId);
+    final (start, end) = _paragraphBoundsAt(buffer, offset);
+    int? previousStart;
+    if (start > 0) {
+      previousStart = buffer.lastIndexOf('\n', start - 2) + 1;
+    }
+    final nextStart = end < buffer.length ? end + 1 : null;
+    Map<String, Object>? position(int? at) =>
+        at == null ? null : {'run': runId, 'offset': at};
+    return jsonEncode({
+      'start': position(start),
+      'prev': position(previousStart),
+      'next': position(nextStart),
+    });
+  }
+
+  @override
+  Future<bool> moveBlockAsync({
+    String? caretRunId,
+    int caretOffset = 0,
+    required int delta,
+  }) async {
+    if (delta == 0) return false;
+    final runId = caretRunId ?? defaultRunId;
+    final buffer = _bufferForRun(runId);
+    final paragraphs = buffer.split('\n');
+    if (paragraphs.length < 2) return false;
+    final (start, _) = _paragraphBoundsAt(buffer, caretOffset);
+    final index = buffer.substring(0, start).split('\n').length - 1;
+    final target = index + delta;
+    if (target < 0 || target >= paragraphs.length) return false;
+
+    _pushUndo();
+    final moved = paragraphs.removeAt(index);
+    paragraphs.insert(target, moved);
+    _setBufferForRun(runId, paragraphs.join('\n'));
+    _version++;
+    return true;
+  }
+
   @override
   Future<bool> insertBookmarkAsync({
     required String runId,

@@ -42,6 +42,7 @@ class FormattingController extends ChangeNotifier {
   Color? _highlightColor;
   String _activeParagraphStyle = 'Normal';
   double _indentLeft = 0;
+  double _indentFirstLine = 0;
   bool _inList = false;
   int _listLevel = 0;
   LineSpacingMode _lineSpacing = LineSpacingMode.single;
@@ -78,6 +79,9 @@ class FormattingController extends ChangeNotifier {
   Color? get highlightColor => _highlightColor;
   String get activeParagraphStyle => _activeParagraphStyle;
   double get indentLeft => _indentLeft;
+
+  /// Negative while the paragraph has a hanging indent.
+  double get indentFirstLine => _indentFirstLine;
   bool get isInList => _inList;
   int get listLevel => _listLevel;
   LineSpacingMode get lineSpacing => _lineSpacing;
@@ -132,6 +136,7 @@ class FormattingController extends ChangeNotifier {
     _highlightColor = _colorFromFormatJson(charFmt['highlight']);
     _alignment = _alignmentFromJson(paraFmt['alignment'] as String?);
     _indentLeft = (paraFmt['indent_left'] as num?)?.toDouble() ?? 0;
+    _indentFirstLine = (paraFmt['indent_first_line'] as num?)?.toDouble() ?? 0;
     final numbering = paraFmt['numbering'];
     if (numbering is Map) {
       _inList = true;
@@ -481,6 +486,22 @@ class FormattingController extends ChangeNotifier {
     unawaited(_adjustListLevel(-1));
   }
 
+  /// Alt+Shift+Up (−1) / Down (+1) — reorder the caret's paragraph. False when
+  /// it is already the first or last paragraph of its section.
+  Future<bool> moveParagraph({required int direction}) async {
+    if (_host.engine == null || direction == 0) return false;
+    final moved = await _host.performNativeEdit(
+      () => _host.engine!.moveBlockAsync(
+        caretRunId: _selection.defaultRunId(),
+        caretOffset: _selection.caretOffset,
+        delta: direction,
+      ),
+      full: true,
+    );
+    if (moved) syncFromCaret();
+    return moved;
+  }
+
   Future<void> _adjustListLevel(int delta) async {
     if (_host.engine == null) return;
     final edit = _host.performNativeEdit(
@@ -570,6 +591,55 @@ class FormattingController extends ChangeNotifier {
 
     if (patch.isEmpty) return;
     unawaited(_applyParaFormatJson(jsonEncode(patch)));
+    notifyListeners();
+  }
+
+  /// Ctrl+Q — drop direct paragraph formatting so the paragraph style shows
+  /// through again. Numbering, shading and borders are left alone; Word treats
+  /// those as list and border commands rather than paragraph formatting.
+  void clearParagraphFormatting() {
+    _alignment = TextAlign.left;
+    _indentLeft = 0;
+    _indentFirstLine = 0;
+    _spaceBefore = 0;
+    _spaceAfter = 0;
+    _lineSpacing = LineSpacingMode.single;
+    _tabStops = const [];
+    unawaited(_applyParaFormatJson(jsonEncode({
+      'alignment': 'Left',
+      'indent_left': 0,
+      'indent_right': 0,
+      'indent_first_line': 0,
+      'space_before': 0,
+      'space_after': 0,
+      'line_spacing': 'Single',
+      'tab_stops': <Map<String, dynamic>>[],
+    })));
+    notifyListeners();
+  }
+
+  /// Ctrl+T (grow) / Ctrl+Shift+T (shrink) — Word's hanging indent: the left
+  /// indent moves in while the first line stays put, by the same amount.
+  void adjustHangingIndent({required bool increase}) {
+    final step = increase ? _indentStep : -_indentStep;
+    final left = (_indentLeft + step).clamp(0.0, double.infinity).toDouble();
+    // The first line hangs back out by exactly the indent it gained.
+    final firstLine = -left;
+    _indentLeft = left;
+    _indentFirstLine = firstLine;
+    unawaited(_applyParaFormatJson(jsonEncode({
+      'indent_left': left,
+      'indent_first_line': firstLine,
+    })));
+    notifyListeners();
+  }
+
+  /// Ctrl+0 — Word toggles a single 12 pt space before the paragraph.
+  void toggleSpaceBefore() {
+    const wordSpaceBefore = 12.0;
+    final next = _spaceBefore > 0 ? 0.0 : wordSpaceBefore;
+    _spaceBefore = next;
+    unawaited(_applyParaFormatJson(jsonEncode({'space_before': next})));
     notifyListeners();
   }
 

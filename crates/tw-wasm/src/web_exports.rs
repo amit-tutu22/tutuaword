@@ -837,6 +837,16 @@ impl WasmSession {
             .ok_or_else(|| "no equation in document".to_string())
     }
 
+    pub fn move_block_enqueue(
+        &self,
+        caret_run_id: Option<&str>,
+        delta: i32,
+    ) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let caret = parse_run_id(caret_run_id);
+        self.enqueue_edit(session.move_block_at(caret, delta))
+    }
+
     pub fn delete_block_enqueue(&self, block_id: &str) -> Result<u64, String> {
         let session = self.session().expect("WasmSession not initialized");
         let id = uuid::Uuid::parse_str(block_id)
@@ -1119,6 +1129,15 @@ impl WasmSession {
         self.session()
             .and_then(|s| s.bookmarks_json())
             .unwrap_or_else(|| "[]".to_string())
+    }
+
+    pub fn paragraph_nav_json(&self, caret_run_id: &str) -> String {
+        let Ok(uuid) = uuid::Uuid::parse_str(caret_run_id) else {
+            return String::new();
+        };
+        self.session()
+            .and_then(|s| s.paragraph_nav_json(tw_model::NodeId::from_uuid(uuid)))
+            .unwrap_or_default()
     }
 
     pub fn hyperlink_at(&self, run_id: &str) -> String {
@@ -2170,6 +2189,15 @@ pub mod bindgen_exports {
             self.enqueue_op(self.session.delete_block_enqueue(block_id))
         }
 
+        pub fn move_block(&mut self, caret_run_id: &str, delta: i32) -> Result<f64, JsValue> {
+            let caret = if caret_run_id.is_empty() {
+                None
+            } else {
+                Some(caret_run_id)
+            };
+            self.enqueue_op(self.session.move_block_enqueue(caret, delta))
+        }
+
         pub fn insert_image_bytes(&mut self, data: &[u8], mime_type: &str) -> Result<f64, JsValue> {
             self.enqueue_op(
                 self.session
@@ -2410,6 +2438,10 @@ pub mod bindgen_exports {
 
         pub fn bookmarks_json(&self) -> String {
             self.session.bookmarks_json()
+        }
+
+        pub fn paragraph_nav_json(&self, caret_run_id: &str) -> String {
+            self.session.paragraph_nav_json(caret_run_id)
         }
 
         pub fn hyperlink_at(&self, run_id: &str) -> String {

@@ -313,6 +313,16 @@ typedef TwHyperlinkAtDart = int Function(
   Pointer<Pointer<Uint8>>,
   Pointer<IntPtr>,
 );
+typedef TwGetParagraphNavNative = Int32 Function(
+  Pointer<Utf8>,
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwGetParagraphNavDart = int Function(
+  Pointer<Utf8>,
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
 typedef TwGetSemanticTreeNative = Int32 Function(
   Pointer<Pointer<Uint8>>,
   Pointer<IntPtr>,
@@ -392,6 +402,8 @@ typedef TwApplyNumberedListDart = int Function(Pointer<Utf8>);
 
 typedef TwAdjustListLevelNative = Int32 Function(Pointer<Utf8>, Int32);
 typedef TwAdjustListLevelDart = int Function(Pointer<Utf8>, int);
+typedef TwMoveBlockNative = Int32 Function(Pointer<Utf8>, Int32);
+typedef TwMoveBlockDart = int Function(Pointer<Utf8>, int);
 
 typedef TwRestartNumberingNative = Int32 Function(Pointer<Utf8>);
 typedef TwRestartNumberingDart = int Function(Pointer<Utf8>);
@@ -786,6 +798,8 @@ class NativeEngine {
   late final TwGetDocumentOutlineDart getDocumentOutline;
   late final TwGetBookmarksDart getBookmarks;
   TwHyperlinkAtDart? hyperlinkAt;
+  TwGetParagraphNavDart? getParagraphNav;
+  TwMoveBlockDart? moveBlock;
   late final TwGetSemanticTreeDart getSemanticTree;
   late final TwGetAccessibilityIssuesDart getAccessibilityIssues;
   TwGetDocumentInspectDart? getDocumentInspect;
@@ -981,6 +995,21 @@ class NativeEngine {
                 'tw_hyperlink_at');
       } on ArgumentError {
         engine.hyperlinkAt = null;
+      }
+      // Paragraph motion and block moves degrade to line motion on a library
+      // built before they existed, rather than failing to load at all.
+      try {
+        engine.getParagraphNav =
+            lib.lookupFunction<TwGetParagraphNavNative, TwGetParagraphNavDart>(
+                'tw_get_paragraph_nav');
+      } on ArgumentError {
+        engine.getParagraphNav = null;
+      }
+      try {
+        engine.moveBlock = lib.lookupFunction<TwMoveBlockNative, TwMoveBlockDart>(
+            'tw_move_block');
+      } on ArgumentError {
+        engine.moveBlock = null;
       }
       engine.getSemanticTree =
           lib.lookupFunction<TwGetSemanticTreeNative, TwGetSemanticTreeDart>(
@@ -1725,6 +1754,29 @@ extension NativeEngineOps on NativeEngine {
 
   String? fetchHyperlinkAt(String runId) {
     final lookup = hyperlinkAt;
+    if (lookup == null) return null;
+    final runPtr = runId.toNativeUtf8();
+    final outPtr = calloc<Pointer<Uint8>>();
+    final outLen = calloc<IntPtr>();
+    try {
+      final result = lookup(runPtr, outPtr, outLen);
+      if (result != 0) return null;
+      final len = outLen.value;
+      final ptr = outPtr.value;
+      if (ptr == nullptr || len == 0) return null;
+      final json = ptr.cast<Utf8>().toDartString(length: len);
+      freeBuffer(ptr, len);
+      return json.isEmpty ? null : json;
+    } finally {
+      calloc.free(runPtr);
+      calloc.free(outPtr);
+      calloc.free(outLen);
+    }
+  }
+
+  /// JSON `{ start, prev, next }` run ids for Ctrl+Up / Ctrl+Down.
+  String? fetchParagraphNav(String runId) {
+    final lookup = getParagraphNav;
     if (lookup == null) return null;
     final runPtr = runId.toNativeUtf8();
     final outPtr = calloc<Pointer<Uint8>>();
@@ -2877,6 +2929,21 @@ extension NativeEngineOps on NativeEngine {
     try {
       final code = adjustListLevel(ptr, delta);
       if (code == 1) return true;
+      if (code != 0) return false;
+      return awaitEditCompletion();
+    } finally {
+      if (caretRunId != null) calloc.free(ptr);
+    }
+  }
+
+  /// Alt+Shift+Up (−1) / Down (+1) — move the caret's paragraph. False when the
+  /// paragraph is already at the section edge, so nothing was enqueued.
+  Future<bool> moveBlockAsync({String? caretRunId, required int delta}) async {
+    final lookup = moveBlock;
+    if (lookup == null) return false;
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      final code = lookup(ptr, delta);
       if (code != 0) return false;
       return awaitEditCompletion();
     } finally {

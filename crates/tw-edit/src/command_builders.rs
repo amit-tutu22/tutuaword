@@ -27,6 +27,24 @@ pub fn paragraph_id_from_caret(doc: &Document, caret_run_id: Option<NodeId>) -> 
         .or_else(|| first_paragraph_id(doc))
 }
 
+/// Alt+Shift+Up / Down — move the caret's own block among its siblings.
+pub fn move_block_command_for_caret(
+    doc: &Document,
+    caret_run_id: Option<NodeId>,
+    delta: i32,
+) -> Option<Command> {
+    if delta == 0 {
+        return None;
+    }
+    let id = block_id_from_caret(doc, caret_run_id)?;
+    let (si, bi) = doc.find_block_location(id)?;
+    let target = bi as i64 + delta as i64;
+    if target < 0 || target >= doc.sections[si].blocks.len() as i64 {
+        return None;
+    }
+    Some(Command::MoveBlock { id, delta })
+}
+
 pub fn heading1_command_for(paragraph_id: NodeId) -> Command {
     Command::ApplyParagraphStyle {
         paragraph_id,

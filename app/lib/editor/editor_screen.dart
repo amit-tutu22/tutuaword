@@ -87,9 +87,14 @@ class _EditorScreenState extends State<EditorScreen> {
         unawaited(_controller.copySelection());
       case WordChord.paste:
         unawaited(_controller.paste());
-      case WordChord.pasteTextOnly:
       case WordChord.pasteMatchStyle:
         unawaited(_controller.paste(plainText: true));
+      case WordChord.pasteSpecial:
+        unawaited(_controller.showPasteSpecialDialog(context));
+      case WordChord.copyFormatting:
+        _controller.copyFormatting();
+      case WordChord.pasteFormatting:
+        unawaited(_controller.pasteFormatting());
       case WordChord.selectAll:
         unawaited(_controller.selectAll());
       case WordChord.find:
@@ -119,6 +124,12 @@ class _EditorScreenState extends State<EditorScreen> {
         _controller.toggleAllCaps();
       case WordChord.smallCaps:
         _controller.toggleSmallCaps();
+      case WordChord.strikethrough:
+        _controller.toggleStrikethrough();
+      case WordChord.hiddenText:
+        _controller.toggleHidden();
+      case WordChord.changeCase:
+        unawaited(_controller.cycleChangeCase());
       case WordChord.clearFormatting:
         _controller.clearFormatting();
       case WordChord.alignLeft:
@@ -133,6 +144,26 @@ class _EditorScreenState extends State<EditorScreen> {
         _controller.increaseIndent();
       case WordChord.decreaseIndent:
         _controller.decreaseIndent();
+      // The controller names the direction, not the outline level: promote
+      // means "one level deeper", which is what Word calls demote.
+      case WordChord.promoteOutline:
+        _controller.demoteListLevel();
+      case WordChord.demoteOutline:
+        _controller.promoteListLevel();
+      case WordChord.moveParagraphUp:
+        unawaited(_controller.moveParagraph(direction: -1));
+      case WordChord.moveParagraphDown:
+        unawaited(_controller.moveParagraph(direction: 1));
+      case WordChord.clearParagraphFormatting:
+        _controller.clearParagraphFormatting();
+      case WordChord.hangingIndent:
+        _controller.adjustHangingIndent(increase: true);
+      case WordChord.removeHangingIndent:
+        _controller.adjustHangingIndent(increase: false);
+      case WordChord.toggleSpaceBefore:
+        _controller.toggleSpaceBefore();
+      case WordChord.bulletList:
+        _controller.applyBulletList();
       case WordChord.singleSpace:
         _controller.applyLineSpacing(LineSpacingMode.single);
       case WordChord.oneAndAHalfSpace:
@@ -153,6 +184,32 @@ class _EditorScreenState extends State<EditorScreen> {
         unawaited(_controller.insertComment(context));
       case WordChord.trackChanges:
         _controller.toggleTrackChanges();
+      case WordChord.footnote:
+        unawaited(_controller.insertFootnote(context));
+      case WordChord.endnote:
+        unawaited(_controller.insertEndnote(context));
+      case WordChord.dateField:
+        unawaited(_controller.insertDateField());
+      case WordChord.pageNumberField:
+        unawaited(_controller.insertPageNumberField());
+      case WordChord.spelling:
+        unawaited(_controller.spellCheckDocument());
+      case WordChord.printPreview:
+        _controller.togglePrintPreview();
+      case WordChord.nonbreakingSpace:
+        unawaited(_controller.insertSymbolCharacter('\u00A0'));
+      case WordChord.nonbreakingHyphen:
+        unawaited(_controller.insertSymbolCharacter('\u2011'));
+      case WordChord.optionalHyphen:
+        unawaited(_controller.insertSymbolCharacter('\u00AD'));
+      case WordChord.copyright:
+        unawaited(_controller.insertSymbolCharacter('\u00A9'));
+      case WordChord.registered:
+        unawaited(_controller.insertSymbolCharacter('\u00AE'));
+      case WordChord.trademark:
+        unawaited(_controller.insertSymbolCharacter('\u2122'));
+      case WordChord.ellipsis:
+        unawaited(_controller.insertSymbolCharacter('\u2026'));
     }
   }
 

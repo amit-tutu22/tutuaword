@@ -263,6 +263,59 @@ Flutter integration tests for user-facing workflows:
 - **Patrol** or **Maestro** for native UI automation (desktop)
 - Screenshot comparison for visual regression
 
+### On-Device Suites (`app/integration_test/`)
+
+Widget tests in `app/test/` run against `MockDocumentEngine` on the host. The
+suites in `app/integration_test/` run inside a real app binary, so they exercise
+the platform focus tree, the platform text input and the Rust engine over FFI:
+
+```bash
+cd app
+flutter test integration_test/word_keyboard_mapping_test.dart -d <device-id>
+```
+
+| Suite | Covers |
+|-------|--------|
+| `word_keyboard_mapping_test.dart` | Word chords on a hardware keyboard: Cmd+B/I/U, Cmd+Z / Cmd+Shift+Z, Shift+Enter, Cmd+Left/Right, Option+Arrow, Option+Backspace, Cmd+E/J, Cmd+Shift+E |
+
+These catch classes of bug the host tests cannot:
+
+- **Delivery** — on iOS the document canvas has no `Focus`, so every keystroke
+  reaches the hidden `TextField` first. Only a real binary proves a chord bubbles
+  past it to the `Shortcuts` map.
+- **Engine disagreement** — the mock and the Rust engine can differ on caret
+  arithmetic. The line-end off-by-one behind `run_map_chars` in
+  `crates/tw-layout/src/types.rs` passed every host test and only failed here.
+
+Two constraints when adding suites:
+
+- **Reset the document per test.** The FFI engine is process-global and outlives
+  the widget tree, so text accumulates across tests without `newDocument()`.
+- **Poll engine-reported state.** Caret format and layout-derived offsets arrive
+  asynchronously; assert with a pump-until-match helper rather than directly
+  after the keystroke.
+
+### Keeping the Harness Out of Shipping Builds
+
+Flutter does not filter dev-dependency plugins on Apple platforms
+([flutter#163874](https://github.com/flutter/flutter/issues/163874)), so a plain
+dev dependency still embeds `integration_test.framework` in an iOS release build.
+Three pieces prevent that:
+
+1. `integration_test` is a dev dependency and the suites live outside `lib/`, so
+   no app code references them (`main` also returns early under `kReleaseMode`).
+2. `app/ios/Podfile` declares the pod `:configurations => ['Debug']`, so Profile
+   and Release neither link nor embed it.
+3. `scripts/gate-debug-only-plugins.sh` runs from the Runner's Flutter build
+   phase and wraps the generated registrant's import and registration in
+   `#if DEBUG` — required because Flutter regenerates that file on every build
+   with the plugin still listed.
+
+Verify after touching any of the three: a clean `flutter build ios --release`
+must produce no `integration_test.framework` in the bundle and no reference to it
+in the binary. Android needs nothing (the tool filters dev dependencies there)
+and `integration_test` is not a macOS plugin at all.
+
 ### E2E Test Scenarios
 
 | Scenario | Steps | Verification |

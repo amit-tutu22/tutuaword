@@ -840,6 +840,11 @@ class EditorController extends ChangeNotifier {
     ensureCaretVisible(notify: false);
   }
 
+  void moveGlyphCaretByParagraph({required int direction, bool extend = false}) {
+    _selection.moveGlyphCaretByParagraph(direction: direction, extend: extend);
+    ensureCaretVisible(notify: false);
+  }
+
   /// Single dispatcher for keyboard input — every path must call this.
   Future<void> handleEditorInput(EditorInputEvent event) async {
     final extend = event.extendsSelection;
@@ -887,6 +892,10 @@ class EditorController extends ChangeNotifier {
         moveGlyphCaretByWord(direction: -1, extend: extend);
       case EditorInputKind.wordRight:
         moveGlyphCaretByWord(direction: 1, extend: extend);
+      case EditorInputKind.paragraphUp:
+        moveGlyphCaretByParagraph(direction: -1, extend: extend);
+      case EditorInputKind.paragraphDown:
+        moveGlyphCaretByParagraph(direction: 1, extend: extend);
       case EditorInputKind.lineStart:
         moveGlyphCaretToLineEdge(toEnd: false, extend: extend);
       case EditorInputKind.lineEnd:
@@ -1304,6 +1313,7 @@ class EditorController extends ChangeNotifier {
   String get activeParagraphStyle => _formatting.activeParagraphStyle;
   String get documentThemeName => _documentThemeName;
   double get indentLeft => _formatting.indentLeft;
+  double get indentFirstLine => _formatting.indentFirstLine;
   LineSpacingMode get lineSpacing => _formatting.lineSpacing;
   double get exactLineSpacingPt => _formatting.exactLineSpacingPt;
   double get spaceBefore => _formatting.spaceBefore;
@@ -1334,6 +1344,25 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Ctrl+Shift+C — pick up the format under the caret, without the ribbon's
+  /// toggle semantics: pressing it twice re-copies rather than cancelling.
+  void copyFormatting() {
+    final ok = _formatting.pickupFormatPainter();
+    _session.setStatusText(
+      ok ? 'Formatting copied' : 'Place the caret in formatted text first',
+    );
+    notifyListeners();
+  }
+
+  /// Ctrl+Shift+V — lay the copied format onto the selection or caret.
+  Future<void> pasteFormatting() async {
+    final applied = await _formatting.applyFormatPainter();
+    _session.setStatusText(
+      applied ? 'Formatting pasted' : 'Copy formatting first (Ctrl+Shift+C)',
+    );
+    notifyListeners();
+  }
+
   void toggleBold() => _formatting.toggleBold();
   void toggleItalic() => _formatting.toggleItalic();
   void toggleUnderline() => _formatting.toggleUnderline();
@@ -1361,6 +1390,30 @@ class EditorController extends ChangeNotifier {
   int get listLevel => _formatting.listLevel;
   void promoteListLevel() => _formatting.promoteListLevel();
   void demoteListLevel() => _formatting.demoteListLevel();
+
+  /// Ctrl+Q — remove direct paragraph formatting.
+  void clearParagraphFormatting() => _formatting.clearParagraphFormatting();
+
+  /// Ctrl+T / Ctrl+Shift+T — grow or shrink the hanging indent.
+  void adjustHangingIndent({required bool increase}) =>
+      _formatting.adjustHangingIndent(increase: increase);
+
+  /// Ctrl+0 — toggle 12 pt of space above the paragraph.
+  void toggleSpaceBefore() => _formatting.toggleSpaceBefore();
+
+  /// Alt+Shift+Up / Down — move the caret's paragraph, reporting when it was
+  /// already at the edge so the status line can say so.
+  Future<void> moveParagraph({required int direction}) async {
+    final moved = await _formatting.moveParagraph(direction: direction);
+    _session.setStatusText(
+      moved
+          ? direction < 0
+              ? 'Paragraph moved up'
+              : 'Paragraph moved down'
+          : 'Paragraph is already at the edge',
+    );
+    notifyListeners();
+  }
   void applySpacing({
     required LineSpacingMode lineSpacing,
     required double exactPoints,
@@ -1495,6 +1548,27 @@ class EditorController extends ChangeNotifier {
     );
     _session.setStatusText(ok ? 'Case changed' : 'Change case failed');
     notifyListeners();
+  }
+
+  /// Shift+F3 — Word's case cycle. The next case is read off the selection
+  /// rather than a press counter, so the cycle survives clicking elsewhere and
+  /// back: lower case → Title Case → UPPER CASE → lower case.
+  Future<void> cycleChangeCase() async {
+    final text = selectedText;
+    final isAllUpper = text == text.toUpperCase() && text != text.toLowerCase();
+    final kind = isAllUpper
+        ? ChangeCaseKind.lower
+        : text == text.toLowerCase()
+            ? ChangeCaseKind.capitalizeEachWord
+            : ChangeCaseKind.upper;
+    final range = _selection.selection;
+    await applyChangeCase(kind);
+    // Word leaves the text selected so the chord can be pressed again. The
+    // range still describes it as long as the case map kept the length — ß → SS
+    // is the exception, and there the caret is left where the edit ended.
+    if (range != null && transformChangeCase(text, kind).length == text.length) {
+      _selection.selectDocRange(range);
+    }
   }
 
   /// Home → Sort paragraphs A→Z or Z→A (selection or whole document).

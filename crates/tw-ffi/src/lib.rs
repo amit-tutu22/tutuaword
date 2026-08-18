@@ -2957,6 +2957,44 @@ pub extern "C" fn tw_latest_office_math_run_id(out_ptr: *mut *const u8, out_len:
     })
 }
 
+/// Alt+Shift+Up / Down — move the caret's paragraph among its siblings.
+/// Returns 1 when it is already at the section edge, so nothing was enqueued.
+#[no_mangle]
+pub extern "C" fn tw_move_block(caret_run_id_ptr: *const c_char, delta: i32) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let caret_run_id = parse_node_id(caret_run_id_ptr);
+            let Some(request_id) = session.move_block_at(caret_run_id, delta) else {
+                return 1;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+/// JSON `{ start, prev, next }` run ids for Ctrl+Up / Ctrl+Down.
+#[no_mangle]
+pub extern "C" fn tw_get_paragraph_nav(
+    caret_run_id_ptr: *const c_char,
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    guard_ffi(|| {
+        let guard = SESSION.lock();
+        let Some(session) = guard.as_ref() else {
+            return -1;
+        };
+        let Some(run_id) = parse_node_id(caret_run_id_ptr) else {
+            return -2;
+        };
+        let Some(json) = session.paragraph_nav_json(run_id) else {
+            return -3;
+        };
+        transfer_bytes_to_caller(json.into_bytes(), out_ptr, out_len);
+        0
+    })
+}
+
 #[no_mangle]
 pub extern "C" fn tw_delete_block(block_id_ptr: *const c_char) -> i32 {
     guard_ffi(|| {

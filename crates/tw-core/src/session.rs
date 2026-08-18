@@ -30,6 +30,7 @@ use tw_edit::{
     insert_image_command, insert_shape_command, insert_text_box_command,
     insert_word_art_command, replace_image_bytes_command,
     insert_nested_table_command_for_caret, insert_page_break_command_for,
+    move_block_command_for_caret,
     insert_section_break_command_for, insert_table_command_for_caret,
     insert_table_sum_field_command_for_caret, merge_table_cells_right_command_for_caret,
     numbered_list_command_for_caret, paragraph_style_command_for_caret,
@@ -911,6 +912,66 @@ impl Session {
 
     pub fn delete_block(&self, id: tw_model::NodeId) -> Option<u64> {
         self.apply(Command::DeleteBlock { id })
+    }
+
+    /// Alt+Shift+Up / Down — move the caret's block among its siblings. `None`
+    /// when it is already the first or last block of its section.
+    pub fn move_block_at(
+        &self,
+        caret_run_id: Option<tw_model::NodeId>,
+        delta: i32,
+    ) -> Option<u64> {
+        self.apply_from_document(|doc| {
+            move_block_command_for_caret(doc, caret_run_id, delta)
+        })
+    }
+
+    /// Where Ctrl+Up / Ctrl+Down should land, as JSON
+    /// `{ start, prev, next }` of `{ run, offset }` positions — the start of the
+    /// caret's own paragraph and of its neighbours, `null` at the document
+    /// edges. A paragraph always begins a run here, so every offset is 0.
+    pub fn paragraph_nav_json(&self, caret_run_id: tw_model::NodeId) -> Option<String> {
+        #[derive(serde::Serialize)]
+        struct ParagraphStart {
+            run: tw_model::NodeId,
+            offset: usize,
+        }
+
+        #[derive(serde::Serialize)]
+        struct ParagraphNavResponse {
+            start: ParagraphStart,
+            prev: Option<ParagraphStart>,
+            next: Option<ParagraphStart>,
+        }
+
+        fn start_at(run: tw_model::NodeId) -> ParagraphStart {
+            ParagraphStart { run, offset: 0 }
+        }
+
+        let doc = self.document();
+        // Paragraph blocks in document order, each with its first run id.
+        let starts: Vec<(tw_model::NodeId, tw_model::NodeId)> = doc
+            .sections
+            .iter()
+            .flat_map(|section| section.blocks.iter())
+            .filter_map(|block| block.paragraph())
+            .filter_map(|para| para.runs.first().map(|run| (para.id, run.id)))
+            .collect();
+        let location = doc.find_run_location(caret_run_id)?;
+        let block = doc.blocks_at(location)?.get(location.block_index)?;
+        let paragraph_id = block.paragraph()?.id;
+        let index = starts.iter().position(|(id, _)| *id == paragraph_id)?;
+
+        serde_json::to_string(&ParagraphNavResponse {
+            start: start_at(starts[index].1),
+            prev: index
+                .checked_sub(1)
+                .map(|previous| start_at(starts[previous].1)),
+            next: starts
+                .get(index + 1)
+                .map(|(_, run_id)| start_at(*run_id)),
+        })
+        .ok()
     }
 
     pub fn insert_image_bytes(&self, bytes: Vec<u8>, mime_type: String) -> Option<u64> {

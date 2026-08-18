@@ -1486,6 +1486,33 @@ pub fn delete_block(
     })
 }
 
+/// Move a block [`delta`] positions among its siblings, clamped to the section.
+/// Word stops at the first and last paragraph rather than crossing a section.
+pub fn move_block(
+    doc: &mut Document,
+    id: NodeId,
+    delta: i32,
+) -> Result<EditResult, EditError> {
+    if delta == 0 {
+        return Err(EditError::InvalidRange);
+    }
+    let (si, bi) = doc
+        .find_block_location(id)
+        .ok_or(EditError::BlockNotFound(id))?;
+    let blocks = &mut doc.sections[si].blocks;
+    let target = bi as i64 + delta as i64;
+    if target < 0 || target >= blocks.len() as i64 {
+        return Err(EditError::InvalidRange);
+    }
+    let block = blocks.remove(bi);
+    blocks.insert(target as usize, block);
+
+    Ok(EditResult {
+        affected_nodes: vec![id],
+        ..Default::default()
+    })
+}
+
 pub fn insert_block(
     doc: &mut Document,
     after_block_id: NodeId,

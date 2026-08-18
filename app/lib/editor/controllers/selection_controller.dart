@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -351,6 +352,84 @@ class SelectionController extends ChangeNotifier {
     }
     if (extend) _ensureSelectionAnchorForExtend();
     _applyGlyphCaretMove(runId, target, geometry, extendSelection: extend);
+  }
+
+  /// Ctrl+Up / Ctrl+Down. Word steps to the start of the caret's own paragraph
+  /// first and only then to the previous one; down always lands on the next
+  /// paragraph's start, and both clamp to the document edges.
+  void moveGlyphCaretByParagraph({required int direction, required bool extend}) {
+    final runId = _caretRunId;
+    if (_engine == null || runId == null || direction == 0) return;
+    final nav = _paragraphNav(runId, _caretOffset);
+    if (nav == null) {
+      // No paragraph information from this engine — a line step is the closest
+      // honest move, which is what the caret did before paragraph motion existed.
+      if (extend) _ensureSelectionAnchorForExtend();
+      _moveGlyphCaretUpDown(direction, extendSelection: extend);
+      return;
+    }
+    final start = nav['start'];
+    final atParagraphStart =
+        start != null && start.$1 == runId && start.$2 == _caretOffset;
+    final target = direction < 0
+        ? (atParagraphStart ? nav['prev'] : start)
+        : nav['next'];
+    if (target == null) {
+      moveGlyphCaretToDocumentEdge(toEnd: direction > 0, extend: extend);
+      return;
+    }
+    final located = _engine!.caretPageAndGeometry(
+      target.$1,
+      target.$2,
+      hintPage: caretPage,
+    );
+    if (located == null) return;
+    if (extend) _ensureSelectionAnchorForExtend();
+    _engine!.setCurrentPageIndex(located.$1);
+    _caretRunId = target.$1;
+    _caretOffset = target.$2;
+    _caretGeometry = located.$2;
+    final position = DocPosition(runId: target.$1, offset: target.$2);
+    if (extend && _selection != null) {
+      _selection = _selection!.copyWith(page: located.$1, focus: position);
+      _refreshSelectionRects();
+    } else {
+      _selection = DocRange(
+        anchor: position,
+        focus: position,
+        page: located.$1,
+      );
+      _selectionRects = const [];
+    }
+    onSelectionChanged();
+    notifyListeners();
+  }
+
+  /// `start` / `prev` / `next` paragraph starts as (runId, offset) pairs, or null
+  /// when the engine cannot report paragraph structure.
+  Map<String, (String, int)?>? _paragraphNav(String runId, int offset) {
+    final json = _engine!.fetchParagraphNav(runId, offset);
+    if (json == null || json.isEmpty) return null;
+    try {
+      final decoded = jsonDecode(json);
+      if (decoded is! Map<String, dynamic>) return null;
+      (String, int)? position(String key) {
+        final value = decoded[key];
+        if (value is! Map) return null;
+        final run = value['run'];
+        final at = value['offset'];
+        if (run is! String || at is! int) return null;
+        return (run, at);
+      }
+
+      return {
+        'start': position('start'),
+        'prev': position('prev'),
+        'next': position('next'),
+      };
+    } on FormatException {
+      return null;
+    }
   }
 
   /// Range Ctrl+Backspace / Ctrl+Delete should remove, or null when the caret

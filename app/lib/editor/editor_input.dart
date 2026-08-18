@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
 
@@ -20,6 +21,9 @@ enum EditorInputKind {
   arrowDown,
   wordLeft,
   wordRight,
+  /// Ctrl+Up / Ctrl+Down — the start of this paragraph, then of the one before.
+  paragraphUp,
+  paragraphDown,
   lineStart,
   lineEnd,
   documentStart,
@@ -36,6 +40,8 @@ const _navigationKinds = <EditorInputKind>{
   EditorInputKind.arrowDown,
   EditorInputKind.wordLeft,
   EditorInputKind.wordRight,
+  EditorInputKind.paragraphUp,
+  EditorInputKind.paragraphDown,
   EditorInputKind.lineStart,
   EditorInputKind.lineEnd,
   EditorInputKind.documentStart,
@@ -43,6 +49,10 @@ const _navigationKinds = <EditorInputKind>{
   EditorInputKind.pageUp,
   EditorInputKind.pageDown,
 };
+
+bool get _isApple =>
+    defaultTargetPlatform == TargetPlatform.macOS ||
+    defaultTargetPlatform == TargetPlatform.iOS;
 
 /// One logical editor keystroke — the only shape accepted by the input dispatcher.
 class EditorInputEvent {
@@ -95,6 +105,12 @@ class EditorInputEvent {
   const EditorInputEvent.wordRight({bool shift = false})
       : this._(EditorInputKind.wordRight, shift: shift);
 
+  const EditorInputEvent.paragraphUp({bool shift = false})
+      : this._(EditorInputKind.paragraphUp, shift: shift);
+
+  const EditorInputEvent.paragraphDown({bool shift = false})
+      : this._(EditorInputKind.paragraphDown, shift: shift);
+
   const EditorInputEvent.lineStart({bool shift = false})
       : this._(EditorInputKind.lineStart, shift: shift);
 
@@ -127,6 +143,19 @@ class EditorInputEvent {
     String? character,
   }) {
     final byWord = control || alt;
+    // Word for Windows spends Alt+Shift+Left/Right on promoting and demoting the
+    // list item, and uses Ctrl+Arrow for word motion. Apple platforms keep
+    // Option+Shift+Left/Right as word-wise selection, which the OS does
+    // everywhere. Alt+Shift+Up/Down moves the paragraph in both Word editions,
+    // so it is a command chord on every platform.
+    final outlineChord = alt &&
+        shift &&
+        (key == LogicalKeyboardKey.arrowUp ||
+            key == LogicalKeyboardKey.arrowDown ||
+            (!_isApple &&
+                (key == LogicalKeyboardKey.arrowLeft ||
+                    key == LogicalKeyboardKey.arrowRight)));
+    if (outlineChord) return null;
 
     if (key == LogicalKeyboardKey.backspace) {
       return byWord
@@ -172,12 +201,17 @@ class EditorInputEvent {
       if (byWord) return EditorInputEvent.wordRight(shift: shift);
       return EditorInputEvent.arrowRight(shift: shift);
     }
+    // Ctrl+Up/Down is Word's paragraph motion; Option+Up/Down is how macOS
+    // spells the same move, so Apple platforms accept both.
+    final byParagraph = control || (alt && _isApple);
     if (key == LogicalKeyboardKey.arrowUp) {
       if (meta) return EditorInputEvent.documentStart(shift: shift);
+      if (byParagraph) return EditorInputEvent.paragraphUp(shift: shift);
       return EditorInputEvent.arrowUp(shift: shift);
     }
     if (key == LogicalKeyboardKey.arrowDown) {
       if (meta) return EditorInputEvent.documentEnd(shift: shift);
+      if (byParagraph) return EditorInputEvent.paragraphDown(shift: shift);
       return EditorInputEvent.arrowDown(shift: shift);
     }
     if (character == '\n' || character == '\r') {
