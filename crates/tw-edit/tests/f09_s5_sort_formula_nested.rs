@@ -106,6 +106,7 @@ fn u_f09_s5_insert_table_sum_field() {
             run_id: sum_run,
             offset: 0,
             field_type: FieldType::TableSumAbove,
+            merge_name: None,
         })
         .unwrap();
 

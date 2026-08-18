@@ -200,6 +200,7 @@ fn write_category_model_fixtures(dir: &Path) {
             transform: ImageTransform::default(),
             caption_paragraph_id: None,
             alt_text: Some("fixture".into()),
+            wrap_polygon: None,
         })];
         write_model_docx(&path, &doc);
     }

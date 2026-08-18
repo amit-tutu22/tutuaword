@@ -170,6 +170,7 @@ fn u_f23_s1_tier_a_image_round_trip() {
         transform: ImageTransform::default(),
         caption_paragraph_id: None,
         alt_text: Some("logo".into()),
+            wrap_polygon: None,
     })];
     let imported = round_trip(&doc);
     let image = imported.sections[0].blocks[0].image().unwrap();

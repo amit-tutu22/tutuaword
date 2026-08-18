@@ -310,6 +310,16 @@ class WasmEngine {
     }
   }
 
+  String? fetchHyperlinkAt(String runId) {
+    try {
+      final json = _invoke('hyperlink_at', [runId]) as String?;
+      if (json == null || json.isEmpty) return null;
+      return json;
+    } catch (_) {
+      return null;
+    }
+  }
+
   String? fetchSemanticTree() {
     try {
       return _invoke('semantic_tree_json', []) as String?;

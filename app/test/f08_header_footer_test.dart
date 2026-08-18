@@ -133,7 +133,7 @@ void main() {
         InsertTab(controller: controller),
         size: const Size(1400, 120),
       );
-      expect(find.byIcon(Icons.link), findsNothing);
+      expect(find.byKey(const Key('header_footer_link_previous')), findsNothing);
 
       controller.insertSectionBreak();
       await settleEngineStyle(tester);
@@ -146,7 +146,7 @@ void main() {
         InsertTab(controller: controller),
         size: const Size(1400, 120),
       );
-      expect(find.byIcon(Icons.link), findsOneWidget);
+      expect(find.byKey(const Key('header_footer_link_previous')), findsOneWidget);
       expect(controller.headerFooterLinked, isTrue);
 
       await controller.setHeaderFooterLinked(false);

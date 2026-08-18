@@ -46,6 +46,29 @@ fn bullet_list_marker_format() {
 }
 
 #[test]
+fn bullet_list_marker_maps_symbol_pua_to_unicode() {
+    let mut bullet = NumberingDefinition::bullet();
+    bullet.levels[0].marker_text = Some("\u{F0B7}".into());
+    bullet.levels[0].char_format.font_family = Some("Symbol".into());
+    assert_eq!(format_list_marker(&bullet, 0, 0), "•");
+}
+
+#[test]
+fn bullet_list_marker_maps_wingdings_ascii_with_dingbat_font() {
+    let mut bullet = NumberingDefinition::bullet();
+    bullet.levels[0].marker_text = Some("o".into());
+    bullet.levels[0].char_format.font_family = Some("Wingdings".into());
+    assert_eq!(format_list_marker(&bullet, 0, 0), "•");
+}
+
+#[test]
+fn bullet_list_marker_maps_square_dingbat_to_unicode() {
+    let mut bullet = NumberingDefinition::bullet();
+    bullet.levels[0].marker_text = Some("■".into());
+    assert_eq!(format_list_marker(&bullet, 0, 0), "•");
+}
+
+#[test]
 fn numbered_list_marker_increments() {
     let numbered = NumberingDefinition::numbered();
     assert_eq!(format_list_marker(&numbered, 0, 0), "1.");

@@ -17,6 +17,11 @@ void main() {
       await settleEngineStyle(tester);
 
       await pumpRibbonTab(tester, ReviewTab(controller: controller));
+      await tester.scrollUntilVisible(
+        find.byKey(const Key('accept_revision')),
+        120,
+        scrollable: find.byType(Scrollable),
+      );
       await tester.tap(find.byKey(const Key('accept_revision')));
       await tester.pumpAndSettle();
 

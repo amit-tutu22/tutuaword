@@ -11,4 +11,4 @@ tw-layout = { path = "../tw-layout" }
 tw-render = { path = "../tw-render" }
 tw-edit = { path = "../tw-edit" }
 thiserror = { workspace = true }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }

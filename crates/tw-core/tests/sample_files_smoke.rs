@@ -25,6 +25,7 @@ struct Case {
     expect_revisions: bool,
     expect_multi_column: bool,
     min_pages: u32,
+    max_pages: Option<u32>,
     min_text_chars: usize,
 }
 
@@ -37,16 +38,18 @@ const CASES: &[Case] = &[
         expect_revisions: false,
         expect_multi_column: false,
         min_pages: 1,
+        max_pages: None,
         min_text_chars: 20,
     },
     Case {
         file: "sample-files.com-formatted-report.docx",
-        expect_tables: false,
+        expect_tables: true,
         expect_images: false,
         expect_lists: false,
         expect_revisions: false,
         expect_multi_column: false,
         min_pages: 1,
+        max_pages: None,
         min_text_chars: 20,
     },
     Case {
@@ -57,6 +60,7 @@ const CASES: &[Case] = &[
         expect_revisions: false,
         expect_multi_column: false,
         min_pages: 1,
+        max_pages: None,
         min_text_chars: 0,
     },
     Case {
@@ -67,16 +71,18 @@ const CASES: &[Case] = &[
         expect_revisions: false,
         expect_multi_column: false,
         min_pages: 1,
+        max_pages: None,
         min_text_chars: 1,
     },
     Case {
         file: "sample-files.com-template.docx",
-        expect_tables: false,
+        expect_tables: true,
         expect_images: false,
         expect_lists: false,
         expect_revisions: false,
         expect_multi_column: false,
         min_pages: 1,
+        max_pages: None,
         min_text_chars: 0,
     },
     Case {
@@ -87,6 +93,7 @@ const CASES: &[Case] = &[
         expect_revisions: false,
         expect_multi_column: false,
         min_pages: 1,
+        max_pages: None,
         min_text_chars: 10,
     },
     Case {
@@ -97,6 +104,7 @@ const CASES: &[Case] = &[
         expect_revisions: true,
         expect_multi_column: false,
         min_pages: 1,
+        max_pages: None,
         min_text_chars: 1,
     },
     Case {
@@ -107,6 +115,7 @@ const CASES: &[Case] = &[
         expect_revisions: false,
         expect_multi_column: true,
         min_pages: 1,
+        max_pages: Some(8),
         min_text_chars: 10,
     },
     Case {
@@ -117,6 +126,7 @@ const CASES: &[Case] = &[
         expect_revisions: false,
         expect_multi_column: false,
         min_pages: 2,
+        max_pages: None,
         min_text_chars: 200,
     },
 ];
@@ -313,6 +323,9 @@ fn smoke_one(path: &Path, case: &Case) -> Report {
     }
 
     let mut session = SyncSession::new();
+    for font in &bundle.embedded_fonts {
+        let _ = session.layout.register_face(&font.spec, font.data.clone());
+    }
     session.edit = EditSession::from_document(doc.clone());
     session.relayout(None);
 
@@ -321,6 +334,12 @@ fn smoke_one(path: &Path, case: &Case) -> Report {
     if pages < case.min_pages {
         ok = false;
         notes.push(format!("FAIL: pages {pages} < {}", case.min_pages));
+    }
+    if let Some(max) = case.max_pages {
+        if pages > max {
+            ok = false;
+            notes.push(format!("FAIL: pages {pages} > {max}"));
+        }
     }
 
     let dl = session.display_list_bytes();
@@ -390,6 +409,7 @@ fn smoke_one(path: &Path, case: &Case) -> Report {
             source_format: bundle.source_format,
             docx_package: bundle.docx_package.clone(),
             odt_package: None,
+            embedded_fonts: bundle.embedded_fonts.clone(),
         },
         Some(case.file.to_string()),
     );

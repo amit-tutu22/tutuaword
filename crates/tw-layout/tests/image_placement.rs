@@ -237,3 +237,166 @@ fn top_and_bottom_wrap_skips_the_image_band() {
         placed.y + placed.height,
     );
 }
+
+#[test]
+fn infront_wrap_reserves_vertical_band() {
+    let mut image = ImageBlock::placeholder(200.0, 120.0);
+    image.wrap = TextWrap::InFront;
+    image.anchor = Some(ImageAnchor {
+        x: 0.0,
+        y: 0.0,
+        origin_x: AnchorOrigin::Column,
+        origin_y: AnchorOrigin::Paragraph,
+    });
+
+    let mut engine = LayoutEngine::new();
+    let layout = engine.layout_document(&document_with_wrap(
+        image,
+        "Text that should begin below the in-front image band.",
+    ));
+    let placed = image_boxes(&layout)[0];
+    let text_y = first_line_y(&layout);
+    assert!(
+        text_y >= placed.y + placed.height,
+        "in-front wrap should reserve flow like top-and-bottom, text_y={} image_bottom={}",
+        text_y,
+        placed.y + placed.height,
+    );
+}
+
+#[test]
+fn tight_contour_wrap_narrows_lines_beside_polygon() {
+    let text = "Word wrap contour inset test with enough text to sit beside the floating image in the column.";
+    let mut engine = LayoutEngine::new();
+
+    let mut square = ImageBlock::placeholder(120.0, 100.0);
+    square.wrap = TextWrap::Square;
+    square.anchor = Some(ImageAnchor {
+        x: 0.0,
+        y: 0.0,
+        origin_x: AnchorOrigin::Column,
+        origin_y: AnchorOrigin::Paragraph,
+    });
+    let square_layout = engine.layout_document(&document_with_wrap(square, text));
+    let square_beside_x = first_text_line(&square_layout).x;
+
+    let mut tight = ImageBlock::placeholder(120.0, 100.0);
+    tight.wrap = TextWrap::Tight;
+    tight.anchor = Some(ImageAnchor {
+        x: 0.0,
+        y: 0.0,
+        origin_x: AnchorOrigin::Column,
+        origin_y: AnchorOrigin::Paragraph,
+    });
+    tight.wrap_polygon = Some(vec![
+        (0.0, 0.0),
+        (60.0, 0.0),
+        (60.0, 100.0),
+        (0.0, 100.0),
+    ]);
+    let tight_layout = engine.layout_document(&document_with_wrap(tight, text));
+    let tight_image = image_boxes(&tight_layout)[0];
+    let tight_beside_x = first_text_line(&tight_layout).x;
+
+    assert!(
+        tight_beside_x < square_beside_x,
+        "tight contour should allow text closer than full square AABB (tight={tight_beside_x}, square={square_beside_x})"
+    );
+    assert!(
+        tight_beside_x >= tight_image.x + 58.0,
+        "tight contour should still clear the polygon (x={tight_beside_x}, image_x={})",
+        tight_image.x
+    );
+}
+
+/// A contour that sits away from the column's left edge must inset one side, not
+/// both — insetting from both collapsed the line to the 1 pt floor.
+#[test]
+fn right_side_contour_wrap_keeps_a_usable_line_width() {
+    let text = "Word wrap contour inset test with enough text to sit beside the floating image in the column.";
+    let mut engine = LayoutEngine::new();
+
+    let plain_layout = engine.layout_document(&Document::with_paragraph(text));
+    let full_width = first_text_line(&plain_layout).width;
+
+    let mut tight = ImageBlock::placeholder(120.0, 100.0);
+    tight.wrap = TextWrap::Tight;
+    tight.anchor = Some(ImageAnchor {
+        x: 300.0,
+        y: 0.0,
+        origin_x: AnchorOrigin::Column,
+        origin_y: AnchorOrigin::Paragraph,
+    });
+    tight.wrap_polygon = Some(vec![
+        (0.0, 0.0),
+        (120.0, 0.0),
+        (120.0, 100.0),
+        (0.0, 100.0),
+    ]);
+    let layout = engine.layout_document(&document_with_wrap(tight, text));
+    let line = first_text_line(&layout);
+    let image = image_boxes(&layout)[0];
+
+    assert!(
+        line.width > full_width * 0.3,
+        "text beside a right-side contour should keep a usable band, got {} of {full_width}",
+        line.width
+    );
+    assert!(
+        line.x < image.x,
+        "text should flow left of the contour, line.x={} image.x={}",
+        line.x,
+        image.x
+    );
+    assert!(
+        line.glyphs
+            .iter()
+            .all(|g| g.x + g.width <= image.x + 1.0),
+        "no glyph should overlap the contour"
+    );
+}
+
+/// Through wrap lets text touch the contour, so it fits closer than tight.
+#[test]
+fn through_contour_wrap_insets_text_without_the_tight_gap() {
+    let text = "Word wrap contour inset test with enough text to sit beside the floating image in the column.";
+    let mut engine = LayoutEngine::new();
+
+    let polygon = vec![(0.0, 0.0), (60.0, 0.0), (60.0, 100.0), (0.0, 100.0)];
+
+    let mut tight = ImageBlock::placeholder(120.0, 100.0);
+    tight.wrap = TextWrap::Tight;
+    tight.anchor = Some(ImageAnchor {
+        x: 0.0,
+        y: 0.0,
+        origin_x: AnchorOrigin::Column,
+        origin_y: AnchorOrigin::Paragraph,
+    });
+    tight.wrap_polygon = Some(polygon.clone());
+    let tight_x = first_text_line(&engine.layout_document(&document_with_wrap(tight, text))).x;
+
+    let mut through = ImageBlock::placeholder(120.0, 100.0);
+    through.wrap = TextWrap::Through;
+    through.anchor = Some(ImageAnchor {
+        x: 0.0,
+        y: 0.0,
+        origin_x: AnchorOrigin::Column,
+        origin_y: AnchorOrigin::Paragraph,
+    });
+    through.wrap_polygon = Some(polygon);
+    let through_layout = engine.layout_document(&document_with_wrap(through, text));
+    let through_line = first_text_line(&through_layout);
+    let image = image_boxes(&through_layout)[0];
+
+    assert!(
+        through_line.x >= image.x + 59.0,
+        "through wrap should still clear the contour, got x={} image_x={}",
+        through_line.x,
+        image.x
+    );
+    assert!(
+        through_line.x < tight_x,
+        "through wrap should sit closer than tight, through={} tight={tight_x}",
+        through_line.x
+    );
+}

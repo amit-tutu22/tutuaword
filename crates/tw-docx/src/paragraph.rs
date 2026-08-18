@@ -1,6 +1,6 @@
 use tw_model::{
     BookmarkAnchor, BreakType, CommentRef, Document, FieldData, FieldType, FootnoteRef,
-    HyperlinkTarget, Paragraph, Run, RunContent,
+    HyperlinkTarget, ParaFormat, Paragraph, Run, RunContent,
 };
 
 use crate::retention::ImportRetentionReport;
@@ -21,6 +21,20 @@ pub fn paragraph_properties_xml(para_xml: &str) -> &str {
         &para_xml[start..end]
     } else {
         para_xml
+    }
+}
+
+/// Apply list numbering from paragraph style when the paragraph has no direct `w:numPr`.
+fn apply_style_linked_numbering(doc: &Document, para: &mut Paragraph) {
+    if para.format.numbering.is_some() {
+        return;
+    }
+    let Some(style_id) = para.style_id else {
+        return;
+    };
+    let resolved = doc.styles.resolve_para_format(Some(style_id), &ParaFormat::default());
+    if let Some(numbering) = resolved.numbering {
+        para.format.numbering = Some(numbering);
     }
 }
 
@@ -84,6 +98,7 @@ pub fn parse_paragraph_with_retention(
         }
 
         para.runs = runs;
+        apply_style_linked_numbering(doc, &mut para);
         return Some(para);
     }
 
@@ -110,6 +125,7 @@ pub fn parse_paragraph_with_retention(
     }
 
     para.runs = runs;
+    apply_style_linked_numbering(doc, &mut para);
     Some(para)
 }
 

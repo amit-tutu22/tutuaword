@@ -31,6 +31,7 @@ fn image_block(alt: Option<&str>) -> ImageBlock {
         transform: ImageTransform::default(),
         caption_paragraph_id: None,
         alt_text: alt.map(|s| s.to_string()),
+        wrap_polygon: None,
     }
 }
 

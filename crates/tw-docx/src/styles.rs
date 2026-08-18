@@ -1,7 +1,7 @@
 use tw_model::{
     Alignment, BorderSet, CharFormat, Color, LineSpacing, NumberingRef, ParaFormat, SectionFormat,
     StyleId, CharacterStyle, DocumentTheme, ListLevel, ListMarkerFormat, ListSuffix, TabAlignment,
-    TabStop, NumberingCatalog, NumberingDefinition, ParagraphStyle, StyleSheet, TableStyle,
+    TabLeader, TabStop, NumberingCatalog, NumberingDefinition, ParagraphStyle, StyleSheet, TableStyle,
     BorderSpec, ThemeColorRef, UnderlineStyle,
 };
 
@@ -353,7 +353,18 @@ fn parse_tab_stops(xml: &str) -> Vec<TabStop> {
             Some("bar") => TabAlignment::Bar,
             _ => TabAlignment::Left,
         };
-        stops.push(TabStop { position: pos, alignment });
+        let leader = match read_own_attr(tab, "w:leader").as_deref() {
+            Some("dot") => TabLeader::Dots,
+            Some("middleDot") => TabLeader::MiddleDot,
+            Some("hyphen") => TabLeader::Hyphen,
+            Some("underscore") => TabLeader::Underscore,
+            _ => TabLeader::None,
+        };
+        stops.push(TabStop {
+            position: pos,
+            alignment,
+            leader,
+        });
     }
     stops.sort_by(|a, b| a.position.total_cmp(&b.position));
     stops

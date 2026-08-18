@@ -11,6 +11,8 @@ pub struct ImportBundle {
     pub source_format: DetectedFormat,
     pub docx_package: Option<DocxPackage>,
     pub odt_package: Option<OdtPackage>,
+    /// Embedded DOCX fonts deobfuscated at import; register before layout.
+    pub embedded_fonts: Vec<tw_docx::fonts::EmbeddedFont>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -156,6 +158,7 @@ pub fn import_document_bundle_with_password(
             source_format: format,
             docx_package: None,
             odt_package: None,
+            embedded_fonts: Vec::new(),
         }),
         DetectedFormat::Docx => {
             let result = tw_docx::import_docx_with_password(data, password).map_err(|e| match e {
@@ -173,6 +176,7 @@ pub fn import_document_bundle_with_password(
                 source_format: format,
                 docx_package: Some(result.package),
                 odt_package: None,
+                embedded_fonts: result.embedded_fonts,
             })
         }
         DetectedFormat::Odt => {
@@ -182,6 +186,7 @@ pub fn import_document_bundle_with_password(
                 source_format: format,
                 docx_package: None,
                 odt_package: Some(result.package),
+                embedded_fonts: Vec::new(),
             })
         }
         DetectedFormat::Rtf => Ok(ImportBundle {
@@ -189,24 +194,28 @@ pub fn import_document_bundle_with_password(
             source_format: format,
             docx_package: None,
             odt_package: None,
+            embedded_fonts: Vec::new(),
         }),
         DetectedFormat::Html => Ok(ImportBundle {
             document: tw_html::import(data)?,
             source_format: format,
             docx_package: None,
             odt_package: None,
+            embedded_fonts: Vec::new(),
         }),
         DetectedFormat::Markdown => Ok(ImportBundle {
             document: tw_markdown::import(data)?,
             source_format: format,
             docx_package: None,
             odt_package: None,
+            embedded_fonts: Vec::new(),
         }),
         DetectedFormat::PlainText => Ok(ImportBundle {
             document: tw_native::NativeFormat::import_plain_text(data)?,
             source_format: format,
             docx_package: None,
             odt_package: None,
+            embedded_fonts: Vec::new(),
         }),
         DetectedFormat::LegacyDoc => Err(ImportError::LegacyDocNotSupported),
         DetectedFormat::Unknown => Err(ImportError::UnknownFormat),

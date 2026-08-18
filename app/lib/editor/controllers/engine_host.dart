@@ -173,6 +173,11 @@ class EngineHost extends ChangeNotifier {
     if (dirtyPage != null) {
       pageDisplayVersions[dirtyPage] = data.version;
       pageDisplayLists[dirtyPage] = data.bytes;
+    } else if (full && data.bytes.isNotEmpty) {
+      // Seed page 0 so the first paint does not re-fetch (and risk an empty
+      // race) before DocumentView schedules loads.
+      pageDisplayVersions[0] = data.version;
+      pageDisplayLists[0] = data.bytes;
     }
     _pageWidth = data.pageWidth;
     _pageHeight = data.pageHeight;
@@ -243,7 +248,8 @@ class EngineHost extends ChangeNotifier {
     final pixelLen =
         ByteData.sublistView(wire, 20, 24).getUint32(0, Endian.little);
     if (wire.length < 24 + pixelLen) return Uint8List(0);
-    return Uint8List.sublistView(wire, 24, 24 + pixelLen);
+    // Copy — wasm-bindgen buffers can be reused; a view would go stale on web.
+    return Uint8List.fromList(wire.sublist(24, 24 + pixelLen));
   }
 
   bool engineHasPaintableDisplayList() {

@@ -13,3 +13,5 @@ unicode-linebreak = { workspace = true }
 [dev-dependencies]
 tw-docx = { path = "../tw-docx" }
 tw-edit = { path = "../tw-edit" }
+tw-render = { path = "../tw-render" }
+tw-core = { path = "../tw-core" }

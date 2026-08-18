@@ -247,6 +247,7 @@ class InsertTab extends StatelessWidget {
                 ),
                 if (controller.canLinkHeaderFooter)
                   RibbonToggleButton(
+                    key: const Key('header_footer_link_previous'),
                     icon: Icons.link,
                     label: 'Link to\nPrevious',
                     selected: controller.headerFooterLinked,

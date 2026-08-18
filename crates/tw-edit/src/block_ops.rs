@@ -177,6 +177,7 @@ pub fn insert_image(
             transform: tw_model::ImageTransform::default(),
             caption_paragraph_id: None,
             alt_text: None,
+            wrap_polygon: None,
         }
     } else {
         ImageBlock::placeholder(width, height)

@@ -148,27 +148,82 @@ pub fn format_list_marker(def: &NumberingDefinition, level: u32, index: u32) -> 
 
     let number = index + lvl.start;
 
-    if let Some(ref template) = lvl.marker_text {
+    let raw = if let Some(ref template) = lvl.marker_text {
         if template.contains('%') {
-            return expand_lvl_text(template, number, lvl.format);
+            expand_lvl_text(template, number, lvl.format)
+        } else {
+            template.clone()
         }
-        return template.clone();
-    }
+    } else {
+        match lvl.format {
+            ListMarkerFormat::Bullet => "•".into(),
+            ListMarkerFormat::Decimal => format!("{}.", number),
+            ListMarkerFormat::LowerAlpha => {
+                let c = (b'a' + ((number.saturating_sub(1)) % 26) as u8) as char;
+                format!("{}.", c)
+            }
+            ListMarkerFormat::UpperAlpha => {
+                let c = (b'A' + ((number.saturating_sub(1)) % 26) as u8) as char;
+                format!("{}.", c)
+            }
+            ListMarkerFormat::LowerRoman => format!("{}.", to_roman(number).to_lowercase()),
+            ListMarkerFormat::UpperRoman => format!("{}.", to_roman(number)),
+        }
+    };
 
-    match lvl.format {
-        ListMarkerFormat::Bullet => "•".into(),
-        ListMarkerFormat::Decimal => format!("{}.", number),
-        ListMarkerFormat::LowerAlpha => {
-            let c = (b'a' + ((number.saturating_sub(1)) % 26) as u8) as char;
-            format!("{}.", c)
-        }
-        ListMarkerFormat::UpperAlpha => {
-            let c = (b'A' + ((number.saturating_sub(1)) % 26) as u8) as char;
-            format!("{}.", c)
-        }
-        ListMarkerFormat::LowerRoman => format!("{}.", to_roman(number).to_lowercase()),
-        ListMarkerFormat::UpperRoman => format!("{}.", to_roman(number)),
+    normalize_list_marker_text(&raw, lvl.format, &lvl.char_format)
+}
+
+/// Word stores many bullets as Symbol/Wingdings Private Use Area codepoints or
+/// geometric dingbats (`■`, `○`, …). Those often paint as `.notdef` boxes when
+/// the dingbat face (or glyph) is missing — always use a Unicode bullet for
+/// bullet lists, and remap leftover PUA/geometry in other markers.
+pub fn normalize_list_marker_text(
+    raw: &str,
+    format: ListMarkerFormat,
+    char_format: &crate::format::CharFormat,
+) -> String {
+    let _ = char_format; // kept for API stability / dingbat callers
+    if format == ListMarkerFormat::Bullet {
+        return "•".into();
     }
+    if raw.is_empty() {
+        return raw.to_string();
+    }
+    raw.chars().map(map_list_marker_char).collect()
+}
+
+fn map_list_marker_char(ch: char) -> char {
+    match ch {
+        // Symbol / Wingdings PUA bullets.
+        '\u{F0B6}' | '\u{F0B7}' | '\u{F0A7}' | '\u{F0A8}' | '\u{F035}' | '\u{F0FC}'
+        | '\u{F0FD}' | '\u{F0FE}' | '\u{F0FF}' => '•',
+        c if ('\u{F000}'..='\u{F8FF}').contains(&c) => '•',
+        // Geometric bullets missing from many bundled faces (e.g. Noto Sans).
+        '■' | '□' | '▪' | '▫' | '●' | '○' | '◦' | '‣' | '⁃' | '∙' | '⦿' | '⦾' => '•',
+        c => c,
+    }
+}
+
+/// True for Office dingbat faces that remap ASCII/PUA instead of Unicode.
+pub fn is_dingbat_font_family(family: Option<&str>) -> bool {
+    let Some(name) = family.map(str::trim).filter(|s| !s.is_empty()) else {
+        return false;
+    };
+    let lower = name.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "symbol"
+            | "wingdings"
+            | "wingdings 2"
+            | "wingdings 3"
+            | "wingdings2"
+            | "wingdings3"
+            | "webdings"
+            | "zapf dingbats"
+            | "zapfdingbats"
+            | "monotype sorts"
+    )
 }
 
 fn expand_lvl_text(template: &str, number: u32, format: ListMarkerFormat) -> String {

@@ -777,8 +777,14 @@ fn write_image_xobject(pdf: &mut PdfBuilder, encoded: &[u8]) -> Result<Option<u3
         return Ok(Some(id));
     }
 
-    let img = image::load_from_memory(encoded)
-        .map_err(|e| PdfError::ExportFailed(format!("image decode for PDF failed: {e}")))?;
+    let img = match image::load_from_memory(encoded) {
+        Ok(img) => img,
+        Err(_) => {
+            // Unsupported or corrupt media (e.g. some GIF/EMF) must not abort
+            // the rest of the PDF — skip the XObject.
+            return Ok(None);
+        }
+    };
     let rgb = img.to_rgb8();
     let (w, h) = rgb.dimensions();
     let raw = rgb.into_raw();
@@ -1231,6 +1237,7 @@ mod tests {
                 &PdfExportOptions {
                     fidelity: PdfFidelity::Structural,
                     embed_fonts: true,
+                    ..Default::default()
                 },
             )
             .expect("embed_fonts should succeed when system faces resolve");
@@ -1252,6 +1259,7 @@ mod tests {
                 &PdfExportOptions {
                     fidelity: PdfFidelity::VisualMatch,
                     embed_fonts: false,
+                    ..Default::default()
                 },
             )
             .expect("VisualMatch ready once faces embed");

@@ -68,6 +68,9 @@ class FfiDocumentEngine implements DocumentEngine {
   String? fetchBookmarks() => _inner.fetchBookmarks();
 
   @override
+  String? fetchHyperlinkAt(String runId) => _inner.fetchHyperlinkAt(runId);
+
+  @override
   String? fetchSemanticTree() => _inner.fetchSemanticTree();
 
   @override

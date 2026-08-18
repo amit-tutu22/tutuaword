@@ -463,7 +463,10 @@ impl FontDatabase {
             .with_face_data(id, |data, index| {
                 rustybuzz::Face::from_slice(data, index)
                     .and_then(|face| face.glyph_index(ch))
-                    .is_some()
+                    // Glyph 0 is `.notdef` — treat as uncovered so fallback can
+                    // replace empty tofu boxes (common for Symbol/PUA bullets).
+                    .map(|gid| gid.0 != 0)
+                    .unwrap_or(false)
             })
             .unwrap_or(false)
     }

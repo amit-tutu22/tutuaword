@@ -181,6 +181,65 @@ fn wrap_none_in_front_is_not_behind() {
 }
 
 #[test]
+fn tight_wrap_polygon_is_imported() {
+    let body = r#"<w:p><w:r><w:drawing><wp:anchor behindDoc="0">
+        <wp:positionH relativeFrom="margin"><wp:posOffset>0</wp:posOffset></wp:positionH>
+        <wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>
+        <wp:extent cx="914400" cy="914400"/>
+        <wp:wrapTight wrapText="bothSides"><wp:wrapPolygon edited="0">
+            <wp:start x="0" y="0"/><wp:lineTo x="762000" y="0"/>
+            <wp:lineTo x="762000" y="914400"/><wp:lineTo x="0" y="914400"/>
+        </wp:wrapPolygon></wp:wrapTight>
+        <a:blip r:embed="rId7"/>
+        </wp:anchor></w:drawing></w:r></w:p>"#;
+    let docx = build_docx(body, true);
+    let result = import(&docx).unwrap();
+    let image = image_blocks(&result.document)[0];
+
+    assert_eq!(image.wrap, TextWrap::Tight);
+    let polygon = image.wrap_polygon.as_ref().expect("wrap polygon");
+    assert_eq!(polygon.len(), 4);
+    assert!((polygon[1].0 - 60.0).abs() < 0.01, "got {:?}", polygon[1]);
+}
+
+/// Exporting tight/through without the contour silently downgrades the wrap to
+/// the image's bounding box on the next open.
+#[test]
+fn tight_wrap_polygon_survives_a_round_trip() {
+    let mut doc = tw_model::Document::new();
+    doc.sections[0].blocks = vec![Block::ImageBlock(tw_model::ImageBlock {
+        id: tw_model::NodeId::new(),
+        data: tw_model::ImageData::from_bytes(PNG_1X1.to_vec(), Some("image/png".into())),
+        display_width: 72.0,
+        display_height: 72.0,
+        wrap: TextWrap::Tight,
+        anchor: Some(tw_model::ImageAnchor {
+            x: 0.0,
+            y: 0.0,
+            origin_x: AnchorOrigin::Column,
+            origin_y: AnchorOrigin::Paragraph,
+        }),
+        transform: tw_model::ImageTransform::default(),
+        caption_paragraph_id: None,
+        alt_text: None,
+        wrap_polygon: Some(vec![(0.0, 0.0), (60.0, 0.0), (60.0, 72.0), (0.0, 72.0)]),
+    })];
+
+    let bytes = tw_docx::export(&doc, &tw_docx::DocxPackage::minimal()).expect("export");
+    let reopened = import(&bytes).unwrap();
+    let image = image_blocks(&reopened.document)[0];
+
+    assert_eq!(image.wrap, TextWrap::Tight);
+    let polygon = image.wrap_polygon.as_ref().expect("exported wrap polygon");
+    assert!(
+        polygon.len() >= 4,
+        "expected the contour back, got {polygon:?}"
+    );
+    assert!((polygon[1].0 - 60.0).abs() < 0.01, "got {:?}", polygon[1]);
+    assert!((polygon[2].1 - 72.0).abs() < 0.01, "got {:?}", polygon[2]);
+}
+
+#[test]
 fn top_and_bottom_wrap_is_preserved() {
     let body = r#"<w:p><w:r><w:drawing><wp:anchor behindDoc="0">
         <wp:positionH relativeFrom="margin"><wp:posOffset>0</wp:posOffset></wp:positionH>

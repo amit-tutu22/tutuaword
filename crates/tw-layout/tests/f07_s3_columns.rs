@@ -74,3 +74,46 @@ fn u_f07_s3_three_columns_narrower_width() {
         "line width {max_line_width} should fit column width {col_width}"
     );
 }
+
+#[test]
+fn u_f07_s3_huge_column_gap_clamps_to_usable_columns() {
+    let words: String = std::iter::repeat("word ").take(400).collect();
+    let mut doc = Document::new();
+    doc.sections[0].blocks = vec![Block::Paragraph(Paragraph::with_text(words.trim()))];
+    doc.sections[0].format.page_height = 792.0;
+    doc.sections[0].format.columns = ColumnLayout {
+        count: 2,
+        // python-docx EMU-sized gap (~18k pt if interpreted as twips).
+        gap: 360_000.0,
+    };
+
+    let layout = LayoutEngine::new().layout_document(&doc);
+    assert!(
+        layout.pages.len() < 8,
+        "clamped gap should not explode pagination, got {} pages",
+        layout.pages.len()
+    );
+
+    let margin_left = doc.sections[0].format.margin_left;
+    let content = doc.sections[0].format.page_width
+        - doc.sections[0].format.margin_left
+        - doc.sections[0].format.margin_right;
+    let mut gap: f32 = 360_000.0 / 12700.0;
+    let max_gap = ((content - 2.0) / 1.0).max(0.0);
+    gap = gap.min(max_gap);
+    let col_width = (content - gap) / 2.0;
+    let col2_x = margin_left + col_width + gap;
+    let xs: Vec<f32> = layout
+        .pages
+        .iter()
+        .flat_map(|p| &p.boxes)
+        .filter_map(|b| match b {
+            LayoutBox::TextLine(line) => Some(line.x),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        xs.iter().any(|x| (*x - col2_x).abs() < 2.0),
+        "expected usable second column after gap clamp, got {xs:?}"
+    );
+}

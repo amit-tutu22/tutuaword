@@ -159,6 +159,7 @@ fn an_image_survives_export_with_its_bytes() {
         transform: ImageTransform::default(),
         caption_paragraph_id: None,
         alt_text: None,
+            wrap_polygon: None,
     };
     doc.sections[0].blocks = vec![Block::ImageBlock(image)];
 

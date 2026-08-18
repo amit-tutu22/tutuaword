@@ -98,7 +98,22 @@ pub fn import_docx_with_password(
         package.parts.insert(name, data);
     }
 
+    if !package.parts.contains_key("[Content_Types].xml") {
+        return Err(DocxError::InvalidPackage(
+            "missing [Content_Types].xml".into(),
+        ));
+    }
     let xml = document_xml.ok_or(DocxError::MissingDocumentPart)?;
+    if !xml.contains("<w:document") || !xml.contains("</w:document>") {
+        return Err(DocxError::InvalidPackage(
+            "word/document.xml is not well-formed (missing w:document)".into(),
+        ));
+    }
+    if !xml.contains("<w:body") || !xml.contains("</w:body>") {
+        return Err(DocxError::InvalidPackage(
+            "word/document.xml is not well-formed (missing w:body)".into(),
+        ));
+    }
     let relationships = package
         .parts
         .get("word/_rels/document.xml.rels")
@@ -183,10 +198,13 @@ pub fn import_docx_with_password(
     package.source_styles_fingerprint =
         Some(crate::fingerprint::styles_fingerprint(&document.styles));
 
+    let embedded_fonts = crate::fonts::extract_embedded_fonts(&package);
+
     Ok(ImportResult {
         document,
         package,
         retention,
+        embedded_fonts,
     })
 }
 
@@ -892,5 +910,67 @@ mod tests {
         let result = import_docx(&bytes).unwrap();
         assert!(result.package.parts.contains_key("[Content_Types].xml"));
         assert!(result.package.parts.contains_key("word/_rels/document.xml.rels"));
+    }
+
+    #[test]
+    fn style_linked_list_numbering_copied_to_paragraph() {
+        let styles = r#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+            <w:style w:type="paragraph" w:styleId="ListBullet">
+                <w:name w:val="List Bullet"/>
+                <w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr>
+            </w:style>
+        </w:styles>"#;
+        let numbering = r#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+            <w:abstractNum w:abstractNumId="0">
+                <w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/></w:lvl>
+            </w:abstractNum>
+            <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
+        </w:numbering>"#;
+        let document = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+            <w:p><w:pPr><w:pStyle w:val="ListBullet"/></w:pPr><w:r><w:t>Bullet item</w:t></w:r></w:p>
+        </w:body></w:document>"#;
+        let result = import_docx(&minimal_docx_with_parts(
+            document,
+            Some(styles),
+            Some(numbering),
+        ))
+        .unwrap();
+        let para = result.document.sections[0].blocks[0].paragraph().unwrap();
+        assert!(
+            para.format.numbering.is_some(),
+            "style-linked numPr should copy onto paragraph format"
+        );
+    }
+
+    #[test]
+    fn rejects_unterminated_document_xml() {
+        let bytes = minimal_docx("<w:document><w:body><w:p>UNTERMINATED");
+        match import_docx(&bytes) {
+            Err(err) => assert!(
+                matches!(err, DocxError::InvalidPackage(_)),
+                "expected InvalidPackage, got {err}"
+            ),
+            Ok(_) => panic!("unterminated document.xml should not import"),
+        }
+    }
+
+    #[test]
+    fn rejects_package_without_content_types() {
+        let mut buf = Vec::new();
+        {
+            let mut zip = ZipWriter::new(Cursor::new(&mut buf));
+            let options = SimpleFileOptions::default();
+            zip.start_file("word/document.xml", options).unwrap();
+            zip.write_all(b"<w:document><w:body><w:p/></w:body></w:document>")
+                .unwrap();
+            zip.finish().unwrap();
+        }
+        match import_docx(&buf) {
+            Err(err) => assert!(
+                matches!(err, DocxError::InvalidPackage(_)),
+                "expected InvalidPackage, got {err}"
+            ),
+            Ok(_) => panic!("package without [Content_Types].xml should not import"),
+        }
     }
 }

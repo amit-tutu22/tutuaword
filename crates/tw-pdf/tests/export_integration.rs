@@ -96,6 +96,7 @@ fn u_f23_s2_visual_match_exports_with_fontfile2() {
             &PdfExportOptions {
                 fidelity: PdfFidelity::VisualMatch,
                 embed_fonts: false,
+                ..Default::default()
             },
         )
         .expect("VisualMatch should export once font embedding is ready");
@@ -114,6 +115,7 @@ fn u_f23_s2_embed_fonts_writes_fontfile2() {
             &PdfExportOptions {
                 fidelity: PdfFidelity::Structural,
                 embed_fonts: true,
+                ..Default::default()
             },
         )
         .expect("embed_fonts should write FontFile2");
@@ -145,6 +147,7 @@ fn u_f23_s2_images_written_as_xobjects() {
             transform: ImageTransform::default(),
             caption_paragraph_id: None,
             alt_text: None,
+            wrap_polygon: None,
         }),
     ];
 
@@ -154,4 +157,35 @@ fn u_f23_s2_images_written_as_xobjects() {
     let pdf_str = String::from_utf8_lossy(&pdf);
     assert!(pdf_str.contains("/Subtype /Image"));
     assert!(pdf_str.contains("/XObject"));
+}
+
+#[test]
+fn gif_image_exports_as_pdf_xobject_without_aborting() {
+    const GIF: &[u8] = include_bytes!("sample.gif");
+
+    use tw_model::{ImageBlock, ImageData, ImageTransform, TextWrap};
+
+    let mut doc = Document::new();
+    doc.sections[0].blocks = vec![Block::ImageBlock(ImageBlock {
+        id: tw_model::NodeId::new(),
+        data: ImageData::from_bytes(GIF.to_vec(), Some("image/gif".into())),
+        display_width: 120.0,
+        display_height: 80.0,
+        wrap: TextWrap::Inline,
+        anchor: None,
+        transform: ImageTransform::default(),
+        caption_paragraph_id: None,
+        alt_text: None,
+        wrap_polygon: None,
+    })];
+
+    let pdf = DisplayListPdfExporter
+        .export(&doc, &PdfExportOptions::default())
+        .expect("GIF must not abort PDF export");
+    assert!(pdf.starts_with(b"%PDF"));
+    let pdf_str = String::from_utf8_lossy(&pdf);
+    assert!(
+        pdf_str.contains("/Subtype /Image"),
+        "GIF should decode into a PDF image XObject"
+    );
 }

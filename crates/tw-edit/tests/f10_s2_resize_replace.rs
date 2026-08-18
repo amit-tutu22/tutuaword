@@ -35,6 +35,7 @@ fn floating_image() -> ImageBlock {
         transform: ImageTransform::default(),
         caption_paragraph_id: None,
         alt_text: None,
+            wrap_polygon: None,
     }
 }
 

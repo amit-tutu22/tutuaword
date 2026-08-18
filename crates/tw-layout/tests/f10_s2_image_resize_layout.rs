@@ -24,6 +24,7 @@ fn u_f10_s2_layout_reflects_display_size() {
         transform: ImageTransform::default(),
         caption_paragraph_id: None,
         alt_text: None,
+            wrap_polygon: None,
     }));
 
     let mut engine = LayoutEngine::new();

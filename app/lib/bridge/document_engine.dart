@@ -30,6 +30,8 @@ abstract class DocumentEngine {
   String? fetchDocumentOutline();
   /// JSON array of bookmarks: `{ name, run_id, paragraph_id, page }` (F19.S4).
   String? fetchBookmarks();
+  /// JSON `{ url, anchor, text, tooltip }` when [runId] is a hyperlink.
+  String? fetchHyperlinkAt(String runId);
   /// JSON semantic accessibility tree (F21.S1).
   String? fetchSemanticTree();
   /// JSON accessibility checker issues (F21.S4).

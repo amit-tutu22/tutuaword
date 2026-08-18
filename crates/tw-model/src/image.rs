@@ -10,6 +10,10 @@ pub enum TextWrap {
     TopBottom,
     Behind,
     InFront,
+    /// Text wraps along a contour polygon (`wp:wrapTight`).
+    Tight,
+    /// Text may flow through transparent regions (`wp:wrapThrough`).
+    Through,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -262,6 +266,9 @@ pub struct ImageBlock {
     /// Accessibility alternative text (`wp:docPr/@descr`) — F21.S3.
     #[serde(default)]
     pub alt_text: Option<String>,
+    /// Contour wrap polygon in points relative to the image origin (EMU → pt at import).
+    #[serde(default)]
+    pub wrap_polygon: Option<Vec<(f32, f32)>>,
 }
 
 impl ImageBlock {
@@ -284,6 +291,7 @@ impl ImageBlock {
             transform: ImageTransform::default(),
             caption_paragraph_id: None,
             alt_text: None,
+            wrap_polygon: None,
         }
     }
 
@@ -299,6 +307,7 @@ impl ImageBlock {
             transform: ImageTransform::default(),
             caption_paragraph_id: None,
             alt_text: None,
+            wrap_polygon: None,
         }
     }
 }

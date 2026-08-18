@@ -39,43 +39,27 @@ class WebKeyListenerImpl implements WebKeyListener {
     final key = event.key;
     if (key == null || key.isEmpty) return;
 
-    if (key == 'Backspace') {
-      event.preventDefault();
-      _controller.markWebSpecialKeyConsumed();
-      unawaited(_controller.handleEditorInput(const EditorInputEvent.backspace()));
-      return;
-    }
-    if (key == 'Delete') {
-      event.preventDefault();
-      _controller.markWebSpecialKeyConsumed();
-      unawaited(_controller.handleEditorInput(const EditorInputEvent.delete()));
-      return;
-    }
-    if (key == 'Enter') {
-      event.preventDefault();
-      _controller.markWebSpecialKeyConsumed();
-      unawaited(_controller.handleEditorInput(const EditorInputEvent.newline()));
-      return;
-    }
-    if (key == 'Tab') {
-      event.preventDefault();
-      _controller.markWebSpecialKeyConsumed();
-      unawaited(
-        _controller.handleEditorInput(EditorInputEvent.tab(shift: event.shiftKey)),
+    // Editing keys are ours on every platform. Chords we do not own (Ctrl+B,
+    // Ctrl+Z, …) fall through untouched so Flutter's Shortcuts can claim them.
+    final editingKey = _editingKeys[key];
+    if (editingKey != null) {
+      final input = EditorInputEvent.fromLogicalKey(
+        editingKey,
+        shift: event.shiftKey == true,
+        control: event.ctrlKey == true,
+        alt: event.altKey == true,
+        meta: event.metaKey == true,
       );
-      return;
-    }
-    if (key == 'ArrowLeft' ||
-        key == 'ArrowRight' ||
-        key == 'ArrowUp' ||
-        key == 'ArrowDown') {
+      if (input == null) return;
       event.preventDefault();
       _controller.markWebSpecialKeyConsumed();
-      unawaited(_controller.handleEditorInput(_arrowEvent(key)));
+      unawaited(_controller.handleEditorInput(input));
       return;
     }
 
-    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.ctrlKey == true || event.metaKey == true || event.altKey == true) {
+      return;
+    }
     if (key.length != 1) return;
 
     event.preventDefault();
@@ -108,20 +92,22 @@ class WebKeyListenerImpl implements WebKeyListener {
   }
 }
 
-EditorInputEvent _arrowEvent(String key) {
-  switch (key) {
-    case 'ArrowLeft':
-      return const EditorInputEvent.arrowLeft();
-    case 'ArrowRight':
-      return const EditorInputEvent.arrowRight();
-    case 'ArrowUp':
-      return const EditorInputEvent.arrowUp();
-    case 'ArrowDown':
-      return const EditorInputEvent.arrowDown();
-    default:
-      return const EditorInputEvent.arrowRight();
-  }
-}
+/// DOM `KeyboardEvent.key` names the glyph editor owns, mapped onto the same
+/// logical keys the desktop path uses so both share one chord table.
+const _editingKeys = <String, LogicalKeyboardKey>{
+  'Backspace': LogicalKeyboardKey.backspace,
+  'Delete': LogicalKeyboardKey.delete,
+  'Enter': LogicalKeyboardKey.enter,
+  'Tab': LogicalKeyboardKey.tab,
+  'ArrowLeft': LogicalKeyboardKey.arrowLeft,
+  'ArrowRight': LogicalKeyboardKey.arrowRight,
+  'ArrowUp': LogicalKeyboardKey.arrowUp,
+  'ArrowDown': LogicalKeyboardKey.arrowDown,
+  'Home': LogicalKeyboardKey.home,
+  'End': LogicalKeyboardKey.end,
+  'PageUp': LogicalKeyboardKey.pageUp,
+  'PageDown': LogicalKeyboardKey.pageDown,
+};
 
 WebKeyListener createWebKeyListener(EditorController controller) =>
     WebKeyListenerImpl(controller);

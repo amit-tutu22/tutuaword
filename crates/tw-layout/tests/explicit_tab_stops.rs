@@ -32,6 +32,7 @@ fn u_f04_s3_custom_tab_stop() {
     para.format.tab_stops = Some(vec![TabStop {
         position: 200.0,
         alignment: TabAlignment::Left,
+        ..Default::default()
     }]);
 
     let x = b_glyph_x(&para, &mut shaper, &mut atlas);
@@ -50,6 +51,7 @@ fn explicit_tab_stop_beats_default_grid() {
     custom.format.tab_stops = Some(vec![TabStop {
         position: 144.0,
         alignment: TabAlignment::Left,
+        ..Default::default()
     }]);
     let plain = Paragraph::with_text("A\tB");
 

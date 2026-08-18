@@ -231,23 +231,139 @@ class SelectionController extends ChangeNotifier {
     return _engine!.selectionRectsForRange(pageIndex, _selection!);
   }
 
-  void moveGlyphCaretByArrow(LogicalKeyboardKey key) {
+  /// [extend] overrides the live Shift state, which the web DOM key listener
+  /// bypasses (it never reaches [HardwareKeyboard]).
+  void moveGlyphCaretByArrow(LogicalKeyboardKey key, {bool? extend}) {
     if (_engine == null || _caretRunId == null) return;
-    final extend = HardwareKeyboard.instance.isShiftPressed;
-    if (extend) _ensureSelectionAnchorForExtend();
+    final extending = extend ?? HardwareKeyboard.instance.isShiftPressed;
+    if (extending) _ensureSelectionAnchorForExtend();
 
     switch (key) {
       case LogicalKeyboardKey.arrowLeft:
-        _moveGlyphCaretOffset(-1, extendSelection: extend);
+        _moveGlyphCaretOffset(-1, extendSelection: extending);
       case LogicalKeyboardKey.arrowRight:
-        _moveGlyphCaretOffset(1, extendSelection: extend);
+        _moveGlyphCaretOffset(1, extendSelection: extending);
       case LogicalKeyboardKey.arrowUp:
-        _moveGlyphCaretUpDown(-1, extendSelection: extend);
+        _moveGlyphCaretUpDown(-1, extendSelection: extending);
       case LogicalKeyboardKey.arrowDown:
-        _moveGlyphCaretUpDown(1, extendSelection: extend);
+        _moveGlyphCaretUpDown(1, extendSelection: extending);
       default:
         break;
     }
+  }
+
+  /// Home / End — the visual line edge, found by probing the caret's own
+  /// baseline at the text-column margins.
+  void moveGlyphCaretToLineEdge({required bool toEnd, required bool extend}) {
+    if (_engine == null || _caretGeometry == null) return;
+    if (extend) _ensureSelectionAnchorForExtend();
+    final y = _caretGeometry!.y;
+    final x = toEnd ? _host.pageWidth - _marginRight : _marginLeft;
+    if (extend) {
+      _moveGlyphCaretToHit(caretPage, x, y, extendSelection: true);
+    } else {
+      hitTestAt(caretPage, x, y);
+    }
+  }
+
+  /// Ctrl+Home / Ctrl+End.
+  void moveGlyphCaretToDocumentEdge({
+    required bool toEnd,
+    required bool extend,
+  }) {
+    if (_engine == null) return;
+    if (extend) _ensureSelectionAnchorForExtend();
+
+    if (!toEnd) {
+      _engine!.setCurrentPageIndex(0);
+      final x = _marginLeft;
+      final y = _marginTop + _fontSize;
+      if (extend) {
+        _moveGlyphCaretToHit(0, x, y, extendSelection: true);
+      } else {
+        hitTestAt(0, x, y);
+      }
+      return;
+    }
+
+    final tail = _engine!.fetchDocumentTailHit(0);
+    if (tail == null) return;
+    final lastPage = _host.pageCount > 0 ? _host.pageCount - 1 : 0;
+    final located = _engine!.caretPageAndGeometry(
+      tail.runId,
+      tail.charOffset,
+      hintPage: lastPage,
+    );
+    final page = located?.$1 ?? caretPage;
+    _engine!.setCurrentPageIndex(page);
+    _caretRunId = tail.runId;
+    _caretOffset = tail.charOffset;
+    if (located != null) _caretGeometry = located.$2;
+    final position = DocPosition(runId: tail.runId, offset: tail.charOffset);
+    if (extend && _selection != null) {
+      _selection = _selection!.copyWith(page: page, focus: position);
+      _refreshSelectionRects();
+    } else {
+      _selection = DocRange(anchor: position, focus: position, page: page);
+      _selectionRects = const [];
+    }
+    onSelectionChanged();
+    notifyListeners();
+  }
+
+  /// Page Up / Page Down. A page is the scroll unit in this viewport, so one
+  /// screen and one page are the same step; the column (x) is preserved.
+  void moveGlyphCaretByPage({required int direction, required bool extend}) {
+    if (_engine == null || direction == 0) return;
+    final nextPage = caretPage + direction;
+    if (nextPage < 0 || nextPage >= _host.pageCount) {
+      // Word clamps to the document edge on the first and last screen.
+      moveGlyphCaretToDocumentEdge(toEnd: direction > 0, extend: extend);
+      return;
+    }
+    if (extend) _ensureSelectionAnchorForExtend();
+    final x = _caretGeometry?.x ?? _marginLeft;
+    final y = (_caretGeometry?.y ?? (_marginTop + _fontSize))
+        .clamp(_marginTop + _fontSize, _host.pageHeight - _marginBottom);
+    if (extend) {
+      _moveGlyphCaretToHit(nextPage, x, y, extendSelection: true);
+    } else {
+      hitTestAt(nextPage, x, y);
+    }
+  }
+
+  /// Ctrl+Left / Ctrl+Right — Word lands on the start of the adjacent word.
+  void moveGlyphCaretByWord({required int direction, required bool extend}) {
+    final runId = _caretRunId;
+    if (_engine == null || runId == null || direction == 0) return;
+    final target = direction < 0
+        ? _wordStartBefore(runId, _caretOffset)
+        : _wordStartAfter(runId, _caretOffset);
+    final geometry = target == _caretOffset
+        ? null
+        : _engine!.caretAtPosition(caretPage, runId, target);
+    if (geometry == null) {
+      // Already at the run edge: a single-character step is what crosses into
+      // the neighbouring run, and page, for us.
+      if (extend) _ensureSelectionAnchorForExtend();
+      _moveGlyphCaretOffset(direction, extendSelection: extend);
+      return;
+    }
+    if (extend) _ensureSelectionAnchorForExtend();
+    _applyGlyphCaretMove(runId, target, geometry, extendSelection: extend);
+  }
+
+  /// Range Ctrl+Backspace / Ctrl+Delete should remove, or null when the caret
+  /// is already at the run edge and a plain character delete should run instead.
+  (int, int)? wordDeleteRange({required int direction}) {
+    final runId = _caretRunId;
+    if (_engine == null || runId == null || direction == 0) return null;
+    if (direction < 0) {
+      final start = _wordStartBefore(runId, _caretOffset);
+      return start < _caretOffset ? (start, _caretOffset) : null;
+    }
+    final end = _wordStartAfter(runId, _caretOffset);
+    return end > _caretOffset ? (_caretOffset, end) : null;
   }
 
   void _ensureSelectionAnchorForExtend() {
@@ -536,13 +652,50 @@ class SelectionController extends ChangeNotifier {
     notifyListeners();
   }
 
-  (int, int) _wordBoundsInRun(String runId, int offset) {
-    final wordChar = RegExp(r'[\p{L}\p{N}_]', unicode: true);
-    bool isWordCharAt(int index) {
-      if (index < 0) return false;
-      final ch = _engine!.fetchTextRange(runId, index, runId, index + 1);
-      return ch != null && ch.isNotEmpty && wordChar.hasMatch(ch);
+  static final _wordCharPattern = RegExp(r'[\p{L}\p{N}_]', unicode: true);
+
+  /// Longest run offset the scanners will probe, so a missing run cannot spin.
+  static const _runScanLimit = 1 << 16;
+
+  String? _charAt(String runId, int index) {
+    if (index < 0) return null;
+    final ch = _engine!.fetchTextRange(runId, index, runId, index + 1);
+    if (ch == null || ch.isEmpty) return null;
+    return ch;
+  }
+
+  bool _isWordCharAt(String runId, int index) {
+    final ch = _charAt(runId, index);
+    return ch != null && _wordCharPattern.hasMatch(ch);
+  }
+
+  /// Start of the word at or before [offset]: skip any gap, then the word.
+  int _wordStartBefore(String runId, int offset) {
+    var pos = offset;
+    while (pos > 0 && !_isWordCharAt(runId, pos - 1)) {
+      pos--;
     }
+    while (pos > 0 && _isWordCharAt(runId, pos - 1)) {
+      pos--;
+    }
+    return pos;
+  }
+
+  /// Start of the next word after [offset]: skip the current word, then the gap.
+  int _wordStartAfter(String runId, int offset) {
+    var pos = offset;
+    final limit = offset + _runScanLimit;
+    while (pos < limit && _isWordCharAt(runId, pos)) {
+      pos++;
+    }
+    while (pos < limit && _charAt(runId, pos) != null && !_isWordCharAt(runId, pos)) {
+      pos++;
+    }
+    return pos;
+  }
+
+  (int, int) _wordBoundsInRun(String runId, int offset) {
+    bool isWordCharAt(int index) => _isWordCharAt(runId, index);
 
     var pos = offset;
     if (!isWordCharAt(pos) && !isWordCharAt(pos - 1)) {

@@ -17,6 +17,7 @@ fn u_f08_s2_insert_page_field_replaces_empty_run() {
             run_id,
             offset: 0,
             field_type: FieldType::Page,
+            merge_name: None,
         })
         .unwrap();
 
@@ -45,6 +46,7 @@ fn u_f08_s2_insert_date_field() {
             run_id,
             offset: 0,
             field_type: FieldType::Date,
+            merge_name: None,
         })
         .unwrap();
 

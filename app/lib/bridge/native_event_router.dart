@@ -35,6 +35,10 @@ class NativeEventRouter {
   Timer? _pumpTimer;
   Duration? _pumpInterval;
 
+  /// Optional hook for events that are not correlated to an awaited request
+  /// (e.g. background `DisplayListReady` under BACKGROUND_REQUEST_ID).
+  void Function(int eventType, int requestId)? onUnsolicitedEvent;
+
   /// Installed once the native library is loaded; mock-backed tests never
   /// attach one, so they run without timers.
   void attachPump(NativeEventPump pump) {
@@ -81,6 +85,7 @@ class NativeEventRouter {
       return;
     }
     _earlyEvents[requestId] = eventType;
+    onUnsolicitedEvent?.call(eventType, requestId);
   }
 
   /// Register interest in [requestId]; completes with event type when matched.

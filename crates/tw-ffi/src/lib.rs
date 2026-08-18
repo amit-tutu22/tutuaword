@@ -2105,6 +2105,27 @@ pub extern "C" fn tw_get_bookmarks(
     })
 }
 
+/// JSON `{ url, anchor, text, tooltip }` for a hyperlink run, or empty.
+#[no_mangle]
+pub extern "C" fn tw_hyperlink_at(
+    run_id_ptr: *const c_char,
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    guard_ffi(|| {
+        let guard = SESSION.lock();
+        let Some(session) = guard.as_ref() else {
+            return -1;
+        };
+        let Some(run_id) = parse_node_id(run_id_ptr) else {
+            return -3;
+        };
+        let json = session.hyperlink_at(run_id).unwrap_or_default();
+        transfer_bytes_to_caller(json.into_bytes(), out_ptr, out_len);
+        0
+    })
+}
+
 /// JSON semantic accessibility tree (F21.S1).
 #[no_mangle]
 pub extern "C" fn tw_get_semantic_tree(

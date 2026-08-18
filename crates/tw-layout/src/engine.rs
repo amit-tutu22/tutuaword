@@ -1,4 +1,4 @@
-use crate::line::{apply_list_markers, layout_paragraph, ParagraphFrame};
+use crate::line::{append_tab_leader, apply_list_markers, layout_paragraph, ParagraphFrame};
 use crate::tables::layout_table_slice;
 use crate::types::{
     DocumentLayout, ImageLayout, LayoutBox, LineMap, PageIndex, PageLayout, ShapeLayout,
@@ -7,7 +7,8 @@ use crate::types::{
 use std::collections::HashMap;
 use tw_model::{
     AnchorOrigin, Block, BreakType, Document, FieldEvalContext, HeaderFooter, HeaderFooterType,
-    NodeId, Paragraph, Run, RunContent, SectionFormat, TextWrap, format_list_marker,
+    NodeId, Paragraph, RevisionType, Run, RunContent, SectionFormat, TextWrap, format_list_marker,
+    run_layout_text,
 };
 use tw_shape::{FontFaceSpec, FontId, FontRegistrationError, GlyphAtlas, TextShaper};
 
@@ -16,15 +17,20 @@ const MAX_INCREMENTAL_REFLOW_PAGES: usize = 3;
 /// Gap between a square-wrapped image and text beside it.
 const IMAGE_TEXT_GAP: f32 = 8.0;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 enum WrapKind {
-    /// Text flows beside the image (square / tight).
+    /// Text flows beside the image (square / tight AABB fallback).
     Square,
     /// Text skips the image's vertical band entirely.
     TopBottom,
+    /// Contour wrap from `wp:wrapPolygon` (`Tight` / `Through`).
+    Contour {
+        points: Vec<(f32, f32)>,
+        through: bool,
+    },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 struct WrapObstacle {
     x: f32,
     y: f32,
@@ -52,12 +58,20 @@ struct ColumnFlow {
 impl ColumnFlow {
     fn from_format(format: &SectionFormat) -> Self {
         let count = format.columns.count.clamp(1, 3);
-        let gap = if count > 1 {
+        let content = format.page_width - format.margin_left - format.margin_right;
+        let mut gap = if count > 1 {
             format.columns.gap.max(0.0)
         } else {
             0.0
         };
-        let content = format.page_width - format.margin_left - format.margin_right;
+        // python-docx and some Word exports store column space in EMUs (914400/in).
+        if count > 1 && gap > content {
+            gap = gap / 12700.0;
+        }
+        if count > 1 {
+            let max_gap = ((content - count as f32) / (count.saturating_sub(1) as f32)).max(0.0);
+            gap = gap.min(max_gap);
+        }
         let total_gap = gap * (count.saturating_sub(1) as f32);
         let width = (content - total_gap) / count as f32;
         Self {
@@ -708,18 +722,18 @@ impl LayoutEngine {
                                     .resolve_char_format(para.style_id, &run.format);
                             }
 
-                            let level = para.format.numbering.and_then(|nr| {
+                            let level = resolved_para.numbering.and_then(|nr| {
                                 doc.settings.numbering.get(nr.numbering_id).and_then(|d| {
                                     d.levels.iter().find(|l| l.level == nr.level)
                                 })
                             });
 
-                            let list_marker = para.format.numbering.map(|nr| {
+                            let list_marker = resolved_para.numbering.map(|nr| {
                                 let key = (nr.numbering_id, nr.level);
                                 let start_at = level
                                     .map(|l| l.start.saturating_sub(1))
                                     .unwrap_or(0);
-                                if para.format.num_restart == Some(true) {
+                                if resolved_para.num_restart == Some(true) {
                                     list_counters.insert(key, start_at);
                                 }
                                 let counter = list_counters.entry(key).or_insert(start_at);
@@ -816,6 +830,14 @@ impl LayoutEngine {
                                 marker_format = doc
                                     .styles
                                     .resolve_char_format(para.style_id, &marker_format);
+                                // After mapping Symbol/Wingdings bullets to Unicode
+                                // `•`, keep shaping on a normal text face — dingbat
+                                // fonts do not cover U+2022 and paint tofu boxes.
+                                if tw_model::is_dingbat_font_family(
+                                    marker_format.font_family.as_deref(),
+                                ) {
+                                    marker_format.font_family = None;
+                                }
                                 apply_list_markers(
                                     &mut self.shaper,
                                     &mut self.atlas,
@@ -1148,7 +1170,35 @@ impl LayoutEngine {
                                         kind: WrapKind::Square,
                                     });
                                 }
-                                TextWrap::TopBottom => {
+                                TextWrap::Tight | TextWrap::Through => {
+                                    let through = matches!(image.wrap, TextWrap::Through);
+                                    let rel = image.wrap_polygon.clone().unwrap_or_default();
+                                    if rel.len() >= 3 {
+                                        let abs = rel
+                                            .iter()
+                                            .map(|(px, py)| (ax + *px, ay + *py))
+                                            .collect();
+                                        wrap_obstacles.push(WrapObstacle {
+                                            x: ax,
+                                            y: ay,
+                                            width: frame_w,
+                                            height: frame_h,
+                                            kind: WrapKind::Contour {
+                                                points: abs,
+                                                through,
+                                            },
+                                        });
+                                    } else {
+                                        wrap_obstacles.push(WrapObstacle {
+                                            x: ax,
+                                            y: ay,
+                                            width: frame_w,
+                                            height: frame_h,
+                                            kind: WrapKind::Square,
+                                        });
+                                    }
+                                }
+                                TextWrap::TopBottom | TextWrap::InFront => {
                                     wrap_obstacles.push(WrapObstacle {
                                         x: ax,
                                         y: ay,
@@ -1223,14 +1273,19 @@ impl LayoutEngine {
                                 encoded,
                             )));
                         } else {
-                            current_boxes.push(LayoutBox::Shape(layout_shape(
-                                shape,
-                                format.margin_left,
-                                y,
-                            )));
+                            let mut laid_out = layout_shape(shape, format.margin_left, y);
+                            if shape.shape.width <= 0.0 {
+                                laid_out.width = column_flow.width;
+                            }
+                            current_boxes.push(LayoutBox::Shape(laid_out));
                         }
                         let padding = 6.0;
-                        let inner_width = (shape.shape.width - padding * 2.0).max(12.0);
+                        let shape_width = if shape.shape.width > 0.0 {
+                            shape.shape.width
+                        } else {
+                            column_flow.width
+                        };
+                        let inner_width = (shape_width - padding * 2.0).max(12.0);
                         let inner = layout_shape_paragraphs(
                             doc,
                             shape,
@@ -1296,6 +1351,14 @@ impl LayoutEngine {
         for (idx, page) in pages.iter_mut().enumerate() {
             page.page_index = idx as PageIndex;
         }
+
+        decorate_toc_page_numbers(
+            &mut pages,
+            doc,
+            &mut self.shaper,
+            &mut self.atlas,
+            tab_interval,
+        );
 
         self.last_relayout_pages = if incremental {
             built_end.saturating_sub(relayout_base)
@@ -1525,6 +1588,14 @@ fn flush_page(
         &page_boxes,
         doc,
         format,
+    ));
+    page_boxes.extend(layout_review_margin_balloons(
+        &page_boxes,
+        doc,
+        format,
+        shaper,
+        atlas,
+        tab_interval,
     ));
 
     pages.push(PageLayout {
@@ -1776,6 +1847,219 @@ fn roman_numeral(mut n: u32) -> String {
     }
 }
 
+fn paragraph_by_id<'a>(doc: &'a Document, id: NodeId) -> Option<&'a Paragraph> {
+    for section in &doc.sections {
+        for block in &section.blocks {
+            if let Some(para) = block.paragraph() {
+                if para.id == id {
+                    return Some(para);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn hyperlink_internal_anchor(target: &tw_model::HyperlinkTarget) -> Option<&str> {
+    if let Some(anchor) = target.anchor.as_deref().filter(|s| !s.is_empty()) {
+        return Some(anchor.trim_start_matches('#'));
+    }
+    target
+        .url
+        .strip_prefix('#')
+        .filter(|s| !s.is_empty())
+}
+
+/// A TOC entry Word wrote with `\n` (page numbers omitted): a paragraph holding
+/// nothing but one internal link. A cross-reference sits inside a sentence and
+/// an entry that already carries its own page number has a tab, so both are out.
+fn is_toc_entry_paragraph(para: &Paragraph) -> bool {
+    let mut hyperlinks = 0usize;
+    for run in &para.runs {
+        match &run.content {
+            RunContent::Tab => return false,
+            RunContent::Hyperlink { target, text } => {
+                if hyperlink_internal_anchor(target).is_none() || text.contains('\t') {
+                    return false;
+                }
+                hyperlinks += 1;
+            }
+            _ => {
+                if !run_layout_text(run, None).trim().is_empty() {
+                    return false;
+                }
+            }
+        }
+    }
+    hyperlinks == 1
+}
+
+/// Word Print Layout paints dotted leaders + page numbers on TOC hyperlinks.
+fn decorate_toc_page_numbers(
+    pages: &mut [PageLayout],
+    doc: &Document,
+    shaper: &mut TextShaper,
+    atlas: &mut GlyphAtlas,
+    tab_interval: f32,
+) {
+    let bookmarks = tw_model::document_bookmarks(doc);
+    if bookmarks.is_empty() {
+        return;
+    }
+    let mut para_page: HashMap<NodeId, u32> = HashMap::new();
+    for page in pages.iter() {
+        for item in &page.boxes {
+            if let LayoutBox::TextLine(line) = item {
+                para_page.entry(line.paragraph_id).or_insert(page.page_index);
+            }
+        }
+    }
+    let bookmark_page = |name: &str| -> Option<u32> {
+        let entry = bookmarks
+            .iter()
+            .find(|e| e.name.eq_ignore_ascii_case(name))?;
+        para_page.get(&entry.paragraph_id).copied().map(|i| i + 1)
+    };
+
+    for page in pages.iter_mut() {
+        let content_right = page.content_left + page.content_width;
+        let mut last_y_by_para: HashMap<NodeId, f32> = HashMap::new();
+        for item in &page.boxes {
+            if let LayoutBox::TextLine(line) = item {
+                if !line.decorative {
+                    let y = last_y_by_para
+                        .entry(line.paragraph_id)
+                        .or_insert(f32::NEG_INFINITY);
+                    if line.y > *y {
+                        *y = line.y;
+                    }
+                }
+            }
+        }
+        for item in &mut page.boxes {
+            let LayoutBox::TextLine(line) = item else {
+                continue;
+            };
+            if line.decorative {
+                continue;
+            }
+            let Some(para) = paragraph_by_id(doc, line.paragraph_id) else {
+                continue;
+            };
+            if !is_toc_entry_paragraph(para) {
+                continue;
+            }
+            let Some((link_run, target)) = para.runs.iter().find_map(|r| match &r.content {
+                RunContent::Hyperlink { target, .. } => Some((r, target)),
+                _ => None,
+            }) else {
+                continue;
+            };
+            let Some(anchor) = hyperlink_internal_anchor(target) else {
+                continue;
+            };
+            let Some(page_no) = bookmark_page(anchor) else {
+                continue;
+            };
+            let last_y = last_y_by_para
+                .get(&line.paragraph_id)
+                .copied()
+                .unwrap_or(line.y);
+            if (line.y - last_y).abs() > 0.5 {
+                continue;
+            }
+            let last_x = line
+                .glyphs
+                .iter()
+                .map(|g| g.x + g.width)
+                .fold(line.x + line.width, f32::max);
+            if last_x > content_right - 28.0 {
+                continue;
+            }
+            let label = page_no.to_string();
+            // Word sets the page number in the entry's own size.
+            let font_size = doc
+                .styles
+                .resolve_char_format(para.style_id, &link_run.format)
+                .font_size
+                .unwrap_or_else(|| (line.ascent / 0.9).max(8.0));
+            let baseline_y = line.y;
+            let mut boxes = layout_styled_label(
+                shaper,
+                atlas,
+                &label,
+                0.0,
+                baseline_y - line.ascent,
+                48.0,
+                font_size,
+                tw_model::Color::BLACK,
+                tab_interval,
+            );
+            let label_right = boxes
+                .iter()
+                .filter_map(|b| match b {
+                    LayoutBox::TextLine(l) => l
+                        .glyphs
+                        .iter()
+                        .map(|g| g.x + g.width)
+                        .reduce(f32::max),
+                    _ => None,
+                })
+                .fold(0.0f32, f32::max);
+            let shift = (content_right - 2.0) - label_right;
+            for b in &mut boxes {
+                if let LayoutBox::TextLine(l) = b {
+                    // `layout_styled_label` positions from the paragraph top, so the
+                    // label lands on its own baseline. Move it onto the entry's.
+                    let dy = baseline_y - l.y;
+                    l.x += shift;
+                    l.y = baseline_y;
+                    for g in &mut l.glyphs {
+                        g.x += shift;
+                        g.y += dy;
+                    }
+                }
+            }
+            let page_left = boxes
+                .iter()
+                .filter_map(|b| match b {
+                    LayoutBox::TextLine(l) => l.glyphs.first().map(|g| g.x),
+                    _ => None,
+                })
+                .fold(content_right, f32::min);
+            if let Some(font) = shaper.default_font() {
+                let format = tw_model::CharFormat {
+                    font_size: Some(font_size),
+                    ..Default::default()
+                };
+                append_tab_leader(
+                    shaper,
+                    atlas,
+                    &mut line.glyphs,
+                    last_x + 2.0,
+                    page_left,
+                    baseline_y,
+                    font_size,
+                    0xFF666666,
+                    font,
+                    &format,
+                    tw_model::TabLeader::Dots,
+                );
+            }
+            for b in boxes {
+                if let LayoutBox::TextLine(mut l) = b {
+                    line.glyphs.append(&mut l.glyphs);
+                    line.width = line
+                        .glyphs
+                        .iter()
+                        .map(|g| g.x + g.width - line.x)
+                        .fold(line.width, f32::max);
+                }
+            }
+        }
+    }
+}
+
 /// Right-margin markers for comment anchors (F17.S3).
 fn layout_comment_margin_markers(
     page_boxes: &[LayoutBox],
@@ -1810,6 +2094,186 @@ fn layout_comment_margin_markers(
         }
     }
     markers
+}
+
+/// Right-margin review balloons for tracked changes and unresolved comments.
+fn layout_review_margin_balloons(
+    page_boxes: &[LayoutBox],
+    doc: &Document,
+    format: &tw_model::SectionFormat,
+    shaper: &mut TextShaper,
+    atlas: &mut GlyphAtlas,
+    tab_interval: f32,
+) -> Vec<LayoutBox> {
+    const BALLOON_FILL: u32 = 0xE6FFF8DC;
+    const BALLOON_BORDER: u32 = 0xFFB8860B;
+    const LABEL_COLOR: tw_model::Color = tw_model::Color {
+        r: 180,
+        g: 0,
+        b: 0,
+        a: 255,
+    };
+    const BODY_COLOR: tw_model::Color = tw_model::Color::BLACK;
+
+    let balloon_width = 118.0;
+    let balloon_x = format.page_width - format.margin_right + 10.0;
+    let mut y_cursor = format.margin_top;
+    let mut out = Vec::new();
+    let mut seen_revisions = std::collections::HashSet::new();
+    let mut seen_comments = std::collections::HashSet::new();
+
+    for item in page_boxes {
+        let LayoutBox::TextLine(line) = item else {
+            continue;
+        };
+        for (_, _, run_id, _) in &line.run_map {
+            let Some(run) = doc.run_by_id(*run_id) else {
+                continue;
+            };
+
+            if let Some(rev) = &run.revision {
+                if !seen_revisions.insert(rev.id) {
+                    continue;
+                }
+                let label = match rev.revision_type {
+                    RevisionType::Insert => "Inserted",
+                    RevisionType::Delete => "Deleted",
+                };
+                let snippet: String = run_layout_text(run, None).chars().take(36).collect();
+                let anchor_y = line.y;
+                let balloon_h = if snippet.is_empty() { 40.0 } else { 54.0 };
+                out.push(LayoutBox::Rect {
+                    x: balloon_x - 10.0,
+                    y: anchor_y,
+                    width: 10.0,
+                    height: 1.0,
+                    color: BALLOON_BORDER,
+                });
+                out.push(LayoutBox::Rect {
+                    x: balloon_x,
+                    y: y_cursor,
+                    width: balloon_width,
+                    height: balloon_h,
+                    color: BALLOON_FILL,
+                });
+                out.extend(layout_styled_label(
+                    shaper,
+                    atlas,
+                    &rev.author,
+                    balloon_x + 4.0,
+                    y_cursor + 2.0,
+                    balloon_width - 8.0,
+                    8.0,
+                    LABEL_COLOR,
+                    tab_interval,
+                ));
+                out.extend(layout_styled_label(
+                    shaper,
+                    atlas,
+                    label,
+                    balloon_x + 4.0,
+                    y_cursor + 12.0,
+                    balloon_width - 8.0,
+                    8.0,
+                    LABEL_COLOR,
+                    tab_interval,
+                ));
+                if !snippet.is_empty() {
+                    out.extend(layout_styled_label(
+                        shaper,
+                        atlas,
+                        &snippet,
+                        balloon_x + 4.0,
+                        y_cursor + 24.0,
+                        balloon_width - 8.0,
+                        7.0,
+                        BODY_COLOR,
+                        tab_interval,
+                    ));
+                }
+                y_cursor += balloon_h + 6.0;
+            }
+
+            if let RunContent::CommentRef(c) = &run.content {
+                if !seen_comments.insert(c.comment_id) {
+                    continue;
+                }
+                let Some(thread) = doc.comments.iter().find(|t| t.comment_id == c.comment_id)
+                else {
+                    continue;
+                };
+                if thread.resolved {
+                    continue;
+                }
+                let author = thread
+                    .messages
+                    .first()
+                    .map(|m| m.author.as_str())
+                    .unwrap_or("Comment");
+                let snippet = thread
+                    .messages
+                    .first()
+                    .and_then(|m| m.body.first())
+                    .and_then(|b| b.paragraph())
+                    .map(|p| p.full_text())
+                    .unwrap_or_default();
+                let snippet: String = snippet.chars().take(36).collect();
+                let anchor_y = line.y;
+                let balloon_h = if snippet.is_empty() { 40.0 } else { 54.0 };
+                out.push(LayoutBox::Rect {
+                    x: balloon_x - 10.0,
+                    y: anchor_y,
+                    width: 10.0,
+                    height: 1.0,
+                    color: BALLOON_BORDER,
+                });
+                out.push(LayoutBox::Rect {
+                    x: balloon_x,
+                    y: y_cursor,
+                    width: balloon_width,
+                    height: balloon_h,
+                    color: BALLOON_FILL,
+                });
+                out.extend(layout_styled_label(
+                    shaper,
+                    atlas,
+                    author,
+                    balloon_x + 4.0,
+                    y_cursor + 2.0,
+                    balloon_width - 8.0,
+                    8.0,
+                    LABEL_COLOR,
+                    tab_interval,
+                ));
+                out.extend(layout_styled_label(
+                    shaper,
+                    atlas,
+                    "Comment",
+                    balloon_x + 4.0,
+                    y_cursor + 12.0,
+                    balloon_width - 8.0,
+                    8.0,
+                    LABEL_COLOR,
+                    tab_interval,
+                ));
+                if !snippet.is_empty() {
+                    out.extend(layout_styled_label(
+                        shaper,
+                        atlas,
+                        &snippet,
+                        balloon_x + 4.0,
+                        y_cursor + 24.0,
+                        balloon_width - 8.0,
+                        7.0,
+                        BODY_COLOR,
+                        tab_interval,
+                    ));
+                }
+                y_cursor += balloon_h + 6.0;
+            }
+        }
+    }
+    out
 }
 
 fn layout_header_footer_band(
@@ -2408,25 +2872,97 @@ fn advance_past_top_bottom(mut y: f32, obstacles: &[WrapObstacle]) -> f32 {
     y
 }
 
-fn square_wrap_inset_at_y(
+fn wrap_insets_at_y(
     column_x: f32,
     column_width: f32,
     y: f32,
     obstacles: &[WrapObstacle],
-) -> f32 {
+) -> (f32, f32) {
     let mut left_inset = 0.0f32;
+    let mut right_inset = 0.0f32;
     for obs in obstacles {
-        if obs.kind != WrapKind::Square {
+        if y < obs.y - 0.5 || y >= obs.y + obs.height {
             continue;
         }
-        if y >= obs.y - 0.5 && y < obs.y + obs.height {
-            let obs_right = obs.x + obs.width + IMAGE_TEXT_GAP;
-            if obs.x <= column_x + left_inset + 1.0 && obs_right > column_x {
-                left_inset = left_inset.max(obs_right - column_x);
+        match &obs.kind {
+            WrapKind::Square => {
+                let obs_right = obs.x + obs.width + IMAGE_TEXT_GAP;
+                if obs.x <= column_x + left_inset + 1.0 && obs_right > column_x {
+                    left_inset = left_inset.max(obs_right - column_x);
+                }
             }
+            WrapKind::Contour { points, through } => {
+                // Through wrap lets text touch the contour; tight keeps Word's
+                // distance-from-text gap outside it.
+                let gap = if *through { 0.0 } else { IMAGE_TEXT_GAP };
+                let span = polygon_block_span_at_y(points, y).or({
+                    // A polygon that does not reach this scanline blocks nothing;
+                    // only a degenerate one falls back to the image box.
+                    if points.len() < 3 {
+                        Some((obs.x, obs.x + obs.width))
+                    } else {
+                        None
+                    }
+                });
+                let Some((block_left, block_right)) = span else {
+                    continue;
+                };
+                let column_right = column_x + column_width;
+                // A line is one contiguous band, so text goes on whichever side
+                // of the contour has more room instead of being inset from both.
+                let free_left = (block_left - gap) - column_x;
+                let free_right = column_right - (block_right + gap);
+                if free_right >= free_left {
+                    left_inset = left_inset.max((block_right + gap) - column_x);
+                } else {
+                    right_inset = right_inset.max(column_right - (block_left - gap));
+                }
+            }
+            WrapKind::TopBottom => {}
         }
     }
-    left_inset.min(column_width * 0.85)
+    let max_inset = column_width * 0.85;
+    left_inset = left_inset.clamp(0.0, max_inset);
+    right_inset = right_inset.clamp(0.0, max_inset);
+    // Obstacles on both sides must still leave a usable band rather than
+    // collapsing the line to the 1 pt floor the caller clamps at.
+    if left_inset + right_inset > max_inset {
+        if left_inset >= right_inset {
+            right_inset = 0.0;
+        } else {
+            left_inset = 0.0;
+        }
+    }
+    (left_inset, right_inset)
+}
+
+fn polygon_block_span_at_y(points: &[(f32, f32)], y: f32) -> Option<(f32, f32)> {
+    if points.len() < 3 {
+        return None;
+    }
+    let mut xs = Vec::new();
+    for i in 0..points.len() {
+        let (x1, y1) = points[i];
+        let (x2, y2) = points[(i + 1) % points.len()];
+        if (y1 - y2).abs() < f32::EPSILON {
+            if (y - y1).abs() < 0.5 {
+                xs.push(x1.min(x2));
+                xs.push(x1.max(x2));
+            }
+            continue;
+        }
+        if (y1 <= y && y2 > y) || (y2 <= y && y1 > y) {
+            let t = (y - y1) / (y2 - y1);
+            xs.push(x1 + t * (x2 - x1));
+        }
+    }
+    if xs.is_empty() {
+        return None;
+    }
+    Some((
+        xs.iter().copied().fold(f32::INFINITY, f32::min),
+        xs.iter().copied().fold(f32::NEG_INFINITY, f32::max),
+    ))
 }
 
 fn paragraph_frame_with_square_wrap(
@@ -2436,8 +2972,13 @@ fn paragraph_frame_with_square_wrap(
     column_width: f32,
     obstacles: &[WrapObstacle],
 ) -> ParagraphFrame {
-    let left_inset = square_wrap_inset_at_y(column_x, column_width, y, obstacles);
-    ParagraphFrame::indented_in(column_x + left_inset, indent, y, column_width - left_inset)
+    let (left_inset, right_inset) = wrap_insets_at_y(column_x, column_width, y, obstacles);
+    ParagraphFrame::indented_in(
+        column_x + left_inset,
+        indent,
+        y,
+        (column_width - left_inset - right_inset).max(1.0),
+    )
 }
 
 fn split_paragraph_at_page_breaks(para: &tw_model::Paragraph) -> Vec<ParagraphSegment> {

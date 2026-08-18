@@ -33,6 +33,7 @@ fn u_f21_s3_docx_descr_roundtrip() {
         transform: ImageTransform::default(),
         caption_paragraph_id: None,
         alt_text: Some("A red apple".into()),
+            wrap_polygon: None,
     };
     doc.sections[0].blocks = vec![Block::ImageBlock(image)];
 

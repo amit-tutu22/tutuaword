@@ -22,6 +22,7 @@ import 'package:tutuaword/bridge/document_share_platform.dart';
 import 'package:tutuaword/bridge/document_session_store.dart';
 import 'package:tutuaword/bridge/share_temp.dart';
 import 'package:tutuaword/bridge/mock_native_engine.dart';
+import 'package:tutuaword/bridge/native_event_router.dart';
 import 'package:tutuaword/bridge/print_layout_settings.dart';
 import 'package:tutuaword/bridge/outline_entry.dart';
 import 'package:tutuaword/bridge/semantic_node.dart';
@@ -84,6 +85,7 @@ import 'package:tutuaword/ui/new_from_template_dialog.dart';
 import 'package:tutuaword/ui/save_as_template_dialog.dart';
 import 'package:tutuaword/bridge/digital_signature.dart';
 import 'package:tutuaword/bridge/document_inspect_finding.dart';
+import 'package:tutuaword/bridge/external_link.dart';
 import 'package:tutuaword/bridge/proofing_language.dart';
 import 'package:tutuaword/bridge/thesaurus.dart';
 import 'package:tutuaword/ui/digital_signature_dialog.dart';
@@ -189,6 +191,7 @@ class EditorController extends ChangeNotifier {
       _host.refreshFromEngine(full: true);
       _selection.ensureGlyphCaret();
       _formatting.syncFromCaret();
+      NativeEventRouter.instance.onUnsolicitedEvent = _onUnsolicitedEngineEvent;
     }
 
     for (final sub in _subControllers) {
@@ -267,6 +270,7 @@ class EditorController extends ChangeNotifier {
   Future<void> _glyphMutationTail = Future<void>.value();
 
   String _bootStatus = '';
+  bool _disposed = false;
 
   // ── Sub-controller accessors (R2.4 decomposition) ─────────────────────────
   ViewController get view => _view;
@@ -417,6 +421,14 @@ class EditorController extends ChangeNotifier {
   @visibleForTesting
   Future<void> ensureLayoutReady() => _host.ensureLayoutReady();
 
+  void _onUnsolicitedEngineEvent(int eventType, int _) {
+    if (_disposed) return;
+    if (eventType != NativeEventTypes.displayListReady) return;
+    // Background reflow / late open completion — pull the latest pages.
+    _host.refreshFromEngine(full: true);
+    notifyListeners();
+  }
+
   // ── View ──────────────────────────────────────────────────────────────────
   int get currentPage => _view.currentPage;
 
@@ -516,7 +528,6 @@ class EditorController extends ChangeNotifier {
   void setZoom(double value) => _view.setZoom(value);
   void zoomIn() => _view.zoomIn();
   void zoomOut() => _view.zoomOut();
-  void ensureMobileReadingZoom() => _view.ensureMobileReadingZoom();
 
   Future<void> openZoomDialog(BuildContext context) async {
     final next = await ZoomDialog.show(context, currentZoom: zoom);
@@ -701,6 +712,65 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Follow a hyperlink at the caret. Internal anchors always navigate;
+  /// external URLs open only when [allowExternal] is true (mobile tap or
+  /// Ctrl/Cmd+click).
+  Future<bool> tryFollowHyperlink({required bool allowExternal}) async {
+    if (!_host.isConnected) return false;
+    final runId = _selection.defaultRunId();
+    if (runId == null) return false;
+    final json = _host.engine?.fetchHyperlinkAt(runId);
+    if (json == null || json.isEmpty) return false;
+    final decoded = jsonDecode(json);
+    if (decoded is! Map) return false;
+    final map = Map<String, dynamic>.from(decoded);
+    final url = map['url'] as String? ?? '';
+    final rawAnchor = map['anchor'] as String?;
+    final text = map['text'] as String? ?? '';
+    var bookmarkName = (rawAnchor != null && rawAnchor.isNotEmpty)
+        ? rawAnchor
+        : (url.startsWith('#') ? url.substring(1) : '');
+    if (bookmarkName.startsWith('#')) {
+      bookmarkName = bookmarkName.substring(1);
+    }
+    if (bookmarkName.isNotEmpty) {
+      return _jumpToHyperlinkAnchor(bookmarkName, text);
+    }
+    if (!allowExternal || url.isEmpty || url.startsWith('r:id:')) {
+      return false;
+    }
+    final uri = Uri.tryParse(url);
+    if (uri == null || !uri.hasScheme) return false;
+    final opened = uri.scheme == 'mailto'
+        ? await openEmailUri(uri)
+        : await openExternalUri(uri);
+    if (opened) {
+      _session.setStatusText('Opened link');
+      notifyListeners();
+    }
+    return opened;
+  }
+
+  bool _jumpToHyperlinkAnchor(String name, String linkText) {
+    final lower = name.toLowerCase();
+    for (final entry in documentBookmarks) {
+      if (entry.name.toLowerCase() == lower) {
+        jumpToBookmark(entry);
+        return true;
+      }
+    }
+    final needle = linkText.trim().toLowerCase();
+    if (needle.isNotEmpty) {
+      for (final heading in documentOutline) {
+        if (heading.text.trim().toLowerCase() == needle) {
+          jumpToOutlineEntry(heading);
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   /// Open Go To (page / bookmark / heading) and navigate (F19.S4).
   Future<void> openGoToDialog(BuildContext context) async {
     final result = await GoToDialog.show(
@@ -744,28 +814,56 @@ class EditorController extends ChangeNotifier {
 
   void ensureGlyphCaret() => _selection.ensureGlyphCaret();
   void hitTestAt(int pageIndex, double x, double y) => _selection.hitTestAt(pageIndex, x, y);
-  void moveGlyphCaretByArrow(LogicalKeyboardKey key) {
-    _selection.moveGlyphCaretByArrow(key);
+  void moveGlyphCaretByArrow(LogicalKeyboardKey key, {bool? extend}) {
+    _selection.moveGlyphCaretByArrow(key, extend: extend);
     // Selection already notified this frame; queue without a second notify.
+    ensureCaretVisible(notify: false);
+  }
+
+  void moveGlyphCaretToLineEdge({required bool toEnd, bool extend = false}) {
+    _selection.moveGlyphCaretToLineEdge(toEnd: toEnd, extend: extend);
+    ensureCaretVisible(notify: false);
+  }
+
+  void moveGlyphCaretToDocumentEdge({required bool toEnd, bool extend = false}) {
+    _selection.moveGlyphCaretToDocumentEdge(toEnd: toEnd, extend: extend);
+    ensureCaretVisible(notify: false);
+  }
+
+  void moveGlyphCaretByPage({required int direction, bool extend = false}) {
+    _selection.moveGlyphCaretByPage(direction: direction, extend: extend);
+    ensureCaretVisible(notify: false);
+  }
+
+  void moveGlyphCaretByWord({required int direction, bool extend = false}) {
+    _selection.moveGlyphCaretByWord(direction: direction, extend: extend);
     ensureCaretVisible(notify: false);
   }
 
   /// Single dispatcher for keyboard input — every path must call this.
   Future<void> handleEditorInput(EditorInputEvent event) async {
+    final extend = event.extendsSelection;
     switch (event.kind) {
       case EditorInputKind.character:
         await insertGlyphCharacter(event.character!);
       case EditorInputKind.newline:
         await insertGlyphParagraphBreak();
+      case EditorInputKind.lineBreak:
+        await insertGlyphLineBreak();
+      case EditorInputKind.pageBreak:
+        insertPageBreak();
       case EditorInputKind.tab:
-        if (isInList) {
-          if (event.shift) {
+        // Word only changes the list level from the start of the list
+        // paragraph; Tab anywhere else in the text inserts a tab character.
+        // Shift+Tab promotes from anywhere in the item.
+        if (event.shift) {
+          if (isInList) {
             demoteListLevel();
           } else {
-            promoteListLevel();
+            decreaseIndent();
           }
-        } else if (event.shift) {
-          decreaseIndent();
+        } else if (isInList && caretOffset == 0) {
+          promoteListLevel();
         } else {
           await insertGlyphCharacter('\t');
         }
@@ -773,14 +871,34 @@ class EditorController extends ChangeNotifier {
         await deleteGlyphBackward();
       case EditorInputKind.delete:
         await deleteGlyphForward();
+      case EditorInputKind.deleteWordBackward:
+        await deleteGlyphWord(forward: false);
+      case EditorInputKind.deleteWordForward:
+        await deleteGlyphWord(forward: true);
       case EditorInputKind.arrowLeft:
-        moveGlyphCaretByArrow(LogicalKeyboardKey.arrowLeft);
+        moveGlyphCaretByArrow(LogicalKeyboardKey.arrowLeft, extend: extend);
       case EditorInputKind.arrowRight:
-        moveGlyphCaretByArrow(LogicalKeyboardKey.arrowRight);
+        moveGlyphCaretByArrow(LogicalKeyboardKey.arrowRight, extend: extend);
       case EditorInputKind.arrowUp:
-        moveGlyphCaretByArrow(LogicalKeyboardKey.arrowUp);
+        moveGlyphCaretByArrow(LogicalKeyboardKey.arrowUp, extend: extend);
       case EditorInputKind.arrowDown:
-        moveGlyphCaretByArrow(LogicalKeyboardKey.arrowDown);
+        moveGlyphCaretByArrow(LogicalKeyboardKey.arrowDown, extend: extend);
+      case EditorInputKind.wordLeft:
+        moveGlyphCaretByWord(direction: -1, extend: extend);
+      case EditorInputKind.wordRight:
+        moveGlyphCaretByWord(direction: 1, extend: extend);
+      case EditorInputKind.lineStart:
+        moveGlyphCaretToLineEdge(toEnd: false, extend: extend);
+      case EditorInputKind.lineEnd:
+        moveGlyphCaretToLineEdge(toEnd: true, extend: extend);
+      case EditorInputKind.documentStart:
+        moveGlyphCaretToDocumentEdge(toEnd: false, extend: extend);
+      case EditorInputKind.documentEnd:
+        moveGlyphCaretToDocumentEdge(toEnd: true, extend: extend);
+      case EditorInputKind.pageUp:
+        moveGlyphCaretByPage(direction: -1, extend: extend);
+      case EditorInputKind.pageDown:
+        moveGlyphCaretByPage(direction: 1, extend: extend);
     }
   }
 
@@ -1262,6 +1380,18 @@ class EditorController extends ChangeNotifier {
         widowOrphanControl: widowOrphanControl,
       );
 
+  /// Ctrl+1 / Ctrl+2 / Ctrl+5 — change line spacing, leaving the paragraph's
+  /// other spacing settings alone.
+  void applyLineSpacing(LineSpacingMode mode) => applySpacing(
+        lineSpacing: mode,
+        exactPoints: _formatting.exactLineSpacingPt,
+        spaceBefore: _formatting.spaceBefore,
+        spaceAfter: _formatting.spaceAfter,
+        keepTogether: _formatting.keepTogether,
+        keepWithNext: _formatting.keepWithNext,
+        widowOrphanControl: _formatting.widowOrphanControl,
+      );
+
   bool get keepTogether => _formatting.keepTogether;
   bool get keepWithNext => _formatting.keepWithNext;
   bool get widowOrphanControl => _formatting.widowOrphanControl;
@@ -1620,9 +1750,18 @@ class EditorController extends ChangeNotifier {
   }
 
   Future<void> insertGlyphCharacter(String char) async {
-    if (_host.engine == null) return;
     if (char == '\n' || char == '\r') return;
     if (char != '\t' && char.codeUnitAt(0) < 0x20) return;
+    await _insertGlyphText(char);
+  }
+
+  /// Shift+Enter — a manual line break stays inside the paragraph. `\n` in run
+  /// text is the engine's line break: layout treats it as a mandatory break and
+  /// the DOCX exporter writes it as `<w:br/>`, matching Word.
+  Future<void> insertGlyphLineBreak() => _insertGlyphText('\n');
+
+  Future<void> _insertGlyphText(String char) async {
+    if (_host.engine == null) return;
     await _runGlyphMutation(() async {
       final runId = _selection.defaultRunId();
       if (runId == null) return;
@@ -1728,6 +1867,39 @@ class EditorController extends ChangeNotifier {
         }
         notifyListeners();
       }
+    });
+  }
+
+  /// Ctrl+Backspace / Ctrl+Delete — remove the adjacent word in one undo step.
+  Future<void> deleteGlyphWord({required bool forward}) async {
+    if (_host.engine == null) return;
+    if (hasSelectedObject || _selection.hasGlyphSelection) {
+      await (forward ? deleteGlyphForward() : deleteGlyphBackward());
+      return;
+    }
+    final runId = _selection.defaultRunId();
+    final range = _selection.wordDeleteRange(direction: forward ? 1 : -1);
+    if (runId == null || range == null) {
+      // At the run edge there is no word to take, so fall back to the plain
+      // character delete, which knows how to cross runs.
+      await (forward ? deleteGlyphForward() : deleteGlyphBackward());
+      return;
+    }
+    await _runGlyphMutation(() async {
+      final before = _selection.caretOffset;
+      final edit = _host.performNativeEdit(
+        () => _host.engine!.deleteRangeAsync(runId, range.$1, range.$2),
+        dirtyPage: _selection.caretPage,
+      );
+      _selection.afterInsert(runId, range.$1);
+      _session.markDocumentDirty();
+      notifyListeners();
+      if (!await edit) {
+        _rollbackCaret(runId, from: range.$1, to: before);
+      } else {
+        _selection.syncCaretGeometry();
+      }
+      notifyListeners();
     });
   }
 
@@ -4180,6 +4352,10 @@ class EditorController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
+    if (identical(NativeEventRouter.instance.onUnsolicitedEvent, _onUnsolicitedEngineEvent)) {
+      NativeEventRouter.instance.onUnsolicitedEvent = null;
+    }
     unawaited(_tts.stop());
     _session.disposeSession();
     if (kIsWeb) {

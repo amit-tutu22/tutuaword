@@ -1,4 +1,4 @@
-use tw_model::{Alignment, FieldEvalContext, LineSpacing, Paragraph, RevisionType, TabStop, paragraph_layout_text, run_layout_text};
+use tw_model::{Alignment, FieldEvalContext, LineSpacing, Paragraph, RevisionType, TabLeader, TabStop, paragraph_layout_text, run_layout_text};
 use tw_shape::{AtlasKey, GlyphAtlas, TextShaper};
 use unicode_linebreak::{linebreaks, BreakOpportunity};
 
@@ -9,32 +9,98 @@ const MARKER_GUTTER: f32 = 24.0;
 pub const DEFAULT_TAB_INTERVAL: f32 = 36.0;
 
 /// Next tab stop strictly after `cursor_x`, preferring explicit stops over the
-/// default grid.
+/// default grid. Returns the stop x and the leader to paint in the gap.
 fn next_tab_stop(
     cursor_x: f32,
     origin_x: f32,
     tab_interval: f32,
     tab_stops: &[TabStop],
-) -> f32 {
-    let mut explicit = None;
+) -> (f32, TabLeader) {
+    let mut explicit: Option<&TabStop> = None;
     for stop in tab_stops {
         let pos = origin_x + stop.position;
         if pos > cursor_x + 0.01 {
-            explicit = Some(explicit.map_or(pos, |best: f32| best.min(pos)));
+            explicit = Some(match explicit {
+                Some(best) if origin_x + best.position <= pos => best,
+                _ => stop,
+            });
         }
     }
-    if let Some(pos) = explicit {
-        return pos;
+    if let Some(stop) = explicit {
+        return (origin_x + stop.position, stop.leader);
     }
     let interval = tab_interval.max(1.0);
     let offset = cursor_x - origin_x;
     let stops = (offset / interval).floor() + 1.0;
-    origin_x + stops * interval
+    (origin_x + stops * interval, TabLeader::None)
 }
 
-fn with_opacity(argb: u32, factor: f32) -> u32 {
-    let a = (((argb >> 24) as f32) * factor.clamp(0.0, 1.0)) as u32;
-    (a << 24) | (argb & 0x00FF_FFFF)
+pub(crate) fn append_tab_leader(
+    shaper: &mut TextShaper,
+    atlas: &mut GlyphAtlas,
+    glyphs: &mut Vec<super::types::PositionedGlyph>,
+    from_x: f32,
+    to_x: f32,
+    baseline_y: f32,
+    size: f32,
+    color: u32,
+    font: tw_shape::FontId,
+    format: &tw_model::CharFormat,
+    leader: TabLeader,
+) {
+    let fill = match leader {
+        TabLeader::None => return,
+        TabLeader::Dots | TabLeader::MiddleDot => ".",
+        TabLeader::Hyphen => "-",
+        TabLeader::Underscore => "_",
+        _ => return,
+    };
+    if to_x - from_x < 4.0 {
+        return;
+    }
+    let mut shape_format = format.clone();
+    shape_format.font_size = Some(size);
+    let shaped = shaper.shape(fill, &shape_format, font);
+    let advance = shaped
+        .glyphs
+        .first()
+        .map(|g| g.x_advance.max(size * 0.35))
+        .unwrap_or(size * 0.4)
+        .max(3.0);
+    let mut x = from_x + advance;
+    while x + advance <= to_x - 2.0 {
+        for g in &shaped.glyphs {
+            let key = AtlasKey::new(g.font_key(), g.glyph_id, size);
+            let entry = match atlas.get(&key).cloned() {
+                Some(entry) => Some(entry),
+                None => {
+                    let raster = shaper.rasterize_glyph(g.font, g.glyph_id, size);
+                    if raster.width == 0 || raster.height == 0 {
+                        None
+                    } else {
+                        Some(atlas.insert(key, &raster))
+                    }
+                }
+            };
+            if let Some(entry) = entry {
+                glyphs.push(super::types::PositionedGlyph {
+                    glyph_id: g.glyph_id,
+                    codepoint: fill.chars().next().unwrap_or('.'),
+                    x: x + g.x_offset + entry.bearing_x,
+                    y: baseline_y + g.y_offset - entry.bearing_y,
+                    width: entry.width as f32,
+                    height: entry.height as f32,
+                    atlas_x: entry.x as f32,
+                    atlas_y: entry.y as f32,
+                    atlas_w: entry.width as f32,
+                    atlas_h: entry.height as f32,
+                    color,
+                    font_id: g.font_key(),
+                });
+            }
+        }
+        x += advance * 1.15;
+    }
 }
 
 /// Where a paragraph is placed and how wide it may run.
@@ -659,7 +725,7 @@ fn measure_range(
         }
         for (piece_index, piece) in segment_text.split('\t').enumerate() {
             if piece_index > 0 {
-                width = next_tab_stop(width, tab_origin_offset, tab_interval, tab_stops);
+                width = next_tab_stop(width, tab_origin_offset, tab_interval, tab_stops).0;
             }
             if piece.is_empty() {
                 continue;
@@ -693,7 +759,7 @@ pub fn apply_list_markers(
         .color
         .map(|c| c.to_argb())
         .unwrap_or(default_color);
-    let (mut marker_line, _) = shape_line(
+    let (marker_line, _) = shape_line(
         shaper,
         atlas,
         &marker_para,
@@ -708,7 +774,7 @@ pub fn apply_list_markers(
         marker_color,
         None,
     );
-    lines[0].glyphs.append(&mut marker_line.glyphs);
+    lines[0].glyphs.splice(0..0, marker_line.glyphs);
     lines[0].list_marker = Some(marker.to_string());
     let _ = MARKER_GUTTER;
 }
@@ -812,8 +878,13 @@ fn shape_line(
             .revision
             .as_ref()
             .is_some_and(|rev| rev.revision_type == RevisionType::Delete);
-        if is_deleted {
-            color = with_opacity(color, 0.45);
+        let is_inserted = run
+            .revision
+            .as_ref()
+            .is_some_and(|rev| rev.revision_type == RevisionType::Insert);
+        if is_deleted || is_inserted {
+            // Word default track-change markup color.
+            color = 0xFFFF_0000;
         }
         let seg_start_x = cursor_x;
 
@@ -825,7 +896,22 @@ fn shape_line(
         // render them as `.notdef` boxes.
         for (piece_index, piece) in segment_text.split('\t').enumerate() {
             if piece_index > 0 {
-                cursor_x = next_tab_stop(cursor_x, tab_origin, tab_interval, tab_stops);
+                let from_x = cursor_x;
+                let (to_x, leader) = next_tab_stop(cursor_x, tab_origin, tab_interval, tab_stops);
+                append_tab_leader(
+                    shaper,
+                    atlas,
+                    &mut glyphs,
+                    from_x,
+                    to_x,
+                    baseline_y,
+                    size,
+                    color,
+                    run_font,
+                    &run.format,
+                    leader,
+                );
+                cursor_x = to_x;
             }
             if piece.is_empty() {
                 continue;
@@ -953,6 +1039,17 @@ fn shape_line(
                 height: (size * 0.05).max(1.0),
                 color,
                 kind: super::types::DecorationKind::Strikethrough,
+            });
+        }
+        if is_inserted {
+            let thickness = (size * 0.05).max(1.0);
+            decorations.push(super::types::TextDecoration {
+                x: seg_start_x,
+                y: baseline_y + (line_descent * 0.25),
+                width: seg_end_x - seg_start_x,
+                height: thickness,
+                color,
+                kind: super::types::DecorationKind::Underline,
             });
         }
 

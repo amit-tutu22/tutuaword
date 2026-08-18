@@ -40,6 +40,7 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
   bool _draggingText = false;
   bool _resizingImage = false;
   bool _movingImage = false;
+  bool _glyphTap = false;
 
   void _requestEditorFocus() {
     if (EditorController.usesSoftKeyboardGlyphInput) {
@@ -92,11 +93,7 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
       unawaited(widget.controller.handleEditorInput(EditorInputEvent.character(char)));
       return KeyEventResult.handled;
     }
-    final input = EditorInputEvent.fromLogicalKey(
-      key,
-      shift: HardwareKeyboard.instance.isShiftPressed,
-      character: char,
-    );
+    final input = EditorInputEvent.fromKeyEvent(event, character: char);
     if (input == null) return KeyEventResult.ignored;
     unawaited(widget.controller.handleEditorInput(input));
     return KeyEventResult.handled;
@@ -107,6 +104,7 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
     _selecting = false;
     _resizingImage = false;
     _movingImage = false;
+    _glyphTap = false;
 
     final controller = widget.controller;
     final onImagePage = controller.selectedImagePage == widget.pageIndex;
@@ -152,6 +150,7 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
       controller.beginGlyphDrag(widget.pageIndex);
     } else {
       _draggingText = false;
+      _glyphTap = true;
       controller.beginGlyphSelection(
         widget.pageIndex,
         event.localPosition.dx,
@@ -221,9 +220,15 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
         event.localPosition.dx,
         event.localPosition.dy,
       );
+    } else if (_glyphTap) {
+      final allowExternal = EditorController.usesSoftKeyboardGlyphInput ||
+          HardwareKeyboard.instance.isControlPressed ||
+          HardwareKeyboard.instance.isMetaPressed;
+      unawaited(widget.controller.tryFollowHyperlink(allowExternal: allowExternal));
     }
     _pointerDown = null;
     _selecting = false;
+    _glyphTap = false;
   }
 
   @override
@@ -323,6 +328,7 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
               _pointerDown = null;
               _selecting = false;
               _draggingText = false;
+              _glyphTap = false;
             },
             child: Stack(
               children: [

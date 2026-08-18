@@ -164,6 +164,11 @@ impl DisplayListBuilder {
                                 append_chart_surface(shape, &mut rect_batch);
                                 append_chart_preview(shape, &mut rect_batch, &mut path_batch);
                             }
+                            tw_model::ShapeKind::Chart => {
+                                // Imported chart without parsed series — still show a
+                                // chart frame so the slot is not a blank blue box.
+                                append_chart_surface(shape, &mut rect_batch);
+                            }
                             tw_model::ShapeKind::Diagram => {
                                 append_shape_placeholder(shape, &mut rect_batch);
                                 append_diagram_preview(

@@ -104,6 +104,57 @@ fn numbered_list_renders_markers_on_lines() {
 }
 
 #[test]
+fn symbol_pua_bullet_marker_shapes_without_notdef() {
+    use tw_model::{ListLevel, ListMarkerFormat, ListSuffix, NumberingDefinition};
+
+    let mut doc = Document::new();
+    doc.settings.numbering.definitions.insert(
+        9,
+        NumberingDefinition {
+            id: 9,
+            name: "Symbol Bullet".into(),
+            levels: vec![ListLevel {
+                level: 0,
+                format: ListMarkerFormat::Bullet,
+                indent: 36.0,
+                hanging: 18.0,
+                suffix: ListSuffix::Tab,
+                marker_text: Some("\u{F0B7}".into()),
+                start: 1,
+                char_format: tw_model::CharFormat {
+                    font_family: Some("Symbol".into()),
+                    ..Default::default()
+                },
+            }],
+        },
+    );
+    if let Block::Paragraph(para) = &mut doc.sections[0].blocks[0] {
+        *para = Paragraph::with_text("First item");
+        para.format.numbering = Some(NumberingRef {
+            numbering_id: 9,
+            level: 0,
+        });
+    }
+
+    let mut engine = LayoutEngine::new();
+    let layout = engine.layout_document(&doc);
+    let line = layout.pages[0]
+        .boxes
+        .iter()
+        .find_map(|b| match b {
+            LayoutBox::TextLine(l) if l.list_marker.is_some() => Some(l),
+            _ => None,
+        })
+        .expect("bullet line");
+
+    assert_eq!(line.list_marker.as_deref(), Some("•"));
+    assert!(
+        line.glyphs.iter().any(|g| g.glyph_id != 0),
+        "bullet must not paint as .notdef tofu"
+    );
+}
+
+#[test]
 fn image_block_produces_image_layout_box() {
     let mut doc = Document::new();
     doc.sections[0]

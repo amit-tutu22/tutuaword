@@ -10,6 +10,7 @@ pub mod chart;
 pub mod diagram;
 mod export;
 mod encryption;
+pub mod fonts;
 pub mod fingerprint;
 mod hyperlink;
 mod import;
@@ -30,6 +31,7 @@ pub use encryption::{
     decrypt_with_password, encrypt_with_password, is_password_protected,
 };
 pub use export::export_docx;
+pub use fonts::EmbeddedFont;
 pub use import::{import_docx, import_docx_with_password};
 pub use bibliography::BIBLIOGRAPHY_PART;
 pub use comments::COMMENTS_PART;
@@ -106,6 +108,8 @@ pub(crate) const MINIMAL_CONTENT_TYPES: &[u8] = br#"<?xml version="1.0" encoding
 pub enum DocxError {
     #[error("word/document.xml missing from docx package")]
     MissingDocumentPart,
+    #[error("invalid docx package: {0}")]
+    InvalidPackage(String),
     #[error("document is password-protected")]
     PasswordProtected,
     #[error("incorrect password")]
@@ -124,6 +128,8 @@ pub struct ImportResult {
     pub document: Document,
     pub package: DocxPackage,
     pub retention: ImportRetentionReport,
+    /// Deobfuscated embedded fonts from `fontTable.xml`, ready for registration.
+    pub embedded_fonts: Vec<fonts::EmbeddedFont>,
 }
 
 pub fn import(source: &[u8]) -> Result<ImportResult, DocxError> {

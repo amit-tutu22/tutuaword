@@ -303,6 +303,16 @@ typedef TwGetBookmarksDart = int Function(
   Pointer<Pointer<Uint8>>,
   Pointer<IntPtr>,
 );
+typedef TwHyperlinkAtNative = Int32 Function(
+  Pointer<Utf8>,
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwHyperlinkAtDart = int Function(
+  Pointer<Utf8>,
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
 typedef TwGetSemanticTreeNative = Int32 Function(
   Pointer<Pointer<Uint8>>,
   Pointer<IntPtr>,
@@ -775,6 +785,7 @@ class NativeEngine {
   late final TwGetCaretFormatDart getCaretFormat;
   late final TwGetDocumentOutlineDart getDocumentOutline;
   late final TwGetBookmarksDart getBookmarks;
+  TwHyperlinkAtDart? hyperlinkAt;
   late final TwGetSemanticTreeDart getSemanticTree;
   late final TwGetAccessibilityIssuesDart getAccessibilityIssues;
   TwGetDocumentInspectDart? getDocumentInspect;
@@ -964,6 +975,13 @@ class NativeEngine {
       engine.getBookmarks =
           lib.lookupFunction<TwGetBookmarksNative, TwGetBookmarksDart>(
               'tw_get_bookmarks');
+      try {
+        engine.hyperlinkAt =
+            lib.lookupFunction<TwHyperlinkAtNative, TwHyperlinkAtDart>(
+                'tw_hyperlink_at');
+      } on ArgumentError {
+        engine.hyperlinkAt = null;
+      }
       engine.getSemanticTree =
           lib.lookupFunction<TwGetSemanticTreeNative, TwGetSemanticTreeDart>(
               'tw_get_semantic_tree');
@@ -1700,6 +1718,28 @@ extension NativeEngineOps on NativeEngine {
       freeBuffer(ptr, len);
       return json;
     } finally {
+      calloc.free(outPtr);
+      calloc.free(outLen);
+    }
+  }
+
+  String? fetchHyperlinkAt(String runId) {
+    final lookup = hyperlinkAt;
+    if (lookup == null) return null;
+    final runPtr = runId.toNativeUtf8();
+    final outPtr = calloc<Pointer<Uint8>>();
+    final outLen = calloc<IntPtr>();
+    try {
+      final result = lookup(runPtr, outPtr, outLen);
+      if (result != 0) return null;
+      final len = outLen.value;
+      final ptr = outPtr.value;
+      if (ptr == nullptr || len == 0) return null;
+      final json = ptr.cast<Utf8>().toDartString(length: len);
+      freeBuffer(ptr, len);
+      return json.isEmpty ? null : json;
+    } finally {
+      calloc.free(runPtr);
       calloc.free(outPtr);
       calloc.free(outLen);
     }

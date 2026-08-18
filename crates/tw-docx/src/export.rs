@@ -933,8 +933,16 @@ fn serialize_tab_stops(format: &ParaFormat) -> String {
             TabAlignment::Left => "left",
             _ => "left",
         };
+        let leader = match stop.leader {
+            tw_model::TabLeader::Dots => r#" w:leader="dot""#,
+            tw_model::TabLeader::MiddleDot => r#" w:leader="middleDot""#,
+            tw_model::TabLeader::Hyphen => r#" w:leader="hyphen""#,
+            tw_model::TabLeader::Underscore => r#" w:leader="underscore""#,
+            tw_model::TabLeader::None => "",
+            _ => "",
+        };
         xml.push_str(&format!(
-            r#"<w:tab w:val="{align}" w:pos="{}"/>"#,
+            r#"<w:tab w:val="{align}" w:pos="{}"{leader}/>"#,
             to_twips(stop.position)
         ));
     }
@@ -1557,7 +1565,7 @@ fn serialize_image_paragraph(image: &ImageBlock, media: &mut MediaWriter) -> Str
                 to_emu(anchor.x),
                 anchor_origin_value(anchor.origin_y),
                 to_emu(anchor.y),
-                wrap_element(image.wrap),
+                wrap_element(image.wrap, image.wrap_polygon.as_deref()),
             )
         }
         None => format!(
@@ -1634,13 +1642,39 @@ fn shape_tx_body(shape: &tw_model::ShapeBlock) -> String {
     xml
 }
 
-fn wrap_element(wrap: TextWrap) -> &'static str {
-    match wrap {
-        TextWrap::Square => r#"<wp:wrapSquare wrapText="bothSides"/>"#,
-        TextWrap::TopBottom => "<wp:wrapTopAndBottom/>",
-        TextWrap::Inline | TextWrap::Behind | TextWrap::InFront => "<wp:wrapNone/>",
-        _ => "<wp:wrapNone/>",
+fn wrap_element(wrap: TextWrap, polygon: Option<&[(f32, f32)]>) -> String {
+    let tag = match wrap {
+        TextWrap::Square => return r#"<wp:wrapSquare wrapText="bothSides"/>"#.to_string(),
+        TextWrap::TopBottom => return "<wp:wrapTopAndBottom/>".to_string(),
+        TextWrap::Tight => "wp:wrapTight",
+        TextWrap::Through => "wp:wrapThrough",
+        TextWrap::Inline | TextWrap::Behind | TextWrap::InFront => {
+            return "<wp:wrapNone/>".to_string()
+        }
+        _ => return "<wp:wrapNone/>".to_string(),
+    };
+    // Word treats a tight/through wrap without a polygon as its bounding box,
+    // so an absent contour still round-trips.
+    let Some(points) = polygon.filter(|p| p.len() >= 3) else {
+        return format!(r#"<{tag} wrapText="bothSides"/>"#);
+    };
+    let mut xml = format!(r#"<{tag} wrapText="bothSides"><wp:wrapPolygon edited="0">"#);
+    for (index, (x, y)) in points.iter().enumerate() {
+        let element = if index == 0 { "wp:start" } else { "wp:lineTo" };
+        xml.push_str(&format!(
+            r#"<{element} x="{}" y="{}"/>"#,
+            to_emu(*x),
+            to_emu(*y)
+        ));
     }
+    // OOXML requires the contour to close back on its start point.
+    xml.push_str(&format!(
+        r#"<wp:lineTo x="{}" y="{}"/>"#,
+        to_emu(points[0].0),
+        to_emu(points[0].1)
+    ));
+    xml.push_str(&format!("</wp:wrapPolygon></{tag}>"));
+    xml
 }
 
 fn image_src_rect(t: &tw_model::ImageTransform) -> String {

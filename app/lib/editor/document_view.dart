@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
@@ -57,9 +58,10 @@ class _DocumentViewState extends State<DocumentView> {
   final Map<int, int> _loadedPageVersions = {};
   final Set<int> _pending = {};
   ui.Image? _atlasImage;
-  bool _buildingAtlas = false;
+  Future<void>? _atlasBuildFuture;
   int _loadedVersion = -1;
   int _loadedAtlasGeneration = -1;
+  final Map<int, int> _emptyLoadRetries = {};
   final ScrollController _scrollController = ScrollController();
   final ScrollController _splitScrollController = ScrollController();
   double _viewportWidth = 0;
@@ -70,9 +72,25 @@ class _DocumentViewState extends State<DocumentView> {
   bool _phonePictureSheetOpen = false;
   String? _dismissedPictureId;
 
-  /// Display scale follows the status-bar zoom only (no silent fit-to-width).
-  /// Fit-to-width made phone text unreadable; narrow screens pan horizontally.
-  double _effectiveScale(EditorController controller) => controller.zoom;
+  /// On phone/tablet, 100% zoom means the page fills the canvas width so the
+  /// full line of text is on-screen. User zoom then scales that fit; going
+  /// above 100% can pan horizontally. Desktop keeps 1:1 page points.
+  double _effectiveScale(EditorController controller) {
+    var scale = controller.zoom;
+    if (mounted && WordTheme.mobileChrome(context)) {
+      scale *= _mobileWidthFit(controller);
+    }
+    return scale;
+  }
+
+  double _mobileWidthFit(EditorController controller) {
+    final columns = controller.pageColumns.clamp(1, 3);
+    final rowWidth = columns * (controller.pageWidth + _pageGapEffective);
+    if (_viewportWidth <= 1 || rowWidth <= 0) return 1.0;
+    final fit = _viewportWidth / rowWidth;
+    // Never upscale past 1:1 page points — only shrink so the page fits.
+    return fit < 1.0 ? fit : 1.0;
+  }
 
   double _pageExtentFor(EditorController controller) {
     final gap = _pageGapEffective;
@@ -85,6 +103,8 @@ class _DocumentViewState extends State<DocumentView> {
   final Map<String, ui.Image> _images = {};
 
   bool _pendingScrollArmed = false;
+  /// True only while a caret-follow jump is driving the scroll position.
+  bool _caretFollowScrollInFlight = false;
 
   @override
   void initState() {
@@ -121,15 +141,18 @@ class _DocumentViewState extends State<DocumentView> {
       });
       _snapshots.removeWhere((page, _) => !_loadedPageVersions.containsKey(page));
       _pending.removeWhere((page) => !_loadedPageVersions.containsKey(page));
+      _emptyLoadRetries.clear();
     }
     if (widget.controller.atlasGeneration != _loadedAtlasGeneration) {
-      _loadedAtlasGeneration = widget.controller.atlasGeneration;
+      // Dispose the stale texture but do NOT mark the new generation as loaded
+      // until pixels are decoded — otherwise page loads paint with a null atlas
+      // (blank text until the next keystroke refresh).
       _atlasImage?.dispose();
       _atlasImage = null;
-      _buildingAtlas = false;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _ensureAtlasTexture(widget.controller.displayVersion);
-      });
+      _atlasBuildFuture = null;
+      // Start decode immediately. Chrome often pauses rAF after the file-picker
+      // dialog, so a post-frame-only kick would wait for an unrelated keypress.
+      unawaited(_ensureAtlasTexture(widget.controller.displayVersion));
     }
     _armPendingScroll();
     if (mounted) setState(() {});
@@ -170,9 +193,11 @@ class _DocumentViewState extends State<DocumentView> {
     final row = (_scrollController.offset / extent).floor();
     final columns = widget.controller.pageColumns.clamp(1, 3);
     final visiblePage = row * columns;
-    // Caret-follow scroll may leave a sliver of the previous page in view;
-    // do not reset currentPage away from the caret's page.
-    if (widget.controller.caretRunId != null &&
+    // A caret-follow jump may leave a sliver of the previous page in view;
+    // don't let that reset currentPage away from the caret's page. Manual
+    // scrolling must still update it.
+    if (_caretFollowScrollInFlight &&
+        widget.controller.caretRunId != null &&
         visiblePage != widget.controller.caretPage) {
       return;
     }
@@ -192,15 +217,27 @@ class _DocumentViewState extends State<DocumentView> {
         _pending.remove(index);
         return;
       }
-      // Cache an empty snapshot so itemBuilder stops scheduling loads every
-      // frame (otherwise pumpAndSettle never completes in widget tests).
+      // Open can race the first engine read — retry a few times before caching
+      // an empty snapshot (which would stick until the next version bump).
+      final retries = _emptyLoadRetries[index] ?? 0;
+      _pending.remove(index);
+      if (retries < 5) {
+        _emptyLoadRetries[index] = retries + 1;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _scheduleLoad(index);
+        });
+        WidgetsBinding.instance.ensureVisualUpdate();
+        WidgetsBinding.instance.scheduleFrame();
+        return;
+      }
+      _emptyLoadRetries.remove(index);
       setState(() {
         _snapshots[index] = DisplayListSnapshot.empty();
         _loadedPageVersions[index] = pageVersion;
-        _pending.remove(index);
       });
       return;
     }
+    _emptyLoadRetries.remove(index);
 
     final snapshot = DisplayListSnapshot.fromBytes(bytes);
     await _ensureAtlasTexture(version);
@@ -236,23 +273,51 @@ class _DocumentViewState extends State<DocumentView> {
     if (_atlasImage != null && generation == _loadedAtlasGeneration) {
       return;
     }
-    if (_buildingAtlas || controller.atlasPixels.isEmpty) {
-      return;
-    }
-    if (generation == 0 || controller.atlasWidth == 0 || controller.atlasHeight == 0) {
+    if (controller.atlasPixels.isEmpty ||
+        generation == 0 ||
+        controller.atlasWidth == 0 ||
+        controller.atlasHeight == 0) {
       return;
     }
 
-    _buildingAtlas = true;
-    final atlas = await DisplayListSnapshot.buildAtlasImageFromPixels(
-      controller.atlasPixels,
-      controller.atlasWidth,
-      controller.atlasHeight,
-    );
+    final inFlight = _atlasBuildFuture;
+    if (inFlight != null) {
+      await inFlight;
+      return;
+    }
+
+    final build = _buildAtlasTexture(layoutVersion, generation);
+    _atlasBuildFuture = build;
+    try {
+      await build;
+    } finally {
+      if (identical(_atlasBuildFuture, build)) {
+        _atlasBuildFuture = null;
+      }
+    }
+  }
+
+  Future<void> _buildAtlasTexture(int layoutVersion, int generation) async {
+    final controller = widget.controller;
+    ui.Image? atlas;
+    try {
+      atlas = await DisplayListSnapshot.buildAtlasImageFromPixels(
+        controller.atlasPixels,
+        controller.atlasWidth,
+        controller.atlasHeight,
+      );
+    } catch (e, st) {
+      debugPrint('DocumentView: atlas decode failed: $e\n$st');
+      return;
+    }
 
     if (!mounted || layoutVersion != controller.displayVersion) {
       atlas?.dispose();
-      _buildingAtlas = false;
+      return;
+    }
+    // A newer atlas generation arrived while we were decoding — drop this one.
+    if (generation != controller.atlasGeneration) {
+      atlas?.dispose();
       return;
     }
 
@@ -260,8 +325,9 @@ class _DocumentViewState extends State<DocumentView> {
       _atlasImage?.dispose();
       _atlasImage = atlas;
       _loadedAtlasGeneration = generation;
-      _buildingAtlas = false;
     });
+    WidgetsBinding.instance.ensureVisualUpdate();
+    WidgetsBinding.instance.scheduleFrame();
   }
 
   void _scheduleLoad(int index) {
@@ -276,8 +342,11 @@ class _DocumentViewState extends State<DocumentView> {
     _loadedPageVersions.remove(index);
     _pending.add(index);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _loadPage(index);
+      if (mounted) unawaited(_loadPage(index));
     });
+    // Wake Chrome after file-picker / dialog gaps where rAF is suspended.
+    WidgetsBinding.instance.ensureVisualUpdate();
+    WidgetsBinding.instance.scheduleFrame();
   }
 
   void _scrollToPage(int page) {
@@ -298,7 +367,7 @@ class _DocumentViewState extends State<DocumentView> {
 
   double get _listPaddingTop {
     final gap = _pageGapEffective;
-    if (WordTheme.phoneChrome(context)) {
+    if (WordTheme.mobileChrome(context)) {
       return gap * _effectiveScale(widget.controller);
     }
     return gap;
@@ -307,8 +376,10 @@ class _DocumentViewState extends State<DocumentView> {
   /// Maps a page-space caret Y into ListView scroll space.
   double get _caretYScale {
     final controller = widget.controller;
-    final zoom = _effectiveScale(controller);
-    if (WordTheme.phoneChrome(context)) return zoom;
+    if (WordTheme.mobileChrome(context)) {
+      return _effectiveScale(controller);
+    }
+    final zoom = controller.zoom;
     final columns = controller.pageColumns.clamp(1, 3);
     final gap = _pageGapEffective;
     final rowWidth = columns * (controller.pageWidth + gap);
@@ -342,7 +413,12 @@ class _DocumentViewState extends State<DocumentView> {
     if (target == null) return;
     if ((target - position.pixels).abs() < 1) return;
     // Jump: key-repeat / IME bursts must not restart a 120ms animation.
-    _scrollController.jumpTo(target);
+    _caretFollowScrollInFlight = true;
+    try {
+      _scrollController.jumpTo(target);
+    } finally {
+      _caretFollowScrollInFlight = false;
+    }
   }
 
   @override
@@ -371,12 +447,6 @@ class _DocumentViewState extends State<DocumentView> {
               controller.reportViewportSize(
                 Size(constraints.maxWidth, constraints.maxHeight),
               );
-              if (WordTheme.mobileChrome(context)) {
-                // Don't notifyListeners during build — apply after the frame.
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (mounted) controller.ensureMobileReadingZoom();
-                });
-              }
               final canvasBg = controller.isWebLayout || controller.isReadMode
                   ? Colors.white
                   : WordTheme.chrome(context).canvas;
@@ -603,11 +673,10 @@ class _DocumentViewState extends State<DocumentView> {
     required bool trackVisiblePage,
     bool forceReadOnly = false,
   }) {
-    // Phone: true zoom + horizontal pan (readable text, no silent fit-width).
-    // Desktop/web: prior Transform.scale + FittedBox.scaleDown path — keeps
-    // pages centered and fitting the viewport (Chrome/Mac/Windows).
-    final phone = WordTheme.phoneChrome(context);
-    return phone
+    // Phone/tablet: page-width fit at 100% zoom (no sideways pan). Desktop/web
+    // keeps Transform.scale + FittedBox.scaleDown.
+    final mobile = WordTheme.mobileChrome(context);
+    return mobile
         ? _buildPhoneCanvas(
             context,
             controller,
@@ -711,7 +780,8 @@ class _DocumentViewState extends State<DocumentView> {
     );
   }
 
-  /// Phone: layout size matches painted zoom; pan horizontally when wider.
+  /// Phone/tablet: layout size matches painted zoom. At 100% the page fits
+  /// the canvas width; pinch/zoom above that can pan horizontally.
   Widget _buildPhoneCanvas(
     BuildContext context,
     EditorController controller, {

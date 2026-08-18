@@ -22,6 +22,7 @@ fn insert_image(session: &mut EditSession) -> tw_model::NodeId {
         transform: ImageTransform::default(),
         caption_paragraph_id: None,
         alt_text: None,
+        wrap_polygon: None,
     };
     let id = image.id;
     session.document.sections[0]

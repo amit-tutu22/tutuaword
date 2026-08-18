@@ -1,6 +1,6 @@
 //! Table of figures paragraph materialization.
 
-use crate::format::{ParaFormat, TabAlignment, TabStop};
+use crate::format::{ParaFormat, TabAlignment, TabLeader, TabStop};
 use crate::field::tof_field_data;
 use crate::nodes::{Block, Paragraph, Run, RunContent};
 use crate::Document;
@@ -77,6 +77,7 @@ fn tof_entry_paragraph(entry: &CaptionEntry, page: u32) -> Paragraph {
         tab_stops: Some(vec![TabStop {
             position: TOF_TAB_POSITION,
             alignment: TabAlignment::Right,
+            leader: TabLeader::Dots,
         }]),
         ..Default::default()
     };

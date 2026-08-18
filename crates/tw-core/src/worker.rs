@@ -585,6 +585,9 @@ impl WorkerCore {
                             .as_deref()
                             .filter(|p| !p.is_empty())
                             .map(|p| p.to_string());
+                        for font in &bundle.embedded_fonts {
+                            let _ = self.layout.register_face(&font.spec, font.data.clone());
+                        }
                         self.session = EditSession::from_document(bundle.document);
                         self.current_page = 0;
                         self.rebuild(Relayout::Full)

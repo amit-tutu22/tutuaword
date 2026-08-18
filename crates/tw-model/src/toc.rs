@@ -1,6 +1,6 @@
 //! Table of contents paragraph materialization (F16.S2).
 
-use crate::format::{ParaFormat, TabAlignment, TabStop};
+use crate::format::{ParaFormat, TabAlignment, TabLeader, TabStop};
 use crate::field::toc_field_data;
 use crate::nodes::{Block, Paragraph, Run, RunContent};
 use crate::outline::OutlineEntry;
@@ -41,6 +41,7 @@ fn toc_entry_paragraph(entry: &OutlineEntry, page: u32) -> Paragraph {
         tab_stops: Some(vec![TabStop {
             position: TOC_TAB_POSITION,
             alignment: TabAlignment::Right,
+            leader: TabLeader::Dots,
         }]),
         ..Default::default()
     };

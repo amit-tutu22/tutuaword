@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:path/path.dart' as p;
 import 'package:tutuaword/bridge/document_io.dart';
 import 'package:tutuaword/bridge/document_picker.dart';
@@ -454,6 +455,32 @@ class DocumentSessionController extends ChangeNotifier {
     _syncSavedGeneration();
     notifyListeners();
     onSessionChanged();
+    // Chrome often suspends rAF after the file-picker dialog, so post-frame
+    // page/atlas loads would sit idle until an unrelated keypress. Force a
+    // couple of frames and re-pull display state so the first open paints.
+    await _forceOpenPaint();
+  }
+
+  Future<void> _forceOpenPaint() async {
+    final binding = WidgetsBinding.instance;
+    // Prefer timed yields over endOfFrame alone: Chrome can leave rAF suspended
+    // after the native file dialog, so awaiting endOfFrame would hang forever.
+    for (var i = 0; i < 3; i++) {
+      binding.ensureVisualUpdate();
+      binding.scheduleFrame();
+      await Future<void>.delayed(Duration(milliseconds: 16 * (i + 1)));
+      _host.refreshFromEngine(full: true);
+      notifyListeners();
+      onSessionChanged();
+      if (_host.engineHasPaintableDisplayList() && _host.atlasPixels.isNotEmpty) {
+        binding.ensureVisualUpdate();
+        binding.scheduleFrame();
+        // One more frame so DocumentView can finish atlas upload + page load.
+        await Future<void>.delayed(const Duration(milliseconds: 32));
+        binding.scheduleFrame();
+        break;
+      }
+    }
   }
 
   Future<_PasswordPromptOutcome> _promptForPassword({

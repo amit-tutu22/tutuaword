@@ -71,11 +71,7 @@ class _WebGlyphTextInputState extends State<WebGlyphTextInput> {
         (key == LogicalKeyboardKey.space || key.keyLabel.toLowerCase() == 'space')) {
       char = ' ';
     }
-    final input = EditorInputEvent.fromLogicalKey(
-      key,
-      shift: HardwareKeyboard.instance.isShiftPressed,
-      character: char,
-    );
+    final input = EditorInputEvent.fromKeyEvent(event, character: char);
     if (input == null) return KeyEventResult.ignored;
     // Printable characters still flow through TextField.onChanged / IME.
     if (input.kind == EditorInputKind.character) {

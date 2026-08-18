@@ -1413,6 +1413,29 @@ impl Session {
         serde_json::to_string(&entries).ok()
     }
 
+    /// JSON `{ url, anchor, text, tooltip }` when [run_id] is a hyperlink.
+    pub fn hyperlink_at(&self, run_id: tw_model::NodeId) -> Option<String> {
+        let document = self.document();
+        let run = document.run_by_id(run_id)?;
+        let tw_model::RunContent::Hyperlink { target, text } = &run.content else {
+            return None;
+        };
+        #[derive(serde::Serialize)]
+        struct HyperlinkResponse<'a> {
+            url: &'a str,
+            anchor: Option<&'a str>,
+            text: &'a str,
+            tooltip: Option<&'a str>,
+        }
+        serde_json::to_string(&HyperlinkResponse {
+            url: &target.url,
+            anchor: target.anchor.as_deref(),
+            text,
+            tooltip: target.tooltip.as_deref(),
+        })
+        .ok()
+    }
+
     /// JSON semantic accessibility tree (F21.S1).
     pub fn semantic_tree_json(&self) -> Option<String> {
         let tree = tw_model::semantic_document_tree(self.document().as_ref());

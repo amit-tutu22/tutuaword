@@ -246,23 +246,16 @@ pub fn iter_body_blocks(body_xml: &str) -> Vec<(&str, BlockKind)> {
     let mut blocks = Vec::new();
     let mut rest = body_xml;
     while !rest.is_empty() {
-        let next_p = rest.find("<w:p");
-        let next_tbl = rest.find("<w:tbl");
-        let next_sect = rest.find("<w:sectPr");
-        let next_math = rest.find("<m:oMathPara");
+        let next_p = find_tag_start(rest, "<w:p");
+        let next_tbl = find_tag_start(rest, "<w:tbl");
+        let next_sect = find_tag_start(rest, "<w:sectPr");
+        let next_math = find_tag_start(rest, "<m:oMathPara");
 
         let mut candidates = [
             next_p.map(|i| (i, BlockKind::Paragraph)),
             next_tbl.map(|i| (i, BlockKind::Table)),
             next_sect.map(|i| (i, BlockKind::SectionProps)),
-            next_math
-                .filter(|i| {
-                    rest[*i..]
-                        .get("<m:oMathPara".len()..)
-                        .map(is_name_boundary)
-                        .unwrap_or(false)
-                })
-                .map(|i| (i, BlockKind::MathPara)),
+            next_math.map(|i| (i, BlockKind::MathPara)),
         ]
         .into_iter()
         .flatten()
@@ -274,6 +267,25 @@ pub fn iter_body_blocks(body_xml: &str) -> Vec<(&str, BlockKind)> {
         candidates.sort_by_key(|(i, _)| *i);
         let (offset, kind) = candidates[0];
         rest = &rest[offset..];
+
+        let open = match kind {
+            BlockKind::Paragraph => "<w:p",
+            BlockKind::Table => "<w:tbl",
+            BlockKind::SectionProps => "<w:sectPr",
+            BlockKind::MathPara => "<m:oMathPara",
+        };
+        let after_open = &rest[open.len()..];
+        let Some(tag_end) = after_open.find('>') else {
+            break;
+        };
+        let tag_head = &after_open[..tag_end];
+        if tag_head.ends_with('/') {
+            // Self-closing block (e.g. `<w:p/>` or `<w:p w:rsidR="…"/>`).
+            let chunk = &rest[..open.len() + tag_end + 1];
+            blocks.push((chunk, kind));
+            rest = &rest[open.len() + tag_end + 1..];
+            continue;
+        }
 
         let close_tag = match kind {
             BlockKind::Paragraph => "</w:p>",
@@ -290,6 +302,21 @@ pub fn iter_body_blocks(body_xml: &str) -> Vec<(&str, BlockKind)> {
         }
     }
     blocks
+}
+
+fn find_tag_start(haystack: &str, open: &str) -> Option<usize> {
+    let mut rest = haystack;
+    let mut base = 0usize;
+    while let Some(i) = rest.find(open) {
+        let after = &rest[i + open.len()..];
+        if is_name_boundary(after) {
+            return Some(base + i);
+        }
+        let skip = i + open.len().max(1);
+        base += skip;
+        rest = &rest[skip..];
+    }
+    None
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -388,6 +415,24 @@ mod tests {
         let body = " w:abstractNumId=\"3\"><w:lvl w:ilvl=\"0\"/>";
         assert_eq!(read_own_attr(body, "w:abstractNumId"), Some("3"));
         assert_eq!(read_own_attr(body, "w:ilvl"), None);
+    }
+
+    #[test]
+    fn iter_body_blocks_self_closing_paragraph_before_table() {
+        let body = "<w:p/><w:tbl><w:tr><w:tc><w:p><w:r><w:t>A</w:t></w:r></w:p></w:tc></w:tr></w:tbl>";
+        let blocks = iter_body_blocks(body);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].1, BlockKind::Paragraph);
+        assert_eq!(blocks[1].1, BlockKind::Table);
+        assert!(blocks[0].0.contains("/>"));
+    }
+
+    #[test]
+    fn iter_body_blocks_ignores_ppr_prefix() {
+        let body = "<w:pPr><w:jc w:val=\"center\"/></w:pPr><w:p><w:r><w:t>X</w:t></w:r></w:p>";
+        let blocks = iter_body_blocks(body);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].1, BlockKind::Paragraph);
     }
 
     #[test]

@@ -321,6 +321,7 @@ pub fn parse_image_block(para_xml: &str, media: &dyn MediaResolver) -> Option<Im
     block.anchor = parse_anchor(para_xml);
     if block.anchor.is_some() {
         block.wrap = parse_text_wrap(para_xml);
+        block.wrap_polygon = parse_wrap_polygon(para_xml);
     }
     // Word stores alt text on wp:docPr/@descr (preferred) or pic:cNvPr/@descr.
     block.alt_text = read_attr_value(para_xml, "wp:docPr", "descr")
@@ -367,14 +368,32 @@ pub fn parse_shape_block(
     if picture_relationship_id(para_xml).is_some() {
         return None;
     }
-    let width = read_attr_value(para_xml, "wp:extent", "cx")
+    let (vml_w, vml_h) = parse_vml_or_drawing_size(para_xml);
+    let mut width = read_attr_value(para_xml, "wp:extent", "cx")
         .and_then(|v| v.parse::<f32>().ok())
         .map(|emu| emu / EMU_PER_POINT)
-        .unwrap_or(100.0);
-    let height = read_attr_value(para_xml, "wp:extent", "cy")
+        .unwrap_or(vml_w);
+    let mut height = read_attr_value(para_xml, "wp:extent", "cy")
         .and_then(|v| v.parse::<f32>().ok())
         .map(|emu| emu / EMU_PER_POINT)
-        .unwrap_or(50.0);
+        .unwrap_or(if vml_h > 0.0 { vml_h } else { 50.0 });
+    if para_xml.contains("o:hr") {
+        if vml_h > 0.0 {
+            height = vml_h;
+        } else {
+            height = 1.5;
+        }
+        if vml_w <= 0.0 {
+            width = 0.0;
+        }
+    } else {
+        if width <= 0.0 {
+            width = 100.0;
+        }
+        if height <= 0.0 {
+            height = 50.0;
+        }
+    }
     let shape_type = if para_xml.contains("drawingml/2006/chart")
         || para_xml.contains("<c:chart")
         || para_xml.contains("c:chart ")
@@ -438,12 +457,58 @@ pub fn parse_shape_block(
 }
 
 fn extract_shape_paragraphs(para_xml: &str) -> Vec<tw_model::Paragraph> {
-    let text = crate::xml_util::extract_plain_text(para_xml);
+    // Prefer Word text-box content (`w:txbxContent`) so each paragraph stays separate.
+    if let Some(start) = para_xml.find("<w:txbxContent") {
+        let after = &para_xml[start..];
+        if let Some(gt) = after.find('>') {
+            let body = &after[gt + 1..];
+            if let Some(end) = body.find("</w:txbxContent>") {
+                let paras: Vec<_> = crate::xml_util::split_elements(&body[..end], "w:p")
+                    .into_iter()
+                    .filter_map(|p| {
+                        let text = crate::xml_util::extract_plain_text(p);
+                        let trimmed = text.trim();
+                        if trimmed.is_empty() {
+                            None
+                        } else {
+                            Some(tw_model::Paragraph::with_text(trimmed))
+                        }
+                    })
+                    .collect();
+                if !paras.is_empty() {
+                    return paras;
+                }
+            }
+        }
+    }
+
+    let mut text = crate::xml_util::extract_plain_text(para_xml);
+    if text.trim().is_empty() {
+        // DrawingML text body uses `a:t` instead of `w:t`.
+        text = extract_drawingml_text(para_xml);
+    }
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return Vec::new();
     }
     vec![tw_model::Paragraph::with_text(trimmed)]
+}
+
+fn extract_drawingml_text(xml: &str) -> String {
+    let mut out = String::new();
+    let mut rest = xml;
+    while let Some(start) = rest.find("<a:t") {
+        rest = &rest[start..];
+        let tag_end = rest.find('>').map(|i| i + 1).unwrap_or(rest.len());
+        let after = &rest[tag_end..];
+        if let Some(close) = after.find("</a:t>") {
+            out.push_str(&crate::xml_util::decode_xml_entities(&after[..close]));
+            rest = &after[close + 5..];
+        } else {
+            break;
+        }
+    }
+    out
 }
 
 /// Resolve a PNG/JPEG/EMF preview linked from a SmartArt diagram (F12.S2).
@@ -668,6 +733,80 @@ fn mime_for_part(part_name: &str) -> &'static str {
     }
 }
 
+/// Parse VML `style="width:…;height:…pt"` and DrawingML extent fallbacks.
+fn parse_vml_or_drawing_size(para_xml: &str) -> (f32, f32) {
+    let style = ["v:rect", "v:line", "v:shape", "v:oval"]
+        .iter()
+        .find_map(|tag| read_attr_value(para_xml, tag, "style"))
+        .or_else(|| {
+            para_xml
+                .split("style=\"")
+                .nth(1)
+                .and_then(|rest| rest.split('"').next())
+                .map(|s| s.to_string())
+        });
+    if let Some(style) = style {
+        let w = parse_vml_style_length(&style, "width").unwrap_or(0.0);
+        let h = parse_vml_style_length(&style, "height").unwrap_or(0.0);
+        return (w, h);
+    }
+    (100.0, 50.0)
+}
+
+fn parse_vml_style_length(style: &str, prop: &str) -> Option<f32> {
+    for part in style.split(';') {
+        let part = part.trim();
+        let Some((key, val)) = part.split_once(':') else {
+            continue;
+        };
+        if !key.trim().eq_ignore_ascii_case(prop) {
+            continue;
+        }
+        let val = val.trim();
+        if let Some(num) = val.strip_suffix("pt") {
+            return num.trim().parse().ok();
+        }
+        if let Some(num) = val.strip_suffix("in") {
+            return num.trim().parse::<f32>().ok().map(|v| v * 72.0);
+        }
+        if let Some(num) = val.strip_suffix("cm") {
+            return num.trim().parse::<f32>().ok().map(|v| v * 72.0 / 2.54);
+        }
+        if val.chars().all(|c| c.is_ascii_digit() || c == '.') {
+            return val.parse().ok();
+        }
+    }
+    None
+}
+
+/// Parse `wp:wrapPolygon` contour points (EMU → pt, relative to image origin).
+fn parse_wrap_polygon(para_xml: &str) -> Option<Vec<(f32, f32)>> {
+    if !para_xml.contains("<wp:wrapPolygon") {
+        return None;
+    }
+    let mut points = Vec::new();
+    if let (Some(x), Some(y)) = (
+        read_attr_value(para_xml, "wp:start", "x").and_then(|v| v.parse::<f32>().ok()),
+        read_attr_value(para_xml, "wp:start", "y").and_then(|v| v.parse::<f32>().ok()),
+    ) {
+        points.push((x / EMU_PER_POINT, y / EMU_PER_POINT));
+    }
+    for element in split_elements(para_xml, "wp:lineTo") {
+        let Some(x) = read_own_attr(element, "x").and_then(|v| v.parse::<f32>().ok()) else {
+            continue;
+        };
+        let Some(y) = read_own_attr(element, "y").and_then(|v| v.parse::<f32>().ok()) else {
+            continue;
+        };
+        points.push((x / EMU_PER_POINT, y / EMU_PER_POINT));
+    }
+    if points.len() >= 3 {
+        Some(points)
+    } else {
+        None
+    }
+}
+
 /// Finds the relationship id of the image a drawing displays, if it displays
 /// one: `<a:blip>` for DrawingML, `<v:imagedata>` for legacy VML pictures.
 fn picture_relationship_id(para_xml: &str) -> Option<String> {
@@ -697,13 +836,15 @@ fn parse_anchor(para_xml: &str) -> Option<tw_model::ImageAnchor> {
 }
 
 /// Map DrawingML wrap children / `behindDoc` onto our `TextWrap` enum.
-/// Tight/through collapse to square until contour wrapping is implemented.
 fn parse_text_wrap(para_xml: &str) -> tw_model::TextWrap {
     if para_xml.contains("<wp:wrapSquare") {
         return tw_model::TextWrap::Square;
     }
-    if para_xml.contains("<wp:wrapTight") || para_xml.contains("<wp:wrapThrough") {
-        return tw_model::TextWrap::Square;
+    if para_xml.contains("<wp:wrapTight") {
+        return tw_model::TextWrap::Tight;
+    }
+    if para_xml.contains("<wp:wrapThrough") {
+        return tw_model::TextWrap::Through;
     }
     if para_xml.contains("<wp:wrapTopAndBottom") {
         return tw_model::TextWrap::TopBottom;
@@ -861,5 +1002,24 @@ mod tests {
         let table = parse_table(xml, &doc);
         assert_eq!(table.rows[0].cells[0].format.rowspan, 2);
         assert_eq!(table.rows[1].cells.len(), 1);
+    }
+
+    struct NoMedia;
+    impl MediaResolver for NoMedia {
+        fn resolve(&self, _: &str) -> Option<ImageData> {
+            None
+        }
+    }
+
+    #[test]
+    fn vml_horizontal_rule_uses_style_height() {
+        let xml = r##"<w:p><w:r><w:pict><v:rect o:hr="t" style="width:0;height:1.5pt"/></w:pict></w:r></w:p>"##;
+        let shape = parse_shape_block(xml, &NoMedia, &DocxPackage::default()).expect("shape");
+        assert!(
+            (shape.shape.height - 1.5).abs() < 0.01,
+            "height {}",
+            shape.shape.height
+        );
+        assert_eq!(shape.shape.width, 0.0);
     }
 }

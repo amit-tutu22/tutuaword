@@ -1,13 +1,13 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:tutuaword/editor/document_view.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
 import 'package:tutuaword/editor/editor_menu.dart';
 import 'package:tutuaword/ui/document_properties_dialog.dart';
 import 'package:tutuaword/ui/find_pane.dart';
 import 'package:tutuaword/ui/info_bar.dart';
+import 'package:tutuaword/ui/keyboard_shortcuts.dart';
 import 'package:tutuaword/ui/password_dialog.dart';
 import 'package:tutuaword/ui/ribbon.dart';
 import 'package:tutuaword/ui/status_bar.dart';
@@ -63,6 +63,99 @@ class _EditorScreenState extends State<EditorScreen> {
 
   void _onUpdate() => setState(() {});
 
+  /// Word chord → controller command. One place, so the keyboard map and the
+  /// ribbon always reach the same code.
+  void _invokeChord(WordChord chord) {
+    switch (chord) {
+      case WordChord.newDocument:
+        unawaited(_controller.newDocument());
+      case WordChord.openDocument:
+        unawaited(_controller.openDocument());
+      case WordChord.save:
+        unawaited(_controller.saveDocument());
+      case WordChord.saveAs:
+        unawaited(_controller.saveDocumentAs(extension: 'docx'));
+      case WordChord.print:
+        unawaited(_controller.printDocument(context: context));
+      case WordChord.undo:
+        unawaited(_controller.undo());
+      case WordChord.redo:
+        unawaited(_controller.redo());
+      case WordChord.cut:
+        unawaited(_controller.cutSelection());
+      case WordChord.copy:
+        unawaited(_controller.copySelection());
+      case WordChord.paste:
+        unawaited(_controller.paste());
+      case WordChord.pasteTextOnly:
+      case WordChord.pasteMatchStyle:
+        unawaited(_controller.paste(plainText: true));
+      case WordChord.selectAll:
+        unawaited(_controller.selectAll());
+      case WordChord.find:
+      case WordChord.replace:
+        _controller.openFindPane();
+      case WordChord.findNext:
+        _controller.findNext();
+      case WordChord.goTo:
+        unawaited(_controller.openGoToDialog(context));
+      case WordChord.formattingMarks:
+        _controller.toggleFormattingMarks();
+      case WordChord.bold:
+        _controller.toggleBold();
+      case WordChord.italic:
+        _controller.toggleItalic();
+      case WordChord.underline:
+        _controller.toggleUnderline();
+      case WordChord.growFont:
+        _controller.increaseFontSize();
+      case WordChord.shrinkFont:
+        _controller.decreaseFontSize();
+      case WordChord.subscript:
+        _controller.toggleSubscript();
+      case WordChord.superscript:
+        _controller.toggleSuperscript();
+      case WordChord.allCaps:
+        _controller.toggleAllCaps();
+      case WordChord.smallCaps:
+        _controller.toggleSmallCaps();
+      case WordChord.clearFormatting:
+        _controller.clearFormatting();
+      case WordChord.alignLeft:
+        _controller.setAlignment(TextAlign.left);
+      case WordChord.alignCenter:
+        _controller.setAlignment(TextAlign.center);
+      case WordChord.alignRight:
+        _controller.setAlignment(TextAlign.right);
+      case WordChord.alignJustify:
+        _controller.setAlignment(TextAlign.justify);
+      case WordChord.increaseIndent:
+        _controller.increaseIndent();
+      case WordChord.decreaseIndent:
+        _controller.decreaseIndent();
+      case WordChord.singleSpace:
+        _controller.applyLineSpacing(LineSpacingMode.single);
+      case WordChord.oneAndAHalfSpace:
+        _controller.applyLineSpacing(LineSpacingMode.oneAndHalf);
+      case WordChord.doubleSpace:
+        _controller.applyLineSpacing(LineSpacingMode.double_);
+      case WordChord.normalStyle:
+        _controller.applyNormalStyle();
+      case WordChord.heading1:
+        _controller.applyParagraphStyle('Heading 1');
+      case WordChord.heading2:
+        _controller.applyParagraphStyle('Heading 2');
+      case WordChord.heading3:
+        _controller.applyParagraphStyle('Heading 3');
+      case WordChord.hyperlink:
+        unawaited(_controller.insertHyperlink(context));
+      case WordChord.comment:
+        unawaited(_controller.insertComment(context));
+      case WordChord.trackChanges:
+        _controller.toggleTrackChanges();
+    }
+  }
+
   @override
   void dispose() {
     _controller.setPasswordPrompt(null);
@@ -106,92 +199,12 @@ class _EditorScreenState extends State<EditorScreen> {
       child: Material(
         color: WordTheme.chrome(context).tabStrip,
         child: Shortcuts(
-          shortcuts: const <ShortcutActivator, Intent>{
-            SingleActivator(LogicalKeyboardKey.keyF, meta: true): _OpenFindIntent(),
-            SingleActivator(LogicalKeyboardKey.keyF, control: true): _OpenFindIntent(),
-            SingleActivator(LogicalKeyboardKey.keyG, meta: true): _OpenGoToIntent(),
-            SingleActivator(LogicalKeyboardKey.keyG, control: true): _OpenGoToIntent(),
-            SingleActivator(LogicalKeyboardKey.keyA, meta: true): _SelectAllDocumentIntent(),
-            SingleActivator(LogicalKeyboardKey.keyA, control: true): _SelectAllDocumentIntent(),
-            SingleActivator(LogicalKeyboardKey.keyP, meta: true): _PrintDocumentIntent(),
-            SingleActivator(LogicalKeyboardKey.keyP, control: true): _PrintDocumentIntent(),
-            SingleActivator(LogicalKeyboardKey.keyS, meta: true): _SaveDocumentIntent(),
-            SingleActivator(LogicalKeyboardKey.keyS, control: true): _SaveDocumentIntent(),
-            SingleActivator(LogicalKeyboardKey.keyX, meta: true): _CutIntent(),
-            SingleActivator(LogicalKeyboardKey.keyX, control: true): _CutIntent(),
-            SingleActivator(LogicalKeyboardKey.keyC, meta: true): _CopyIntent(),
-            SingleActivator(LogicalKeyboardKey.keyC, control: true): _CopyIntent(),
-            SingleActivator(LogicalKeyboardKey.keyV, meta: true): _PasteIntent(),
-            SingleActivator(LogicalKeyboardKey.keyV, control: true): _PasteIntent(),
-            SingleActivator(LogicalKeyboardKey.keyV, meta: true, shift: true, alt: true):
-                _PasteMatchStyleIntent(),
-            SingleActivator(LogicalKeyboardKey.keyV, control: true, shift: true, alt: true):
-                _PasteMatchStyleIntent(),
-            SingleActivator(LogicalKeyboardKey.digit8, control: true, shift: true):
-                _ToggleFormattingMarksIntent(),
-            SingleActivator(LogicalKeyboardKey.digit8, meta: true, shift: true):
-                _ToggleFormattingMarksIntent(),
-          },
+          shortcuts: kWordChordShortcuts,
           child: Actions(
             actions: <Type, Action<Intent>>{
-              _OpenFindIntent: CallbackAction<_OpenFindIntent>(
-                onInvoke: (_) {
-                  _controller.openFindPane();
-                  return null;
-                },
-              ),
-              _OpenGoToIntent: CallbackAction<_OpenGoToIntent>(
-                onInvoke: (_) {
-                  unawaited(_controller.openGoToDialog(context));
-                  return null;
-                },
-              ),
-              _SelectAllDocumentIntent: CallbackAction<_SelectAllDocumentIntent>(
-                onInvoke: (_) {
-                  unawaited(_controller.selectAll());
-                  return null;
-                },
-              ),
-              _PrintDocumentIntent: CallbackAction<_PrintDocumentIntent>(
-                onInvoke: (_) {
-                  unawaited(_controller.printDocument(context: context));
-                  return null;
-                },
-              ),
-              _SaveDocumentIntent: CallbackAction<_SaveDocumentIntent>(
-                onInvoke: (_) {
-                  unawaited(_controller.saveDocument());
-                  return null;
-                },
-              ),
-              _CutIntent: CallbackAction<_CutIntent>(
-                onInvoke: (_) {
-                  unawaited(_controller.cutSelection());
-                  return null;
-                },
-              ),
-              _CopyIntent: CallbackAction<_CopyIntent>(
-                onInvoke: (_) {
-                  unawaited(_controller.copySelection());
-                  return null;
-                },
-              ),
-              _PasteIntent: CallbackAction<_PasteIntent>(
-                onInvoke: (_) {
-                  unawaited(_controller.paste());
-                  return null;
-                },
-              ),
-              _PasteMatchStyleIntent: CallbackAction<_PasteMatchStyleIntent>(
-                onInvoke: (_) {
-                  unawaited(_controller.paste(plainText: true));
-                  return null;
-                },
-              ),
-              _ToggleFormattingMarksIntent:
-                  CallbackAction<_ToggleFormattingMarksIntent>(
-                onInvoke: (_) {
-                  _controller.toggleFormattingMarks();
+              WordChordIntent: CallbackAction<WordChordIntent>(
+                onInvoke: (intent) {
+                  _invokeChord(intent.chord);
                   return null;
                 },
               ),
@@ -223,42 +236,3 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 }
 
-class _OpenFindIntent extends Intent {
-  const _OpenFindIntent();
-}
-
-class _OpenGoToIntent extends Intent {
-  const _OpenGoToIntent();
-}
-
-class _SelectAllDocumentIntent extends Intent {
-  const _SelectAllDocumentIntent();
-}
-
-class _PrintDocumentIntent extends Intent {
-  const _PrintDocumentIntent();
-}
-
-class _SaveDocumentIntent extends Intent {
-  const _SaveDocumentIntent();
-}
-
-class _CutIntent extends Intent {
-  const _CutIntent();
-}
-
-class _CopyIntent extends Intent {
-  const _CopyIntent();
-}
-
-class _PasteIntent extends Intent {
-  const _PasteIntent();
-}
-
-class _PasteMatchStyleIntent extends Intent {
-  const _PasteMatchStyleIntent();
-}
-
-class _ToggleFormattingMarksIntent extends Intent {
-  const _ToggleFormattingMarksIntent();
-}

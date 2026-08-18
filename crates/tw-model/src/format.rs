@@ -149,10 +149,34 @@ pub enum TabAlignment {
     Bar,
 }
 
+/// Fill between a tab and the following text (Word `w:leader`).
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum TabLeader {
+    #[default]
+    None,
+    Dots,
+    MiddleDot,
+    Hyphen,
+    Underscore,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TabStop {
     pub position: f32,
     pub alignment: TabAlignment,
+    #[serde(default)]
+    pub leader: TabLeader,
+}
+
+impl Default for TabStop {
+    fn default() -> Self {
+        Self {
+            position: 0.0,
+            alignment: TabAlignment::Left,
+            leader: TabLeader::None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]

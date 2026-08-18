@@ -11,7 +11,8 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('F05.S2 Multi-level lists', () {
-    /// I-F05-S2-promote-demote: Tab on a list item increases ilvl.
+    /// I-F05-S2-promote-demote: Tab at the start of a list item increases ilvl.
+    /// Word only changes the level from the start of the paragraph.
     testWidgets('I-F05-S2-promote-demote Tab increases list level', (tester) async {
       final engine = MockDocumentEngine();
       final controller = createTestEditorController(engine: engine);
@@ -31,6 +32,7 @@ void main() {
       expect(controller.listLevel, 0);
       expect(mockEngineNumbering(engine)?['level'], 0);
 
+      controller.moveGlyphCaretToLineEdge(toEnd: false);
       await tester.sendKeyEvent(LogicalKeyboardKey.tab);
       await controller.ensureLayoutReady();
       await tester.pumpAndSettle();
@@ -41,7 +43,31 @@ void main() {
       expect(controller.documentText, isNot(contains('\t')));
     });
 
-    testWidgets('Shift+Tab demotes list level', (tester) async {
+    testWidgets('Tab mid-item inserts a tab like Word', (tester) async {
+      final engine = MockDocumentEngine();
+      final controller = createTestEditorController(engine: engine);
+      addTearDown(controller.dispose);
+      controller.setDisplayListForTest(fakeGlyphDisplayList());
+
+      await pumpTestDocumentView(tester, controller);
+      await tester.tap(find.byType(GlyphEditorSurface).first);
+      await tester.pump();
+
+      await typeTextDirect(controller, 'Item');
+      controller.applyBulletList();
+      await controller.ensureLayoutReady();
+      expect(controller.caretOffset, greaterThan(0));
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await controller.ensureLayoutReady();
+      await tester.pumpAndSettle();
+
+      expect(controller.listLevel, 0);
+      expect(controller.documentText, contains('\t'));
+    });
+
+    testWidgets('Shift+Tab demotes list level from anywhere in the item',
+        (tester) async {
       final engine = MockDocumentEngine();
       final controller = createTestEditorController(engine: engine);
       addTearDown(controller.dispose);
@@ -55,6 +81,7 @@ void main() {
       controller.applyBulletList();
       await controller.ensureLayoutReady();
 
+      controller.moveGlyphCaretToLineEdge(toEnd: false);
       await tester.sendKeyEvent(LogicalKeyboardKey.tab);
       await controller.ensureLayoutReady();
       expect(controller.listLevel, 1);

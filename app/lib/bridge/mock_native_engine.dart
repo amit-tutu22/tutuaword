@@ -1632,6 +1632,7 @@ class MockDocumentEngine implements DocumentEngine {
   final Map<String, String> _bookmarks = {};
   final List<Map<String, dynamic>> _bookmarkEntries = [];
   List<Map<String, dynamic>>? _bookmarksOverride;
+  final Map<String, Map<String, dynamic>> _hyperlinks = {};
 
   /// Override [fetchBookmarks] with an explicit fixture (F19.S4).
   void setBookmarksForTest(List<Map<String, dynamic>> entries) {
@@ -1644,6 +1645,13 @@ class MockDocumentEngine implements DocumentEngine {
       return jsonEncode(_bookmarksOverride);
     }
     return jsonEncode(_bookmarkEntries);
+  }
+
+  @override
+  String? fetchHyperlinkAt(String runId) {
+    final stored = _hyperlinks[runId];
+    if (stored == null) return null;
+    return jsonEncode(stored);
   }
 
   @override
@@ -1682,6 +1690,13 @@ class MockDocumentEngine implements DocumentEngine {
     _pushUndo();
     final display = text.isEmpty ? url : text;
     _insert(runId, offset, display);
+    final anchor = url.startsWith('#') ? url.substring(1) : null;
+    _hyperlinks[runId] = {
+      'url': url,
+      'anchor': anchor,
+      'text': display,
+      'tooltip': tooltip,
+    };
     _version++;
     return true;
   }

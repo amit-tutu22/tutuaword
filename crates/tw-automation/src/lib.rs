@@ -153,6 +153,7 @@ impl AutomationSession {
             source_format,
             docx_package,
             odt_package,
+            embedded_fonts,
         } = bundle;
         self.format_ctx = FormatContext::from_bundle(
             tw_core::ImportBundle {
@@ -160,9 +161,17 @@ impl AutomationSession {
                 source_format,
                 docx_package,
                 odt_package,
+                embedded_fonts: embedded_fonts.clone(),
             },
             path_hint,
         );
+        // Fonts the document embeds must be live before the first layout pass.
+        for font in &embedded_fonts {
+            let _ = self
+                .sync
+                .layout
+                .register_face(&font.spec, font.data.clone());
+        }
         self.sync.edit = EditSession::from_document(document);
         self.sync.relayout(None);
         Ok(())

@@ -1121,6 +1121,16 @@ impl WasmSession {
             .unwrap_or_else(|| "[]".to_string())
     }
 
+    pub fn hyperlink_at(&self, run_id: &str) -> String {
+        let Some(uuid) = uuid::Uuid::parse_str(run_id).ok() else {
+            return String::new();
+        };
+        let id = tw_model::NodeId::from_uuid(uuid);
+        self.session()
+            .and_then(|s| s.hyperlink_at(id))
+            .unwrap_or_default()
+    }
+
     pub fn semantic_tree_json(&self) -> String {
         self.session()
             .and_then(|s| s.semantic_tree_json())
@@ -2400,6 +2410,10 @@ pub mod bindgen_exports {
 
         pub fn bookmarks_json(&self) -> String {
             self.session.bookmarks_json()
+        }
+
+        pub fn hyperlink_at(&self, run_id: &str) -> String {
+            self.session.hyperlink_at(run_id)
         }
 
         pub fn semantic_tree_json(&self) -> String {

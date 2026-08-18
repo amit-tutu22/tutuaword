@@ -1,0 +1,17 @@
+# Bundled fonts (OFL)
+
+Metric-compatible substitutes for Microsoft Office core fonts. These files are
+**not** Microsoft fonts and are distributed under open licenses:
+
+| File | Substitutes | License |
+|------|-------------|---------|
+| Carlito-Regular.ttf, Carlito-Bold.ttf | Calibri | SIL Open Font License 1.1 (Google Crosextra Carlito) |
+| LiberationSans-Regular.ttf, LiberationSans-Bold.ttf | Arial / Helvetica | SIL Open Font License 1.1 (Liberation Fonts) |
+| LiberationSerif-Regular.ttf, LiberationSerif-Bold.ttf | Times New Roman | SIL Open Font License 1.1 (Liberation Fonts) |
+| NotoSans-Regular.ttf | UI fallback | SIL Open Font License 1.1 (Google Noto) |
+
+Sources:
+
+- Carlito: https://github.com/googlefonts/crosextra-carlito
+- Liberation: https://github.com/liberationfonts/liberation-fonts
+- Noto Sans: https://fonts.google.com/noto/specimen/Noto+Sans

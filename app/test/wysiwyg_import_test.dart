@@ -109,37 +109,22 @@ void main() {
       expect(controller.currentPage, greaterThan(0));
     });
 
-    testWidgets('phone uses reading zoom and pans when page is wider', (tester) async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-      const phone = Size(390, 844);
-      tester.view.physicalSize = phone;
-      tester.view.devicePixelRatio = 1.0;
-      try {
-        final controller = EditorController.forTest();
-        addTearDown(controller.dispose);
-        controller.setDisplayListForTest(fakeGlyphDisplayList(), pageCount: 2);
+    testWidgets('phone opens at 100% and fits page width without sideways pan',
+        (tester) async {
+      await _expectMobileFitsWidth(
+        tester,
+        platform: TargetPlatform.iOS,
+        size: const Size(390, 844),
+      );
+    });
 
-        await tester.pumpWidget(
-          MaterialApp(
-            home: MediaQuery(
-              data: const MediaQueryData(size: phone),
-              child: Scaffold(body: DocumentView(controller: controller)),
-            ),
-          ),
-        );
-        await tester.pumpAndSettle();
-
-        expect(tester.takeException(), isNull);
-        expect(controller.zoom, closeTo(1.5, 0.01));
-        expect(
-          find.byKey(ValueKey('page-0-${controller.pageDisplayVersion(0)}')),
-          findsOneWidget,
-        );
-        expect(find.byType(SingleChildScrollView), findsWidgets);
-      } finally {
-        debugDefaultTargetPlatformOverride = null;
-        tester.view.reset();
-      }
+    testWidgets('tablet opens at 100% and fits page width without sideways pan',
+        (tester) async {
+      await _expectMobileFitsWidth(
+        tester,
+        platform: TargetPlatform.iOS,
+        size: const Size(768, 1024),
+      );
     });
   });
 
@@ -160,4 +145,56 @@ void main() {
       expect(controller.usesGlyphRendering, isTrue);
     });
   });
+}
+
+Finder _horizontalPan() {
+  return find.byWidgetPredicate(
+    (widget) =>
+        widget is SingleChildScrollView &&
+        widget.scrollDirection == Axis.horizontal,
+  );
+}
+
+Future<void> _expectMobileFitsWidth(
+  WidgetTester tester, {
+  required TargetPlatform platform,
+  required Size size,
+}) async {
+  debugDefaultTargetPlatformOverride = platform;
+  tester.view.physicalSize = size;
+  tester.view.devicePixelRatio = 1.0;
+  try {
+    final controller = EditorController.forTest();
+    addTearDown(controller.dispose);
+    controller.setDisplayListForTest(fakeGlyphDisplayList(), pageCount: 2);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaQuery(
+          data: MediaQueryData(size: size),
+          child: Scaffold(body: DocumentView(controller: controller)),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(controller.zoom, closeTo(1.0, 0.01));
+    expect(
+      find.byKey(ValueKey('page-0-${controller.pageDisplayVersion(0)}')),
+      findsOneWidget,
+    );
+    expect(_horizontalPan(), findsNothing);
+
+    final pageRect = tester.getRect(
+      find.byKey(ValueKey('page-0-${controller.pageDisplayVersion(0)}')),
+    );
+    final viewRect = tester.getRect(find.byType(DocumentView));
+    expect(pageRect.width, lessThanOrEqualTo(viewRect.width + 1.0));
+    expect(pageRect.left, greaterThanOrEqualTo(viewRect.left - 1.0));
+    expect(pageRect.right, lessThanOrEqualTo(viewRect.right + 1.0));
+  } finally {
+    debugDefaultTargetPlatformOverride = null;
+    tester.view.reset();
+  }
 }
