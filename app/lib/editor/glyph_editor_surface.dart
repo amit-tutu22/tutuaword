@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:tutuaword/bridge/engine_types.dart';
@@ -138,6 +139,24 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
       return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;
+  }
+
+  /// Hit-test used by [_ContentDragClaimRecognizer] before [Listener] runs.
+  /// Must mirror the move/resize branches of [_onPointerDown] so the page
+  /// [ListView] cannot win the vertical-drag arena on iPhone/iPad.
+  bool _shouldClaimContentDrag(Offset local) {
+    final controller = widget.controller;
+    if (controller.selectedImagePage == widget.pageIndex &&
+        controller.hasSelectedImage) {
+      if (controller.imageHandleAt(local) != null) return true;
+      if (controller.isPointOnSelectedImage(local)) return true;
+    }
+    if (controller.selectedDiagramPage == widget.pageIndex &&
+        controller.hasSelectedDiagram &&
+        controller.isPointOnSelectedDiagram(local)) {
+      return true;
+    }
+    return false;
   }
 
   void _onPointerDown(PointerDownEvent event) {
@@ -410,7 +429,20 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
               _requestEditorFocus();
             }());
           },
-          child: Listener(
+          child: RawGestureDetector(
+            behavior: HitTestBehavior.translucent,
+            gestures: <Type, GestureRecognizerFactory>{
+              _ContentDragClaimRecognizer:
+                  GestureRecognizerFactoryWithHandlers<_ContentDragClaimRecognizer>(
+                () => _ContentDragClaimRecognizer(
+                  shouldClaim: _shouldClaimContentDrag,
+                ),
+                (_ContentDragClaimRecognizer instance) {
+                  instance.shouldClaim = _shouldClaimContentDrag;
+                },
+              ),
+            },
+            child: Listener(
             behavior: HitTestBehavior.translucent,
             onPointerDown: _onPointerDown,
             onPointerMove: _onPointerMove,
@@ -497,9 +529,38 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
               ],
             ),
           ),
+          ),
         ),
       ],
     );
+  }
+}
+
+/// Wins the gesture arena immediately when a pointer lands on a selected
+/// image/shape so the parent document [ListView] cannot scroll instead.
+class _ContentDragClaimRecognizer extends OneSequenceGestureRecognizer {
+  _ContentDragClaimRecognizer({required this.shouldClaim});
+
+  bool Function(Offset localPosition) shouldClaim;
+
+  @override
+  void addAllowedPointer(PointerDownEvent event) {
+    if (!shouldClaim(event.localPosition)) return;
+    super.addAllowedPointer(event);
+    resolve(GestureDisposition.accepted);
+  }
+
+  @override
+  String get debugDescription => 'content_drag_claim';
+
+  @override
+  void didStopTrackingLastPointer(int pointer) {}
+
+  @override
+  void handleEvent(PointerEvent event) {
+    if (event is PointerUpEvent || event is PointerCancelEvent) {
+      stopTrackingPointer(event.pointer);
+    }
   }
 }
 

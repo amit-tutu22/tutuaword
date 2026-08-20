@@ -1161,6 +1161,13 @@ class EditorController extends ChangeNotifier {
   Rect? get selectedDiagramRect => _previewDiagramRect ?? _selectedDiagramRect;
   bool get isImageResizing => _activeImageHandle != null;
 
+  /// True while a selected image/shape is being moved or resized.
+  ///
+  /// On iPhone/iPad the document [ListView] otherwise wins the vertical-drag
+  /// arena and scrolls under the finger (or cancels the object move).
+  bool get locksDocumentScroll =>
+      _moveStartPoint != null || _resizeStartRect != null;
+
   /// Original object bounds while a move preview is active (content drag).
   Rect? get contentDragSourceRect {
     if (_previewDiagramRect != null) return _selectedDiagramRect;

@@ -756,6 +756,9 @@ class _DocumentViewState extends State<DocumentView> {
               ? const ValueKey('document-page-list')
               : const ValueKey('document-page-list-split'),
           controller: scrollController,
+          physics: controller.locksDocumentScroll
+              ? const NeverScrollableScrollPhysics()
+              : null,
           padding: EdgeInsets.symmetric(vertical: gap),
           itemCount: _rowCount,
           itemExtent: _pageExtentFor(controller),
@@ -849,6 +852,9 @@ class _DocumentViewState extends State<DocumentView> {
           ? const ValueKey('document-page-list')
           : const ValueKey('document-page-list-split'),
       controller: scrollController,
+      physics: controller.locksDocumentScroll
+          ? const NeverScrollableScrollPhysics()
+          : null,
       padding: EdgeInsets.symmetric(vertical: vPad),
       itemCount: _rowCount,
       itemExtent: _pageExtentFor(controller),
@@ -914,6 +920,9 @@ class _DocumentViewState extends State<DocumentView> {
             }
             return SingleChildScrollView(
               scrollDirection: Axis.horizontal,
+              physics: controller.locksDocumentScroll
+                  ? const NeverScrollableScrollPhysics()
+                  : null,
               child: SizedBox(
                 width: contentWidth,
                 height: constraints.maxHeight,
