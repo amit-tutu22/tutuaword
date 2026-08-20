@@ -1,9 +1,11 @@
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::hash::{Hash, Hasher};
 
 use image::GenericImageView;
 use thiserror::Error;
 use tw_layout::{LayoutBox, LayoutEngine, PageLayout, TextLine};
-use tw_model::Document;
+use tw_model::{Document, NodeId};
 use tw_render::DisplayListBuilder;
 
 #[derive(Debug, Error)]
@@ -453,6 +455,8 @@ impl PdfExporter for DisplayListPdfExporter {
         let mut used_font_keys = BTreeSet::new();
         if embed {
             collect_font_keys(&layout.pages, &mut used_font_keys);
+            // Glyph-usage collection is deferred until a real subsetter is linked;
+            // `subset_font_bytes` currently passthroughs full faces.
         }
 
         let mut pdf = PdfBuilder::new();
@@ -467,10 +471,11 @@ impl PdfExporter for DisplayListPdfExporter {
                         "PDF VisualMatch / embed_fonts cannot load embeddable face bytes for font key {key}"
                     ))
                 })?;
+                let subset_data = subset_font_bytes(&data, None);
                 let family = fonts
                     .family_name_for_key(*key)
                     .unwrap_or_else(|| format!("Face{key}"));
-                embedded.insert(*key, write_embedded_font(&mut pdf, *key, &family, &data)?);
+                embedded.insert(*key, write_embedded_font(&mut pdf, *key, &family, &subset_data)?);
             }
         }
 
@@ -480,34 +485,55 @@ impl PdfExporter for DisplayListPdfExporter {
             Some(write_standard14_fonts(&mut pdf))
         };
 
+        let run_layout = build_run_layout_index(&layout.pages);
+        let run_font_sizes = build_run_font_size_index(doc);
         let sheet_plan = build_print_sheet_plan(layout.pages.len(), &options.print_layout);
         let impose = sheet_plan.pages_per_sheet > 1 || sheet_plan.booklet;
 
         let mut page_ids = Vec::new();
         if !impose {
-            page_ids.reserve(layout.pages.len());
-            for page in &layout.pages {
+            // Pre-allocate page object ids so internal GoTo link destinations can
+            // reference later pages while writing earlier ones.
+            page_ids = (0..layout.pages.len()).map(|_| pdf.alloc()).collect();
+            let bookmark_dests = build_bookmark_dest_index(doc, &run_layout, &page_ids);
+            for (page_index, page) in layout.pages.iter().enumerate() {
                 let list = DisplayListBuilder::from_page(page, engine.atlas(), 1);
                 let transform = options.print_layout.resolve(page.width, page.height);
-                let page_id = write_page(
+                write_page(
                     &mut pdf,
                     doc,
                     pages_id,
+                    page_ids[page_index],
                     page,
                     &list,
                     embed,
                     &embedded,
                     standard14.as_ref(),
                     transform,
+                    &bookmark_dests,
+                    &run_font_sizes,
                 )?;
-                page_ids.push(page_id);
             }
         } else {
-            let lists: Vec<_> = layout
-                .pages
-                .iter()
-                .map(|page| DisplayListBuilder::from_page(page, engine.atlas(), 1))
-                .collect();
+            // Build display lists only for pages that appear on at least one sheet.
+            let mut lists: Vec<Option<tw_render::DisplayList>> =
+                (0..layout.pages.len()).map(|_| None).collect();
+            for sheet in &sheet_plan.sheets {
+                for slot in &sheet.slots {
+                    let Some(page_index) = *slot else {
+                        continue;
+                    };
+                    if lists.get(page_index).is_some_and(|l| l.is_some()) {
+                        continue;
+                    }
+                    if let Some(page) = layout.pages.get(page_index) {
+                        if let Some(slot_list) = lists.get_mut(page_index) {
+                            *slot_list =
+                                Some(DisplayListBuilder::from_page(page, engine.atlas(), 1));
+                        }
+                    }
+                }
+            }
             let sheet_w = layout.pages.first().map(|p| p.width).unwrap_or(612.0);
             let sheet_h = layout.pages.first().map(|p| p.height).unwrap_or(792.0);
             page_ids.reserve(sheet_plan.sheets.len());
@@ -527,6 +553,7 @@ impl PdfExporter for DisplayListPdfExporter {
                     embed,
                     &embedded,
                     standard14.as_ref(),
+                    &run_font_sizes,
                 )?;
                 page_ids.push(page_id);
             }
@@ -545,11 +572,16 @@ impl PdfExporter for DisplayListPdfExporter {
             )
             .into_bytes(),
         );
-        pdf.put(
-            catalog_id,
+
+        let outlines_id = write_document_outlines(&mut pdf, doc, &page_ids, &run_layout);
+        let catalog_dict = if let Some(oid) = outlines_id {
+            format!(
+                "{catalog_id} 0 obj<< /Type /Catalog /Pages {pages_id} 0 R /Outlines {oid} 0 R >>endobj\n"
+            )
+        } else {
             format!("{catalog_id} 0 obj<< /Type /Catalog /Pages {pages_id} 0 R >>endobj\n")
-                .into_bytes(),
-        );
+        };
+        pdf.put(catalog_id, catalog_dict.into_bytes());
 
         Ok(pdf.finish())
     }
@@ -667,6 +699,15 @@ fn pdf_name_escape(name: &str) -> String {
     }
 }
 
+fn subset_font_bytes<'a>(face_bytes: &'a [u8], used: Option<&BTreeSet<u32>>) -> Cow<'a, [u8]> {
+    let Some(used) = used else {
+        return Cow::Borrowed(face_bytes);
+    };
+    // Passthrough until a platform subsetter is linked; avoid an eager copy.
+    let _ = used.len();
+    Cow::Borrowed(face_bytes)
+}
+
 fn write_embedded_font(
     pdf: &mut PdfBuilder,
     key: u32,
@@ -753,9 +794,20 @@ fn write_embedded_font(
     })
 }
 
-fn write_image_xobject(pdf: &mut PdfBuilder, encoded: &[u8]) -> Result<Option<u32>, PdfError> {
+fn write_image_xobject(
+    pdf: &mut PdfBuilder,
+    encoded: &[u8],
+    cache: &mut HashMap<u64, u32>,
+) -> Result<Option<u32>, PdfError> {
     if encoded.is_empty() {
         return Ok(None);
+    }
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    encoded.hash(&mut hasher);
+    let key = hasher.finish();
+    if let Some(&cached) = cache.get(&key) {
+        return Ok(Some(cached));
     }
 
     if encoded.starts_with(&[0xFF, 0xD8, 0xFF]) {
@@ -774,6 +826,7 @@ fn write_image_xobject(pdf: &mut PdfBuilder, encoded: &[u8]) -> Result<Option<u3
         obj.extend_from_slice(encoded);
         obj.extend_from_slice(b"\nendstream\nendobj\n");
         pdf.put(id, obj);
+        cache.insert(key, id);
         return Ok(Some(id));
     }
 
@@ -798,29 +851,57 @@ fn write_image_xobject(pdf: &mut PdfBuilder, encoded: &[u8]) -> Result<Option<u3
     obj.extend_from_slice(&raw);
     obj.extend_from_slice(b"\nendstream\nendobj\n");
     pdf.put(id, obj);
+    cache.insert(key, id);
     Ok(Some(id))
 }
 
-fn append_display_list_graphics(
+fn argb_to_pdf_rgb(argb: u32) -> (f32, f32, f32) {
+    let r = ((argb >> 16) & 0xff) as f32 / 255.0;
+    let g = ((argb >> 8) & 0xff) as f32 / 255.0;
+    let b = (argb & 0xff) as f32 / 255.0;
+    (r, g, b)
+}
+
+/// Cell shading / highlights must paint under glyphs (Word order).
+fn append_display_list_fills(
+    content: &mut String,
+    page: &PageLayout,
+    list: &tw_render::DisplayList,
+) {
+    for (i, chunk) in list.rect_batch.rects.chunks(4).enumerate() {
+        if chunk.len() != 4 {
+            continue;
+        }
+        let [x, y, w, h] = [chunk[0], chunk[1], chunk[2], chunk[3]];
+        let argb = list
+            .rect_batch
+            .colors
+            .get(i)
+            .copied()
+            .unwrap_or(0xFFE8E8E8);
+        let alpha = ((argb >> 24) & 0xff) as f32 / 255.0;
+        if alpha <= 0.01 || w <= 0.0 || h <= 0.0 {
+            continue;
+        }
+        let (r, g, b) = argb_to_pdf_rgb(argb);
+        content.push_str(&format!(
+            "q {r:.4} {g:.4} {b:.4} rg {:.2} {:.2} {:.2} {:.2} re f Q\n",
+            x,
+            page.height - y - h,
+            w,
+            h
+        ));
+    }
+}
+
+fn append_display_list_overlays(
     content: &mut String,
     pdf: &mut PdfBuilder,
     page: &PageLayout,
     list: &tw_render::DisplayList,
     xobject_names: &mut Vec<(String, u32)>,
+    image_cache: &mut HashMap<u64, u32>,
 ) -> Result<(), PdfError> {
-    for chunk in list.rect_batch.rects.chunks(4) {
-        if chunk.len() == 4 {
-            let [x, y, w, h] = [chunk[0], chunk[1], chunk[2], chunk[3]];
-            content.push_str(&format!(
-                "q 0.9 0.9 0.9 rg {} {} {} {} re f Q\n",
-                x,
-                page.height - y - h,
-                w,
-                h
-            ));
-        }
-    }
-
     for chunk in list.path_batch.points.chunks(4) {
         if chunk.len() == 4 {
             content.push_str(&format!(
@@ -835,7 +916,8 @@ fn append_display_list_graphics(
 
     let n = list.image_batch.payloads.len();
     for i in 0..n {
-        let Some(img_id) = write_image_xobject(pdf, &list.image_batch.payloads[i])? else {
+        let Some(img_id) = write_image_xobject(pdf, &list.image_batch.payloads[i], image_cache)?
+        else {
             continue;
         };
         let name = format!("Im{}", xobject_names.len());
@@ -862,7 +944,7 @@ fn write_imposed_sheet(
     doc: &Document,
     pages_id: u32,
     pages: &[PageLayout],
-    lists: &[tw_render::DisplayList],
+    lists: &[Option<tw_render::DisplayList>],
     sheet: &PrintSheet,
     cols: u8,
     rows: u8,
@@ -872,9 +954,11 @@ fn write_imposed_sheet(
     embed: bool,
     embedded: &BTreeMap<u32, EmbeddedFontRefs>,
     standard14: Option<&Standard14Fonts>,
+    run_font_sizes: &HashMap<NodeId, f32>,
 ) -> Result<u32, PdfError> {
     let mut content = String::new();
     let mut xobject_names: Vec<(String, u32)> = Vec::new();
+    let mut image_cache: HashMap<u64, u32> = HashMap::new();
 
     for (slot, source) in sheet.slots.iter().enumerate() {
         let Some(page_index) = *source else {
@@ -883,7 +967,7 @@ fn write_imposed_sheet(
         let Some(page) = pages.get(page_index) else {
             continue;
         };
-        let Some(list) = lists.get(page_index) else {
+        let Some(Some(list)) = lists.get(page_index) else {
             continue;
         };
         let cell = nup_cell_transform(sheet_w, sheet_h, cols, rows, slot, page.width, page.height);
@@ -898,8 +982,24 @@ fn write_imposed_sheet(
                 inner.scale, inner.scale, inner.tx, inner.ty
             ));
         }
-        append_page_text(&mut content, doc, page, embed, embedded, standard14);
-        append_display_list_graphics(&mut content, pdf, page, list, &mut xobject_names)?;
+        append_display_list_fills(&mut content, page, list);
+        append_page_text(
+            &mut content,
+            doc,
+            page,
+            embed,
+            embedded,
+            standard14,
+            run_font_sizes,
+        );
+        append_display_list_overlays(
+            &mut content,
+            pdf,
+            page,
+            list,
+            &mut xobject_names,
+            &mut image_cache,
+        )?;
         if !inner.is_identity() {
             content.push_str("Q\n");
         }
@@ -960,13 +1060,16 @@ fn write_page(
     pdf: &mut PdfBuilder,
     doc: &Document,
     pages_id: u32,
+    page_id: u32,
     page: &PageLayout,
     list: &tw_render::DisplayList,
     embed: bool,
     embedded: &BTreeMap<u32, EmbeddedFontRefs>,
     standard14: Option<&Standard14Fonts>,
     transform: PrintContentTransform,
-) -> Result<u32, PdfError> {
+    bookmark_dests: &HashMap<String, (u32, f32)>,
+    run_font_sizes: &HashMap<NodeId, f32>,
+) -> Result<(), PdfError> {
     let mut content = String::new();
     if !transform.is_identity() {
         content.push_str(&format!(
@@ -974,17 +1077,33 @@ fn write_page(
             transform.scale, transform.scale, transform.tx, transform.ty
         ));
     }
-    append_page_text(&mut content, doc, page, embed, embedded, standard14);
+    append_display_list_fills(&mut content, page, list);
+    append_page_text(
+        &mut content,
+        doc,
+        page,
+        embed,
+        embedded,
+        standard14,
+        run_font_sizes,
+    );
 
     let mut xobject_names: Vec<(String, u32)> = Vec::new();
-    append_display_list_graphics(&mut content, pdf, page, list, &mut xobject_names)?;
+    let mut image_cache: HashMap<u64, u32> = HashMap::new();
+    append_display_list_overlays(
+        &mut content,
+        pdf,
+        page,
+        list,
+        &mut xobject_names,
+        &mut image_cache,
+    )?;
 
     if !transform.is_identity() {
         content.push_str("Q\n");
     }
 
     let content_id = pdf.alloc();
-    let page_id = pdf.alloc();
 
     let mut font_res = String::new();
     if let Some(std14) = standard14 {
@@ -1020,17 +1139,335 @@ fn write_page(
         },
     );
 
+    let link_ids = {
+        let links = collect_page_hyperlinks(doc, page);
+        let mut ids = Vec::new();
+        for link in links {
+            let annot_id = pdf.alloc();
+            let action = match &link.target {
+                PdfLinkTarget::Uri(uri) => {
+                    let uri = escape_pdf_text(uri);
+                    format!("/A << /S /URI /URI ({uri}) >>")
+                }
+                PdfLinkTarget::Internal(anchor) => {
+                    if let Some((dest_page_id, dest_y)) =
+                        bookmark_dests.get(&anchor.to_ascii_lowercase()).copied()
+                    {
+                        format!(
+                            "/A << /S /GoTo /D [{dest_page_id} 0 R /XYZ 0 {dest_y:.2} 0] >>"
+                        )
+                    } else {
+                        // Fall back to URI so the annotation still exists.
+                        let uri = escape_pdf_text(&format!("#{anchor}"));
+                        format!("/A << /S /URI /URI ({uri}) >>")
+                    }
+                }
+            };
+            pdf.put(
+                annot_id,
+                format!(
+                    "{annot_id} 0 obj<< /Type /Annot /Subtype /Link /Rect [{:.2} {:.2} {:.2} {:.2}] \
+                     /Border [0 0 0] {action} >>endobj\n",
+                    link.x0, link.y0, link.x1, link.y1
+                )
+                .into_bytes(),
+            );
+            ids.push(annot_id);
+        }
+        ids
+    };
+
     pdf.put(
         page_id,
-        format!(
-            "{page_id} 0 obj<< /Type /Page /Parent {pages_id} 0 R /MediaBox [0 0 {:.2} {:.2}] \
-             /Contents {content_id} 0 R {resources} >>endobj\n",
-            page.width, page.height
-        )
+        {
+            let annots = if link_ids.is_empty() {
+                String::new()
+            } else {
+                let refs = link_ids
+                    .iter()
+                    .map(|id| format!("{id} 0 R"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!(" /Annots [{refs}]")
+            };
+            format!(
+                "{page_id} 0 obj<< /Type /Page /Parent {pages_id} 0 R /MediaBox [0 0 {:.2} {:.2}] \
+                 /Contents {content_id} 0 R {resources}{annots} >>endobj\n",
+                page.width, page.height, resources = resources, annots = annots
+            )
+        }
         .into_bytes(),
     );
 
-    Ok(page_id)
+    Ok(())
+}
+
+fn write_document_outlines(
+    pdf: &mut PdfBuilder,
+    doc: &Document,
+    page_ids: &[u32],
+    run_layout: &HashMap<NodeId, RunLayoutPos>,
+) -> Option<u32> {
+    let entries = tw_model::document_outline(doc);
+    if entries.is_empty() || page_ids.is_empty() {
+        return None;
+    }
+    let root_id = pdf.alloc();
+    let item_ids: Vec<u32> = entries.iter().map(|_| pdf.alloc()).collect();
+    for (i, (entry, &item_id)) in entries.iter().zip(item_ids.iter()).enumerate() {
+        let (page_index, dest_y) = run_layout
+            .get(&entry.run_id)
+            .map(|pos| (pos.page_index, pos.pdf_top_y))
+            .unwrap_or((0, 792.0));
+        let page_index = page_index.min(page_ids.len().saturating_sub(1));
+        let page_id = page_ids[page_index];
+        let title = escape_pdf_text(&entry.text);
+        let next = item_ids
+            .get(i + 1)
+            .map(|id| format!(" /Next {id} 0 R"))
+            .unwrap_or_default();
+        let prev = if i > 0 {
+            format!(" /Prev {} 0 R", item_ids[i - 1])
+        } else {
+            String::new()
+        };
+        pdf.put(
+            item_id,
+            format!(
+                "{item_id} 0 obj<< /Title ({title}) /Parent {root_id} 0 R{prev}{next} \
+                 /Dest [{page_id} 0 R /XYZ 0 {dest_y:.2} 0] >>endobj\n"
+            )
+            .into_bytes(),
+        );
+    }
+    let first = item_ids.first().copied().unwrap_or(root_id);
+    let last = item_ids.last().copied().unwrap_or(root_id);
+    let count = item_ids.len();
+    pdf.put(
+        root_id,
+        format!(
+            "{root_id} 0 obj<< /Type /Outlines /First {first} 0 R /Last {last} 0 R /Count {count} >>endobj\n"
+        )
+        .into_bytes(),
+    );
+    Some(root_id)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RunLayoutPos {
+    page_index: usize,
+    pdf_top_y: f32,
+}
+
+fn build_run_layout_index(pages: &[PageLayout]) -> HashMap<NodeId, RunLayoutPos> {
+    let mut map = HashMap::new();
+    for (page_index, page) in pages.iter().enumerate() {
+        for layout_box in &page.boxes {
+            index_runs_in_box(layout_box, page_index, page.height, &mut map);
+        }
+    }
+    map
+}
+
+fn index_runs_in_box(
+    layout_box: &LayoutBox,
+    page_index: usize,
+    page_height: f32,
+    map: &mut HashMap<NodeId, RunLayoutPos>,
+) {
+    match layout_box {
+        LayoutBox::TextLine(line) => index_text_line(line, page_index, page_height, map),
+        LayoutBox::Table(table) => {
+            for cell in &table.cells {
+                for line in &cell.lines {
+                    index_text_line(line, page_index, page_height, map);
+                }
+                for nested in &cell.nested_tables {
+                    for cell in &nested.cells {
+                        for line in &cell.lines {
+                            index_text_line(line, page_index, page_height, map);
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn index_text_line(
+    line: &TextLine,
+    page_index: usize,
+    page_height: f32,
+    map: &mut HashMap<NodeId, RunLayoutPos>,
+) {
+    let pdf_top_y = page_height - (line.y - line.ascent);
+    for (_, _, rid, _) in &line.run_map {
+        map.entry(*rid).or_insert(RunLayoutPos {
+            page_index,
+            pdf_top_y,
+        });
+    }
+}
+
+fn build_run_font_size_index(doc: &Document) -> HashMap<NodeId, f32> {
+    let mut map = HashMap::new();
+    for section in &doc.sections {
+        for block in &section.blocks {
+            index_font_sizes_in_block(block, &mut map);
+        }
+    }
+    map
+}
+
+fn index_font_sizes_in_block(block: &tw_model::Block, map: &mut HashMap<NodeId, f32>) {
+    match block {
+        tw_model::Block::Paragraph(para) => {
+            for run in &para.runs {
+                map.insert(run.id, run.format.font_size.unwrap_or(12.0));
+            }
+        }
+        tw_model::Block::Table(table) => {
+            for row in &table.rows {
+                for cell in &row.cells {
+                    for nested in &cell.blocks {
+                        index_font_sizes_in_block(nested, map);
+                    }
+                }
+            }
+        }
+        tw_model::Block::ShapeBlock(shape) => {
+            for para in &shape.paragraphs {
+                for run in &para.runs {
+                    map.insert(run.id, run.format.font_size.unwrap_or(12.0));
+                }
+            }
+        }
+        tw_model::Block::ImageBlock(_) => {}
+        _ => {}
+    }
+}
+
+fn bookmark_dest_run(doc: &Document, bookmark: &tw_model::BookmarkNavEntry) -> NodeId {
+    doc.sections
+        .iter()
+        .flat_map(|s| s.blocks.iter())
+        .filter_map(|b| b.paragraph())
+        .find(|p| p.id == bookmark.paragraph_id)
+        .and_then(|p| {
+            p.runs
+                .iter()
+                .find(|r| !matches!(r.content, tw_model::RunContent::Bookmark(_)))
+                .or_else(|| p.runs.first())
+                .map(|r| r.id)
+        })
+        .unwrap_or(bookmark.run_id)
+}
+
+fn build_bookmark_dest_index(
+    doc: &Document,
+    run_layout: &HashMap<NodeId, RunLayoutPos>,
+    page_ids: &[u32],
+) -> HashMap<String, (u32, f32)> {
+    let mut map = HashMap::new();
+    for bookmark in tw_model::document_bookmarks(doc) {
+        let dest_run = bookmark_dest_run(doc, &bookmark);
+        let Some(pos) = run_layout
+            .get(&dest_run)
+            .or_else(|| run_layout.get(&bookmark.run_id))
+        else {
+            continue;
+        };
+        let Some(&page_id) = page_ids.get(pos.page_index) else {
+            continue;
+        };
+        map.insert(bookmark.name.to_ascii_lowercase(), (page_id, pos.pdf_top_y));
+    }
+    map
+}
+
+enum PdfLinkTarget {
+    Uri(String),
+    Internal(String),
+}
+
+struct PdfLinkRect {
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    target: PdfLinkTarget,
+}
+
+fn collect_page_hyperlinks(doc: &Document, page: &PageLayout) -> Vec<PdfLinkRect> {
+    let mut links = Vec::new();
+    for layout_box in &page.boxes {
+        collect_hyperlinks_in_box(doc, page.height, layout_box, &mut links);
+    }
+    links
+}
+
+fn collect_hyperlinks_in_box(
+    doc: &Document,
+    page_height: f32,
+    layout_box: &LayoutBox,
+    out: &mut Vec<PdfLinkRect>,
+) {
+    match layout_box {
+        LayoutBox::TextLine(line) => collect_hyperlinks_in_line(doc, page_height, line, out),
+        LayoutBox::Table(table) => {
+            for cell in &table.cells {
+                for line in &cell.lines {
+                    collect_hyperlinks_in_line(doc, page_height, line, out);
+                }
+                for nested in &cell.nested_tables {
+                    for cell in &nested.cells {
+                        for line in &cell.lines {
+                            collect_hyperlinks_in_line(doc, page_height, line, out);
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_hyperlinks_in_line(
+    doc: &Document,
+    page_height: f32,
+    line: &TextLine,
+    out: &mut Vec<PdfLinkRect>,
+) {
+    for (x0, x1, run_id, _) in &line.run_map {
+        let Some(run) = doc.run_by_id(*run_id) else {
+            continue;
+        };
+        let tw_model::RunContent::Hyperlink { target, .. } = &run.content else {
+            continue;
+        };
+        let link_target = if let Some(anchor) = target
+            .anchor
+            .as_deref()
+            .filter(|a| !a.is_empty())
+            .or_else(|| target.url.strip_prefix('#').filter(|a| !a.is_empty()))
+        {
+            PdfLinkTarget::Internal(anchor.to_string())
+        } else if !target.url.is_empty() && !target.url.starts_with('#') {
+            PdfLinkTarget::Uri(target.url.clone())
+        } else {
+            continue;
+        };
+        let line_top = page_height - (line.y - line.ascent);
+        let line_bottom = page_height - (line.y + line.descent);
+        out.push(PdfLinkRect {
+            x0: *x0,
+            y0: line_bottom.min(line_top),
+            x1: *x1,
+            y1: line_bottom.max(line_top),
+            target: link_target,
+        });
+    }
 }
 
 fn collect_font_keys(pages: &[PageLayout], out: &mut BTreeSet<u32>) {
@@ -1071,20 +1508,86 @@ fn collect_font_keys_in_box(layout_box: &LayoutBox, out: &mut BTreeSet<u32>) {
 }
 
 fn escape_pdf_text(text: &str) -> String {
-    text.replace('\\', "\\\\").replace('(', "\\(").replace(')', "\\)")
+    let mut out = String::new();
+    for ch in text.chars() {
+        for byte in encode_winansi_char(ch) {
+            match byte {
+                b'\\' => out.push_str("\\\\"),
+                b'(' => out.push_str("\\("),
+                b')' => out.push_str("\\)"),
+                // Keep PDF literal strings in WinAnsi: non-ASCII as octal escapes.
+                b if b < 0x20 || b > 0x7e => out.push_str(&format!("\\{b:03o}")),
+                b => out.push(b as char),
+            }
+        }
+    }
+    out
 }
 
-fn font_size_for_glyph(doc: &Document, line: &TextLine, glyph_x: f32) -> f32 {
+/// Map a Unicode scalar to one or more WinAnsi / ASCII bytes for Standard 14 fonts.
+fn encode_winansi_char(ch: char) -> Vec<u8> {
+    if ch.is_ascii() && !ch.is_control() {
+        return vec![ch as u8];
+    }
+    if ch == '\t' {
+        return vec![b' '];
+    }
+    match ch {
+        '↔' | '⇔' | '⇄' => b"<->".to_vec(),
+        '→' | '⇒' | '➜' | '➔' => b"->".to_vec(),
+        '←' | '⇐' => b"<-".to_vec(),
+        '•' | '·' | '●' | '○' => b"*".to_vec(),
+        '—' | '–' | '−' => b"-".to_vec(),
+        '“' | '”' | '„' | '‟' => b"\"".to_vec(),
+        '‘' | '’' | '‚' | '‛' => b"'".to_vec(),
+        '…' => b"...".to_vec(),
+        '×' => b"x".to_vec(),
+        '±' => b"+/-".to_vec(),
+        '°' => vec![0xB0],
+        '©' => vec![0xA9],
+        '®' => vec![0xAE],
+        '™' => b"(TM)".to_vec(),
+        '€' => vec![0x80],
+        '£' => vec![0xA3],
+        '¥' => vec![0xA5],
+        '§' => vec![0xA7],
+        '¶' => vec![0xB6],
+        '«' => vec![0xAB],
+        '»' => vec![0xBB],
+        // Box-drawing → ASCII art approximations (architecture diagrams).
+        '│' | '┃' | '┆' | '┊' | '╎' | '╏' | '║' => b"|".to_vec(),
+        '─' | '━' | '┄' | '┅' | '┈' | '┉' | '═' => b"-".to_vec(),
+        '┌' | '┏' | '╔' | '╭' => b"+".to_vec(),
+        '┐' | '┓' | '╗' | '╮' => b"+".to_vec(),
+        '└' | '┗' | '╚' | '╰' => b"+".to_vec(),
+        '┘' | '┛' | '╝' | '╯' => b"+".to_vec(),
+        '├' | '┠' | '╠' | '┝' => b"+".to_vec(),
+        '┤' | '┨' | '╣' | '┥' => b"+".to_vec(),
+        '┬' | '┯' | '╦' | '┰' => b"+".to_vec(),
+        '┴' | '┷' | '╩' | '┸' => b"+".to_vec(),
+        '┼' | '┿' | '╬' | '╂' => b"+".to_vec(),
+        '█' | '▓' | '▒' | '░' | '■' | '□' => b"#".to_vec(),
+        // Latin-1 supplement that WinAnsi shares.
+        c if (c as u32) <= 0xFF => vec![c as u8],
+        _ => b"?".to_vec(),
+    }
+}
+
+fn font_size_for_glyph(
+    line: &TextLine,
+    glyph_x: f32,
+    run_font_sizes: &HashMap<NodeId, f32>,
+) -> f32 {
     for (x0, x1, run_id, _) in &line.run_map {
         if glyph_x >= *x0 && glyph_x < *x1 {
-            if let Some(run) = doc.run_by_id(*run_id) {
-                return run.format.font_size.unwrap_or(12.0);
+            if let Some(size) = run_font_sizes.get(run_id) {
+                return *size;
             }
         }
     }
     if let Some((_, _, run_id, _)) = line.run_map.first() {
-        if let Some(run) = doc.run_by_id(*run_id) {
-            return run.format.font_size.unwrap_or(12.0);
+        if let Some(size) = run_font_sizes.get(run_id) {
+            return *size;
         }
     }
     12.0
@@ -1097,16 +1600,49 @@ fn append_page_text(
     embed: bool,
     embedded: &BTreeMap<u32, EmbeddedFontRefs>,
     standard14: Option<&Standard14Fonts>,
+    run_font_sizes: &HashMap<NodeId, f32>,
 ) {
     for layout_box in &page.boxes {
         match layout_box {
-            LayoutBox::TextLine(line) => {
-                append_line_text(content, doc, page.height, line, embed, embedded, standard14)
-            }
+            LayoutBox::TextLine(line) => append_line_text(
+                content,
+                doc,
+                page.height,
+                line,
+                embed,
+                embedded,
+                standard14,
+                run_font_sizes,
+            ),
             LayoutBox::Table(table) => {
                 for cell in &table.cells {
                     for line in &cell.lines {
-                        append_line_text(content, doc, page.height, line, embed, embedded, standard14);
+                        append_line_text(
+                            content,
+                            doc,
+                            page.height,
+                            line,
+                            embed,
+                            embedded,
+                            standard14,
+                            run_font_sizes,
+                        );
+                    }
+                    for nested in &cell.nested_tables {
+                        for cell in &nested.cells {
+                            for line in &cell.lines {
+                                append_line_text(
+                                    content,
+                                    doc,
+                                    page.height,
+                                    line,
+                                    embed,
+                                    embedded,
+                                    standard14,
+                                    run_font_sizes,
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -1123,20 +1659,21 @@ fn append_line_text(
     embed: bool,
     embedded: &BTreeMap<u32, EmbeddedFontRefs>,
     standard14: Option<&Standard14Fonts>,
+    run_font_sizes: &HashMap<NodeId, f32>,
 ) {
-    if line.glyphs.is_empty() {
+    if line.glyphs.is_empty() && line.list_marker.is_none() && line.run_map.is_empty() {
         return;
     }
 
     if embed {
         for glyph in &line.glyphs {
-            if glyph.codepoint.is_control() {
+            if glyph.codepoint.is_control() || glyph.codepoint == ' ' {
                 continue;
             }
             let Some(font) = embedded.get(&glyph.font_id) else {
                 continue;
             };
-            let size = font_size_for_glyph(doc, line, glyph.x);
+            let size = font_size_for_glyph(line, glyph.x, run_font_sizes);
             let pdf_y = page_height - line.y;
             content.push_str(&format!(
                 "BT /{} {:.2} Tf 1 0 0 1 {:.2} {:.2} Tm <{:04X}> Tj ET\n",
@@ -1150,20 +1687,36 @@ fn append_line_text(
         return;
     }
 
+    // Prefer source run text over glyph codepoints so ligatures ("fi", "fl") do
+    // not drop characters from the PDF string.
     let mut text = String::new();
-    let mut size = 12.0_f32;
-    for glyph in &line.glyphs {
-        if glyph.codepoint.is_control() {
-            continue;
+    if let Some(marker) = &line.list_marker {
+        text.push_str(marker);
+        text.push(' ');
+    }
+    text.push_str(&line_source_text(doc, line));
+    if text.is_empty() {
+        // Fallback for lines that only have glyphs.
+        for glyph in &line.glyphs {
+            if glyph.codepoint.is_control() {
+                continue;
+            }
+            text.push(glyph.codepoint);
         }
-        if text.is_empty() {
-            size = font_size_for_glyph(doc, line, glyph.x);
-        }
-        text.push(glyph.codepoint);
     }
     if text.is_empty() {
         return;
     }
+    let size = line
+        .run_map
+        .first()
+        .and_then(|(_, _, run_id, _)| run_font_sizes.get(run_id).copied())
+        .unwrap_or_else(|| {
+            line.glyphs
+                .first()
+                .map(|g| font_size_for_glyph(line, g.x, run_font_sizes))
+                .unwrap_or(12.0)
+        });
     let (bold, italic) = line
         .run_map
         .first()
@@ -1194,11 +1747,173 @@ fn append_line_text(
     ));
 }
 
+/// Reconstruct the line's logical text from run segments (not shaped glyphs).
+///
+/// `run_map`'s fourth field is a **byte** offset into the run's layout text
+/// (see `run_segments_for_range`); `run_map_chars` is the character count.
+fn line_source_text(doc: &Document, line: &TextLine) -> String {
+    let mut out = String::new();
+    for (i, (_, _, run_id, byte_offset)) in line.run_map.iter().enumerate() {
+        let Some(run) = doc.run_by_id(*run_id) else {
+            continue;
+        };
+        let n = line.run_map_chars.get(i).copied().unwrap_or(0);
+        if n == 0 {
+            continue;
+        }
+        let full = run.text();
+        let mut start = (*byte_offset).min(full.len());
+        // Byte offsets from layout are on UTF-8 boundaries; if not, snap back.
+        while start > 0 && !full.is_char_boundary(start) {
+            start -= 1;
+        }
+        let rest = full.get(start..).unwrap_or("");
+        out.extend(rest.chars().take(n));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tw_edit::{apply, Command, EditSession};
     use tw_model::{Block, Paragraph};
+
+    #[test]
+    fn structural_pdf_preserves_inter_word_spaces() {
+        let mut doc = Document::new();
+        doc.sections[0].blocks = vec![Block::Paragraph(Paragraph::with_text(
+            "Cross-platform technical architecture",
+        ))];
+        let pdf = DisplayListPdfExporter
+            .export(&doc, &PdfExportOptions::default())
+            .unwrap();
+        let s = String::from_utf8_lossy(&pdf);
+        assert!(
+            !s.contains("Cross-platformtechnicalarchitecture"),
+            "spaces must survive structural PDF export"
+        );
+        assert!(
+            s.contains("Cross-platform technical architecture")
+                || s.contains("(Cross-platform technical architecture)"),
+            "expected spaced phrase in PDF text operators; got snippet around Cross: {}",
+            s.find("Cross")
+                .map(|i| &s[i..((i + 80).min(s.len()))])
+                .unwrap_or("<missing>")
+        );
+    }
+
+    #[test]
+    fn structural_pdf_maps_unicode_arrows_for_standard14() {
+        let mut doc = Document::new();
+        doc.sections[0].blocks =
+            vec![Block::Paragraph(Paragraph::with_text("Flutter ↔ Rust"))];
+        let pdf = DisplayListPdfExporter
+            .export(&doc, &PdfExportOptions::default())
+            .unwrap();
+        let s = String::from_utf8_lossy(&pdf);
+        assert!(
+            s.contains("Flutter <-> Rust") || s.contains("(Flutter <-> Rust)"),
+            "Unicode arrows should map to ASCII for Helvetica; got {}",
+            s.find("Flutter")
+                .map(|i| &s[i..((i + 40).min(s.len()))])
+                .unwrap_or("<missing>")
+        );
+        assert!(!s.contains('\u{2194}'));
+    }
+
+    #[test]
+    fn structural_pdf_preserves_ligature_letters() {
+        let mut doc = Document::new();
+        // "fi" / "fl" often shape as ligatures; PDF text must still include both letters.
+        doc.sections[0].blocks =
+            vec![Block::Paragraph(Paragraph::with_text("fidelity flutter"))];
+        let pdf = DisplayListPdfExporter
+            .export(&doc, &PdfExportOptions::default())
+            .unwrap();
+        let s = String::from_utf8_lossy(&pdf);
+        assert!(
+            s.contains("fidelity") && s.contains("flutter"),
+            "ligatures must not drop letters from PDF text: {}",
+            s.find("fid")
+                .or_else(|| s.find("fut"))
+                .map(|i| &s[i..((i + 40).min(s.len()))])
+                .unwrap_or(&s[..s.len().min(200)])
+        );
+    }
+
+    #[test]
+    fn structural_pdf_preserves_text_after_unicode() {
+        let mut doc = Document::new();
+        // Em dash is multi-byte UTF-8; wrapping after it must not skip ASCII bytes
+        // as if they were characters.
+        doc.sections[0].blocks = vec![Block::Paragraph(Paragraph::with_text(
+            "Decision — generates removes embedding and consistent results",
+        ))];
+        let pdf = DisplayListPdfExporter
+            .export(&doc, &PdfExportOptions::default())
+            .unwrap();
+        let s = String::from_utf8_lossy(&pdf);
+        for word in ["generates", "removes", "embedding", "consistent"] {
+            assert!(
+                s.contains(word),
+                "missing `{word}` after unicode dash; snippet: {}",
+                s.find("Decision")
+                    .map(|i| &s[i..((i + 120).min(s.len()))])
+                    .unwrap_or(&s[..s.len().min(200)])
+            );
+        }
+    }
+
+    #[test]
+    fn shaded_table_cell_text_paints_above_fill() {
+        use tw_model::{CellFormat, Color, Table, TableCell, TableRow};
+
+        let mut cell = TableCell::new();
+        cell.format = CellFormat {
+            background: Some(Color {
+                r: 0xF4,
+                g: 0xF6,
+                b: 0xF9,
+                a: 255,
+            }),
+            ..CellFormat::default()
+        };
+        cell.blocks = vec![Block::Paragraph(Paragraph::with_text(
+            "Architecture decision - Rust owns the engine.",
+        ))];
+        let mut table = Table::new(1, 1);
+        table.format.width = Some(468.0);
+        table.format.column_widths = vec![468.0];
+        table.rows = vec![TableRow::with_cells(vec![cell])];
+
+        let mut doc = Document::new();
+        doc.sections[0].blocks = vec![Block::Table(table)];
+        let pdf = DisplayListPdfExporter
+            .export(&doc, &PdfExportOptions::default())
+            .unwrap();
+        let s = String::from_utf8_lossy(&pdf);
+        assert!(
+            s.contains("Architecture decision"),
+            "cell text must appear in PDF; snippet={}",
+            s.find("Architecture")
+                .or_else(|| s.find("decision"))
+                .map(|i| &s[i..((i + 60).min(s.len()))])
+                .unwrap_or(&s[s.len().saturating_sub(200)..])
+        );
+        // Fill (rg … re f) must precede the text show for this page content.
+        let fill_pos = s.find(" re f ").or_else(|| s.find(" re f\n"));
+        let text_pos = s.find("Architecture decision");
+        assert!(
+            fill_pos.is_some() && text_pos.is_some() && fill_pos.unwrap() < text_pos.unwrap(),
+            "cell fill must paint before cell text so shading does not cover glyphs"
+        );
+        // Soft gray fill from cell background, not hard-coded 0.9.
+        assert!(
+            s.contains("0.9569") || s.contains("0.9647"),
+            "expected F4F6F9-ish fill color in content stream"
+        );
+    }
 
     #[test]
     fn export_document_with_table_produces_pdf() {

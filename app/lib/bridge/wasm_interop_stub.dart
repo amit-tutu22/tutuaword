@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 Future<void> twWasmInit() async {}
 
@@ -6,11 +7,19 @@ Object createWasmEngine() {
   throw UnsupportedError('WASM is only available on web');
 }
 
-Object callMethod(Object target, String method, List<Object?> args) {
+Future<Object?> invokeWasm(String method, List<Object?> args) {
   throw UnsupportedError('WASM is only available on web');
 }
 
-Object? callMethodOrNull(Object target, String method, List<Object?> args) {
+Uint8List? cachedPageDisplayListBytes(int page) {
+  throw UnsupportedError('WASM is only available on web');
+}
+
+Object? wasmCacheState() {
+  throw UnsupportedError('WASM is only available on web');
+}
+
+void attachWasmEventListener(void Function(Object? event) listener) {
   throw UnsupportedError('WASM is only available on web');
 }
 

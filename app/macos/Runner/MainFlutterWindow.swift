@@ -148,6 +148,7 @@ class MacosFileAccessPlugin: NSObject, FlutterPlugin {
 class MacosTtsPlugin: NSObject, FlutterPlugin, NSSpeechSynthesizerDelegate {
   private let synthesizer = NSSpeechSynthesizer()
   private var speakResult: FlutterResult?
+  private var ignoreNextFinish = false
 
   static func register(with registrar: FlutterPluginRegistrar) {
     let channel = FlutterMethodChannel(
@@ -168,20 +169,29 @@ class MacosTtsPlugin: NSObject, FlutterPlugin, NSSpeechSynthesizerDelegate {
         return
       }
       if synthesizer.isSpeaking {
+        if let pending = speakResult {
+          speakResult = nil
+          pending(nil)
+        }
+        // NSSpeechSynthesizer finishes the stopped utterance asynchronously;
+        // ignore that callback so it does not complete the replacement speak.
+        ignoreNextFinish = true
         synthesizer.stopSpeaking()
       }
       speakResult = result
       if !synthesizer.startSpeaking(text) {
         speakResult = nil
+        ignoreNextFinish = false
         result(FlutterError(code: "speak_failed", message: "NSSpeechSynthesizer failed", details: nil))
       }
       // Result completed in speechSynthesizer(_:didFinishSpeaking:).
     case "stop":
-      synthesizer.stopSpeaking()
       if let pending = speakResult {
         speakResult = nil
         pending(nil)
       }
+      ignoreNextFinish = synthesizer.isSpeaking
+      synthesizer.stopSpeaking()
       result(nil)
     case "isSpeaking":
       result(synthesizer.isSpeaking)
@@ -191,6 +201,10 @@ class MacosTtsPlugin: NSObject, FlutterPlugin, NSSpeechSynthesizerDelegate {
   }
 
   func speechSynthesizer(_ sender: NSSpeechSynthesizer, didFinishSpeaking finishedSpeaking: Bool) {
+    if ignoreNextFinish {
+      ignoreNextFinish = false
+      return
+    }
     if let pending = speakResult {
       speakResult = nil
       pending(nil)

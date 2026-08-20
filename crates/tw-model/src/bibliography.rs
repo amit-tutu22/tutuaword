@@ -68,8 +68,18 @@ pub fn cited_source_keys(doc: &Document) -> Vec<String> {
 }
 
 /// Build bibliography title + entry paragraphs for cited sources.
+///
+/// When nothing is cited yet, fall back to registered sources so
+/// References → Bibliography still produces a usable section.
 pub fn build_bibliography_blocks(doc: &Document) -> Vec<Block> {
-    let keys = cited_source_keys(doc);
+    let mut keys = cited_source_keys(doc);
+    if keys.is_empty() {
+        keys = doc
+            .bibliography_sources
+            .iter()
+            .map(|s| s.key.clone())
+            .collect();
+    }
     if keys.is_empty() {
         return Vec::new();
     }

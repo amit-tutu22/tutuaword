@@ -349,11 +349,26 @@ class _RibbonLargeButtonState extends State<RibbonLargeButton> {
     final effectiveTooltip =
         effectiveRibbonTooltip(tooltip: widget.tooltip, enabled: enabled);
     final activate = widget.onPressed;
-    final dropdown = widget.onDropdown ?? widget.onPressed;
     final phone = WordTheme.phoneChrome(context);
     final iconSize = phone ? 22.0 : WordTheme.largeIconSize;
     // Stay under WordTheme.ribbonHeightPhone (64) with button padding.
     final chevronHeight = phone ? 36.0 : 52.0;
+    final split = widget.onDropdown != null;
+
+    final body = Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(widget.icon, size: iconSize, color: color),
+        if (!phone) ...[
+          const SizedBox(height: 2),
+          Text(
+            widget.label,
+            textAlign: TextAlign.center,
+            style: WordTheme.ribbonLabel.copyWith(color: color),
+          ),
+        ],
+      ],
+    );
 
     return wrapRibbonTooltip(
       effectiveTooltip,
@@ -364,10 +379,24 @@ class _RibbonLargeButtonState extends State<RibbonLargeButton> {
           final fill = (hovered || focused) && enabled
               ? WordTheme.chrome(context).ribbonHover
               : Colors.transparent;
+          if (!split) {
+            // Single action — avoid nested GestureDetectors (they fight the
+            // Focusable's tap handler on desktop and feel "not clickable").
+            return Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+              decoration: ribbonFocusDecoration(
+                fill: fill,
+                focused: focused,
+                focusColor: WordTheme.chrome(context).activeTab,
+              ),
+              child: body,
+            );
+          }
           return Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               GestureDetector(
+                behavior: HitTestBehavior.opaque,
                 onTap: enabled ? activate : null,
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
@@ -379,24 +408,12 @@ class _RibbonLargeButtonState extends State<RibbonLargeButton> {
                       left: Radius.circular(3),
                     ),
                   ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(widget.icon, size: iconSize, color: color),
-                      if (!phone) ...[
-                        const SizedBox(height: 2),
-                        Text(
-                          widget.label,
-                          textAlign: TextAlign.center,
-                          style: WordTheme.ribbonLabel.copyWith(color: color),
-                        ),
-                      ],
-                    ],
-                  ),
+                  child: body,
                 ),
               ),
               GestureDetector(
-                onTap: enabled ? dropdown : null,
+                behavior: HitTestBehavior.opaque,
+                onTap: enabled ? widget.onDropdown : null,
                 child: Container(
                   width: 14,
                   height: chevronHeight,

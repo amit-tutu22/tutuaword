@@ -23,6 +23,7 @@ fn u_f13_s2_chart_preview_in_image_batch() {
             height: 216.0,
         },
         wrap: tw_model::TextWrap::Inline,
+        anchor: None,
         style: ShapeStyle::placeholder(),
         paragraphs: Vec::new(),
         preview_image: Some(ImageData::from_bytes(
@@ -64,6 +65,7 @@ fn u_f13_s2_chart_without_preview_keeps_placeholder() {
             height: 216.0,
         },
         wrap: tw_model::TextWrap::Inline,
+        anchor: None,
         style: ShapeStyle::placeholder(),
         paragraphs: Vec::new(),
         preview_image: None,

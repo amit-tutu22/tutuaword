@@ -97,6 +97,10 @@ pub struct Table {
     /// Imported OOXML table style id, if any.
     #[serde(default)]
     pub style_id: Option<crate::ids::StyleId>,
+    /// Absolute placement for floating tables (drag move). When set, the table
+    /// is positioned like a floating image/shape and does not consume flow.
+    #[serde(default)]
+    pub anchor: Option<crate::ImageAnchor>,
 }
 
 impl Table {
@@ -129,6 +133,7 @@ impl Table {
             },
             rows: table_rows,
             style_id: None,
+            anchor: None,
         }
     }
 }

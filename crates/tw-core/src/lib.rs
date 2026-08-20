@@ -17,7 +17,7 @@ pub use import::{
 pub use layout_cache::{LayoutCache, SharedLayoutCache, new_shared_layout_cache};
 pub use session::*;
 pub use snapshot::*;
-pub use executor::{EngineExecutor, InlineExecutor};
+pub use executor::{EngineExecutor, InlineExecutor, INLINE_DRIVE_BUDGET};
 #[cfg(not(target_arch = "wasm32"))]
 pub use executor::ThreadedExecutor;
 pub use worker::{

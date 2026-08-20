@@ -1,7 +1,7 @@
 name: tutuaword
 description: AI-native document editor — Flutter UI shell
 publish_to: 'none'
-version: 26.08.01+260801
+version: 26.08.19+260819
 
 environment:
   sdk: '>=3.3.0 <4.0.0'

@@ -78,7 +78,13 @@ class _RibbonFocusableState extends State<RibbonFocusable> {
       // desktop mouse clicks on the ribbon appear dead.
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: widget.enabled ? widget.onActivate : null,
+        onTap: widget.enabled
+            ? () {
+                widget.onActivate?.call();
+                // Word returns typing to the document after a ribbon click.
+                _node.unfocus();
+              }
+            : null,
         child: widget.builder(
           context,
           hovered: _hovered,

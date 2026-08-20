@@ -27,8 +27,10 @@ use tw_edit::{
     insert_image_bytes_command_for_caret,
     insert_office_math_command_for, insert_office_math_display_command_for_caret,
     set_office_math_command_for,
-    insert_image_command, insert_shape_command, insert_text_box_command,
-    insert_word_art_command, replace_image_bytes_command,
+    insert_image_command, insert_shape_command_for_caret,
+    insert_text_box_command_for_caret, insert_word_art_command_for_caret,
+    insert_diagram_command_with_kind_for_caret,
+    insert_chart_command_with_kind_for_caret, replace_image_bytes_command,
     insert_nested_table_command_for_caret, insert_page_break_command_for,
     move_block_command_for_caret,
     insert_section_break_command_for, insert_table_command_for_caret,
@@ -246,8 +248,7 @@ impl Session {
             request_id,
             inner: command,
         };
-        // The executor applies backpressure on a full queue (blocking on the
-        // threaded path, draining inline). None only when the engine has shut down.
+        // try_send first; threaded executor falls back to a brief block when full.
         self.executor.submit(queued).then_some(request_id)
     }
 
@@ -786,15 +787,39 @@ impl Session {
     }
 
     pub fn insert_shape(&self, shape_type: tw_model::ShapeKind) -> Option<u64> {
-        self.apply_from_document(|doc| insert_shape_command(doc, shape_type))
+        self.insert_shape_at(None, shape_type)
+    }
+
+    pub fn insert_shape_at(
+        &self,
+        caret_run_id: Option<NodeId>,
+        shape_type: tw_model::ShapeKind,
+    ) -> Option<u64> {
+        self.apply_from_document(|doc| {
+            insert_shape_command_for_caret(doc, caret_run_id, shape_type)
+        })
     }
 
     pub fn insert_text_box(&self) -> Option<u64> {
-        self.apply_from_document(insert_text_box_command)
+        self.insert_text_box_at(None)
+    }
+
+    pub fn insert_text_box_at(&self, caret_run_id: Option<NodeId>) -> Option<u64> {
+        self.apply_from_document(|doc| insert_text_box_command_for_caret(doc, caret_run_id))
     }
 
     pub fn insert_word_art(&self, text: String) -> Option<u64> {
-        self.apply_from_document(|doc| insert_word_art_command(doc, text))
+        self.insert_word_art_at(None, text)
+    }
+
+    pub fn insert_word_art_at(
+        &self,
+        caret_run_id: Option<NodeId>,
+        text: String,
+    ) -> Option<u64> {
+        self.apply_from_document(|doc| {
+            insert_word_art_command_for_caret(doc, caret_run_id, text)
+        })
     }
 
     pub fn insert_diagram(&self) -> Option<u64> {
@@ -802,8 +827,16 @@ impl Session {
     }
 
     pub fn insert_diagram_with_kind(&self, kind: tw_model::DiagramKind) -> Option<u64> {
+        self.insert_diagram_with_kind_at(None, kind)
+    }
+
+    pub fn insert_diagram_with_kind_at(
+        &self,
+        caret_run_id: Option<NodeId>,
+        kind: tw_model::DiagramKind,
+    ) -> Option<u64> {
         self.apply_from_document(|doc| {
-            tw_edit::command_builders::insert_diagram_command_with_kind(doc, kind)
+            insert_diagram_command_with_kind_for_caret(doc, caret_run_id, kind)
         })
     }
 
@@ -812,8 +845,16 @@ impl Session {
     }
 
     pub fn insert_chart_with_kind(&self, kind: tw_model::ChartKind) -> Option<u64> {
+        self.insert_chart_with_kind_at(None, kind)
+    }
+
+    pub fn insert_chart_with_kind_at(
+        &self,
+        caret_run_id: Option<NodeId>,
+        kind: tw_model::ChartKind,
+    ) -> Option<u64> {
         self.apply_from_document(|doc| {
-            tw_edit::command_builders::insert_chart_command_with_kind(doc, kind)
+            insert_chart_command_with_kind_for_caret(doc, caret_run_id, kind)
         })
     }
 
@@ -1018,6 +1059,14 @@ impl Session {
         self.apply(Command::SetImageAnchor { image_id, anchor })
     }
 
+    pub fn set_shape_anchor(
+        &self,
+        shape_id: tw_model::NodeId,
+        anchor: tw_model::ImageAnchor,
+    ) -> Option<u64> {
+        self.apply(Command::SetShapeAnchor { shape_id, anchor })
+    }
+
     pub fn set_image_transform(
         &self,
         image_id: tw_model::NodeId,
@@ -1050,6 +1099,15 @@ impl Session {
         let (si, bi) = doc.find_block_location(image_id)?;
         let image = doc.sections.get(si)?.blocks.get(bi)?.image()?;
         Some(image.alt_text.clone().unwrap_or_default())
+    }
+
+    /// Encoded bytes for a stable image asset id (B3 image-by-id FFI).
+    pub fn image_asset_bytes(&self, asset_id: &str) -> Option<Arc<Vec<u8>>> {
+        if asset_id.is_empty() {
+            return None;
+        }
+        let doc = self.document();
+        image_asset_bytes_in_document(&doc, asset_id).map(Arc::new)
     }
 
     pub fn compress_image(&self, image_id: tw_model::NodeId, quality: u8) -> Option<u64> {
@@ -1509,6 +1567,11 @@ impl Session {
         serde_json::to_string(&issues).ok()
     }
 
+    /// JSON tracked-change list for the Changes pane (F17.S2).
+    pub fn revisions_json(&self) -> Option<String> {
+        tw_model::revision_entries_json(self.document().as_ref())
+    }
+
     pub fn layout_page_count(&self) -> u32 {
         self.layout_cache.read().page_count()
     }
@@ -1656,6 +1719,48 @@ impl Default for SyncSession {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn image_asset_bytes_in_document(doc: &tw_model::Document, asset_id: &str) -> Option<Vec<u8>> {
+    for section in &doc.sections {
+        if let Some(bytes) = image_asset_bytes_in_blocks(&section.blocks, asset_id) {
+            return Some(bytes);
+        }
+    }
+    None
+}
+
+fn image_asset_bytes_in_blocks(blocks: &[tw_model::Block], asset_id: &str) -> Option<Vec<u8>> {
+    use tw_model::{Block, RunContent};
+    for block in blocks {
+        match block {
+            Block::Paragraph(para) => {
+                for run in &para.runs {
+                    if let RunContent::InlineImage(img) = &run.content {
+                        if img.image.asset_id == asset_id && !img.image.bytes.is_empty() {
+                            return Some(img.image.bytes.clone());
+                        }
+                    }
+                }
+            }
+            Block::Table(table) => {
+                for row in &table.rows {
+                    for cell in &row.cells {
+                        if let Some(bytes) = image_asset_bytes_in_blocks(&cell.blocks, asset_id) {
+                            return Some(bytes);
+                        }
+                    }
+                }
+            }
+            Block::ImageBlock(image) => {
+                if image.data.asset_id == asset_id && !image.data.bytes.is_empty() {
+                    return Some(image.data.bytes.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 #[cfg(test)]

@@ -2,6 +2,7 @@ mod suggest;
 mod grammar;
 
 use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
 
 use suggest::rank_suggestions;
 use unicode_segmentation::UnicodeSegmentation;
@@ -17,6 +18,7 @@ pub struct SpellIssue {
 }
 
 /// Embedded English spell checker with Hunspell-compatible `check` + `suggest` API.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpellChecker {
     words: HashSet<String>,
     word_rank: HashMap<String, usize>,
@@ -25,9 +27,25 @@ pub struct SpellChecker {
 
 impl SpellChecker {
     pub fn english() -> Self {
+        Self::english_cached().clone()
+    }
+
+    /// Shared core English dictionary (avoids rebuilding on every call).
+    pub fn english_cached() -> &'static SpellChecker {
+        static CHECKER: OnceLock<SpellChecker> = OnceLock::new();
+        CHECKER.get_or_init(|| Self::from_word_list(ENGLISH_CORE, "en"))
+    }
+
+    /// Lazy-loaded en_US dictionary (embedded Hunspell-style word list).
+    pub fn english_us() -> &'static SpellChecker {
+        static CHECKER: OnceLock<SpellChecker> = OnceLock::new();
+        CHECKER.get_or_init(|| Self::from_word_list(ENGLISH_US, "en_US"))
+    }
+
+    fn from_word_list(raw: &str, locale: &str) -> Self {
         let mut words = HashSet::new();
         let mut word_rank = HashMap::new();
-        for (rank, token) in ENGLISH_CORE.split_whitespace().enumerate() {
+        for (rank, token) in raw.split_whitespace().enumerate() {
             let word = token.to_ascii_lowercase();
             words.insert(word.clone());
             word_rank.entry(word).or_insert(rank);
@@ -40,12 +58,12 @@ impl SpellChecker {
         Self {
             words,
             word_rank,
-            locale: "en".into(),
+            locale: locale.into(),
         }
     }
 
     pub fn with_extra_words(words: impl IntoIterator<Item = String>) -> Self {
-        let mut checker = Self::english();
+        let mut checker = Self::english_cached().clone();
         for word in words {
             let normalized = word.to_ascii_lowercase();
             checker.words.insert(normalized.clone());
@@ -82,6 +100,11 @@ impl SpellChecker {
     }
 
     pub fn check_text(&self, text: &str) -> Vec<SpellIssue> {
+        self.check_text_with_limit(text, 5)
+    }
+
+    /// Like [`check_text`], but caps suggestion work per issue (RULES path uses 1).
+    pub fn check_text_with_limit(&self, text: &str, suggestion_limit: usize) -> Vec<SpellIssue> {
         let mut issues = Vec::new();
         let mut offset = 0usize;
         for word in text.split_word_bounds() {
@@ -91,7 +114,7 @@ impl SpellChecker {
                     word: word.to_string(),
                     start: offset,
                     end: offset + len,
-                    suggestions: self.suggest(word, 5),
+                    suggestions: self.suggest(word, suggestion_limit),
                 });
             }
             offset += len;
@@ -110,6 +133,7 @@ fn is_word_token(word: &str) -> bool {
 }
 
 const ENGLISH_CORE: &str = include_str!("../data/en_core.txt");
+const ENGLISH_US: &str = include_str!("../data/en_us.txt");
 
 const INDIC_LATIN_TOKENS: &str = "namaste hindi tamil telugu bengali marathi gujarati kannada malayalam punjabi urdu india delhi mumbai chennai kolkata";
 

@@ -357,6 +357,10 @@ class AiClient {
             : ensured.message,
       );
     }
+    return _llamaCompleteHttp(post, prompt);
+  }
+
+  Future<String> _llamaCompleteHttp(AiHttpPost post, String prompt) async {
     final base = llamaEndpoint.replaceAll(RegExp(r'/+$'), '');
     final body =
         '{"model":"llama3.2","messages":[{"role":"user","content":${_jsonString(prompt)}}]}';
@@ -406,9 +410,14 @@ class AiClient {
     String? geminiApiKey,
     String? llamaEndpoint,
   }) {
+    final post = httpPost ?? defaultAiHttpPost;
     return AiClient(
-      httpPost: httpPost ?? defaultAiHttpPost,
-      ollamaHost: ollamaHost,
+      httpPost: post,
+      // Injected HTTP (unit tests) must not probe a real Ollama process —
+      // Flutter's test HttpClient hangs on 127.0.0.1:11434. Explicit
+      // [ollamaHost] doubles still run ensure() as the local-runtime tests do.
+      ollamaHost: ollamaHost ??
+          (!identical(post, defaultAiHttpPost) ? FakeOllamaHost() : null),
       openaiApiKey: openaiApiKey ?? aiEnv('OPENAI_API_KEY') ?? '',
       geminiApiKey: geminiApiKey ?? aiEnv('GEMINI_API_KEY') ?? '',
       llamaEndpoint: llamaEndpoint ??

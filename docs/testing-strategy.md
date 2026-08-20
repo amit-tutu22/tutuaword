@@ -272,11 +272,17 @@ the platform focus tree, the platform text input and the Rust engine over FFI:
 ```bash
 cd app
 flutter test integration_test/word_keyboard_mapping_test.dart -d <device-id>
+flutter test integration_test/word_keyboard_mapping_test.dart -d macos
 ```
 
 | Suite | Covers |
 |-------|--------|
-| `word_keyboard_mapping_test.dart` | Word chords on a hardware keyboard: Cmd+B/I/U, Cmd+Z / Cmd+Shift+Z, Shift+Enter, Cmd+Left/Right, Option+Arrow, Option+Backspace, Cmd+E/J, Cmd+Shift+E |
+| `word_keyboard_mapping_test.dart` | Word chords on a hardware keyboard: Cmd+B/I/U, Cmd+Z / Cmd+Shift+Z, Shift+Enter, Cmd+Left/Right, Option+Arrow, Option+Backspace, Cmd+E/J, Cmd+Shift+E, Ctrl+Up / Ctrl+Down paragraph motion, Alt+Shift+Up, Cmd+T / Cmd+0 / Cmd+Q |
+
+The same suite runs on macOS and on an iOS device or simulator, because typing is
+routed per platform: mobile grows the hidden `TextField`'s value the way a soft
+keyboard does, desktop sends key events. Both are needed — a chord can reach the
+command on one and be swallowed on the other.
 
 These catch classes of bug the host tests cannot:
 
@@ -287,13 +293,22 @@ These catch classes of bug the host tests cannot:
   arithmetic. The line-end off-by-one behind `run_map_chars` in
   `crates/tw-layout/src/types.rs` passed every host test and only failed here.
 
-Two constraints when adding suites:
+- **Engine capability** — a chord bound in Dart still does nothing if the
+  platform's engine build predates its FFI export, because the lookups fall back
+  to null rather than failing to load. Ctrl+Up / Ctrl+Down and Alt+Shift+Up were
+  silently inert on iOS until `scripts/build-ffi.sh ios` rebuilt the
+  xcframework, and only this suite showed it.
+
+Three constraints when adding suites:
 
 - **Reset the document per test.** The FFI engine is process-global and outlives
   the widget tree, so text accumulates across tests without `newDocument()`.
 - **Poll engine-reported state.** Caret format and layout-derived offsets arrive
   asynchronously; assert with a pump-until-match helper rather than directly
   after the keystroke.
+- **Type through `typeOnKeyboard`.** On mobile the editor reads input as the
+  growth of the hidden field's value, so `enterText` with only the new text
+  shortens it and is read as backspaces instead.
 
 ### Keeping the Harness Out of Shipping Builds
 
@@ -386,6 +401,9 @@ cargo test -p tw-docx --test stress -- --ignored
 
 # tw-edit chart data churn
 cargo test -p tw-edit --test stress -- --ignored
+
+# crash/perf multipage open+type (50 pages)
+cargo test -p tw-core --test stress_crash_perf_open_type -- --ignored
 ```
 
 | Test ID | Location | Scenario |
@@ -394,5 +412,19 @@ cargo test -p tw-edit --test stress -- --ignored
 | `stress_chart_passthrough_fifty_parts` | `crates/tw-docx/tests/stress/f13_chart_passthrough_scale.rs` | Synthetic DOCX with 50 chart parts → import/export byte-stable passthrough |
 | `stress_malformed_chart_*` | `crates/tw-docx/tests/stress/f13_malformed_chart.rs` | Missing chart rels / empty chart XML → import succeeds, placeholder fallback, no panic |
 | `stress_chart_data_churn` | `crates/tw-edit/tests/stress/f13_chart_data_churn.rs` | 500× `SetChartData` apply/undo → export → reimport data intact |
+| `stress_ten_page_open_while_typing` | `crates/tw-core/tests/stress_crash_perf_open_type.rs` | 10-page open + typing; page DL omits atlas pixels / carries ¶ marks (PR path) |
+| `stress_fifty_page_open_while_typing` | same (`#[ignore]`) | 50-page open + typing while marks payload present |
+| `stress_inline_drive_budget_caps_work_per_turn` | `crates/tw-core/tests/stress_crash_perf_wasm_drive.rs` | Inline/wasm `drive()` processes ≤ budget units per turn |
+| Flutter `S-crash-perf-*` | `app/test/stress/crash_perf_stress_test.dart` | ¶ marks without caret FFI; page LRU; 50-page scroll |
 
-These complement feature-slice unit tests (F12/F13 Bugbot hardening) without slowing every `cargo test` run. WASM concurrent queue stress remains manual until a browser test harness exists.
+These complement feature-slice unit tests (F12/F13 Bugbot hardening) without slowing every `cargo test` run.
+
+### Worker + zero-copy exit gates (2026-08)
+
+| Gate | Command / location |
+|------|---------------------|
+| FFI transfer stats | `cargo test -p tw-ffi --test transfer_stats_test` |
+| Native owned buffer handoff | `transfer_stats_record_page_bytes` + manual GC under typing/scroll |
+| Web Worker async open/save | `open_document_async` / `take_open_result` in `tw-wasm`; Flutter `openDocumentBytesAsync` |
+| Wire v9 image-by-id | `DISPLAY_LIST_VERSION = 9`; `tw_get_image_asset`; `decodeImages(resolveAsset: …)` |
+| Transferable page DL / atlas | `tw_wasm_worker.js` cache push with `postMessage(..., transfers)` |

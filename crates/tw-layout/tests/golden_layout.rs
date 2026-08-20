@@ -59,7 +59,7 @@ fn golden_simple_paragraph_layout() {
     let doc = Document::with_paragraph("Golden layout snapshot");
     let fp = layout_fingerprint(&doc);
     // Update this constant only when layout changes are intentional.
-    assert_eq!(fp, 17898229970638997377);
+    assert_eq!(fp, 1440995372477284668);
 }
 
 #[test]

@@ -5,6 +5,8 @@ use tw_shape::{GlyphAtlas, TextShaper};
 
 const CELL_PADDING: f32 = 4.0;
 pub const MIN_ROW_HEIGHT: f32 = 18.0;
+/// Maximum nested table depth before layout stops recursing (crash guard).
+pub const MAX_TABLE_NEST_DEPTH: u32 = 8;
 
 /// A run of table rows placed on one page.
 pub struct TableSlice {
@@ -34,6 +36,7 @@ pub fn layout_table(
         f32::INFINITY,
         default_color,
         tab_interval,
+        0,
     )
     .layout
 }
@@ -53,6 +56,7 @@ pub fn layout_table_slice(
     max_height: f32,
     default_color: u32,
     tab_interval: f32,
+    depth: u32,
 ) -> TableSlice {
     let col_count = column_count(table);
     let col_widths = fit_column_widths(table, col_count, max_width);
@@ -121,6 +125,9 @@ pub fn layout_table_slice(
                         cursor_y += height;
                     }
                     tw_model::Block::Table(nested) => {
+                        if depth + 1 >= MAX_TABLE_NEST_DEPTH {
+                            continue;
+                        }
                         let nested_max = (text_width - CELL_PADDING).max(1.0);
                         let remaining = (y + max_height - cursor_y).max(MIN_ROW_HEIGHT);
                         let nested_slice = layout_table_slice(
@@ -134,6 +141,7 @@ pub fn layout_table_slice(
                             remaining,
                             default_color,
                             tab_interval,
+                            depth + 1,
                         );
                         cursor_y += nested_slice.layout.height + CELL_PADDING;
                         nested_tables.push(nested_slice.layout);

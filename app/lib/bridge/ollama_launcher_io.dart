@@ -17,7 +17,9 @@ class IoOllamaHost implements OllamaHost {
       final response =
           await request.close().timeout(const Duration(seconds: 2));
       await response.drain<void>();
-      return response.statusCode >= 200 && response.statusCode < 500;
+      // Only success responses mean Ollama is up. 404/401/etc. must not skip
+      // auto-start when the host or path is wrong.
+      return isOllamaTagsHealthyStatus(response.statusCode);
     } catch (_) {
       return false;
     } finally {

@@ -1,11 +1,81 @@
 //! Extended WASM bindings for browser hosts (Flutter web).
 
+use std::collections::VecDeque;
+use std::sync::Mutex;
 use std::time::Duration;
 use tw_core::{BridgeEvent, DetectedFormat, WaitOutcome};
 use tw_edit::command_from_json;
 use tw_layout::FontFaceSpec;
 
 use crate::{OpenError, WasmSession};
+
+const MAX_ASYNC_RESULTS: usize = 16;
+
+enum AsyncResult {
+    Pending,
+    Done(Vec<u8>),
+    Failed,
+}
+
+struct AsyncResultStore {
+    slots: VecDeque<(u64, AsyncResult)>,
+}
+
+impl AsyncResultStore {
+    fn track(&mut self, request_id: u64) {
+        self.slots.retain(|(id, _)| *id != request_id);
+        while self.slots.len() >= MAX_ASYNC_RESULTS {
+            self.slots.pop_front();
+        }
+        self.slots.push_back((request_id, AsyncResult::Pending));
+    }
+
+    fn record(&mut self, event: &BridgeEvent) {
+        let result = match event {
+            BridgeEvent::DocumentOpened { .. } => AsyncResult::Done(Vec::new()),
+            BridgeEvent::DocumentSaved { data, .. } => AsyncResult::Done(data.clone()),
+            BridgeEvent::SpellCheckResult {
+                misspellings,
+                spell_issues,
+                ..
+            } => {
+                if spell_issues.is_empty() {
+                    AsyncResult::Done(misspellings.join("\n").into_bytes())
+                } else {
+                    AsyncResult::Done(encode_spell_issues(spell_issues))
+                }
+            }
+            BridgeEvent::GrammarCheckResult { issues, .. } => {
+                AsyncResult::Done(issues.join("\n").into_bytes())
+            }
+            BridgeEvent::Error { .. } => AsyncResult::Failed,
+            BridgeEvent::DisplayListReady { .. } => return,
+        };
+        if let Some((_, slot)) = self.slots.iter_mut().find(|(id, _)| *id == event.request_id()) {
+            if matches!(slot, AsyncResult::Pending) {
+                *slot = result;
+            }
+        }
+    }
+
+    fn take(&mut self, request_id: u64) -> Option<AsyncResult> {
+        let index = self.slots.iter().position(|(id, _)| *id == request_id)?;
+        if matches!(self.slots[index].1, AsyncResult::Pending) {
+            return Some(AsyncResult::Pending);
+        }
+        self.slots.remove(index).map(|(_, result)| result)
+    }
+}
+
+static ASYNC_RESULTS: Mutex<AsyncResultStore> = Mutex::new(AsyncResultStore {
+    slots: VecDeque::new(),
+});
+
+fn record_bridge_event(event: &BridgeEvent) {
+    if let Ok(mut guard) = ASYNC_RESULTS.lock() {
+        guard.record(event);
+    }
+}
 
 const TW_EVENT_DISPLAY_LIST_READY: u32 = 1;
 const TW_EVENT_DOCUMENT_OPENED: u32 = 2;
@@ -723,7 +793,11 @@ impl WasmSession {
         self.enqueue_edit(session.insert_image(width, height))
     }
 
-    pub fn insert_shape_enqueue(&self, shape_type: i32) -> Result<u64, String> {
+    pub fn insert_shape_enqueue(
+        &self,
+        shape_type: i32,
+        caret_run_id: Option<&str>,
+    ) -> Result<u64, String> {
         let session = self.session().expect("WasmSession not initialized");
         let kind = match shape_type {
             0 => tw_model::ShapeKind::Rectangle,
@@ -733,29 +807,46 @@ impl WasmSession {
             4 => tw_model::ShapeKind::WordArt,
             _ => tw_model::ShapeKind::Other,
         };
-        self.enqueue_edit(session.insert_shape(kind))
+        let caret = parse_run_id(caret_run_id);
+        self.enqueue_edit(session.insert_shape_at(caret, kind))
     }
 
-    pub fn insert_text_box_enqueue(&self) -> Result<u64, String> {
+    pub fn insert_text_box_enqueue(&self, caret_run_id: Option<&str>) -> Result<u64, String> {
         let session = self.session().expect("WasmSession not initialized");
-        self.enqueue_edit(session.insert_text_box())
+        let caret = parse_run_id(caret_run_id);
+        self.enqueue_edit(session.insert_text_box_at(caret))
     }
 
-    pub fn insert_word_art_enqueue(&self, text: String) -> Result<u64, String> {
+    pub fn insert_word_art_enqueue(
+        &self,
+        text: String,
+        caret_run_id: Option<&str>,
+    ) -> Result<u64, String> {
         let session = self.session().expect("WasmSession not initialized");
-        self.enqueue_edit(session.insert_word_art(text))
+        let caret = parse_run_id(caret_run_id);
+        self.enqueue_edit(session.insert_word_art_at(caret, text))
     }
 
-    pub fn insert_diagram_enqueue(&self, diagram_type: i32) -> Result<u64, String> {
+    pub fn insert_diagram_enqueue(
+        &self,
+        diagram_type: i32,
+        caret_run_id: Option<&str>,
+    ) -> Result<u64, String> {
         let session = self.session().expect("WasmSession not initialized");
         let kind = tw_model::DiagramKind::from_i32(diagram_type);
-        self.enqueue_edit(session.insert_diagram_with_kind(kind))
+        let caret = parse_run_id(caret_run_id);
+        self.enqueue_edit(session.insert_diagram_with_kind_at(caret, kind))
     }
 
-    pub fn insert_chart_enqueue(&self, chart_type: i32) -> Result<u64, String> {
+    pub fn insert_chart_enqueue(
+        &self,
+        chart_type: i32,
+        caret_run_id: Option<&str>,
+    ) -> Result<u64, String> {
         let session = self.session().expect("WasmSession not initialized");
         let kind = tw_model::ChartKind::from_i32(chart_type);
-        self.enqueue_edit(session.insert_chart_with_kind(kind))
+        let caret = parse_run_id(caret_run_id);
+        self.enqueue_edit(session.insert_chart_with_kind_at(caret, kind))
     }
 
     pub fn chart_data_json(&self, shape_id: &str) -> Result<String, String> {
@@ -859,9 +950,11 @@ impl WasmSession {
         &self,
         bytes: Vec<u8>,
         mime_type: String,
+        caret_run_id: Option<&str>,
     ) -> Result<u64, String> {
         let session = self.session().expect("WasmSession not initialized");
-        self.enqueue_edit(session.insert_image_bytes(bytes, mime_type))
+        let caret = parse_run_id(caret_run_id);
+        self.enqueue_edit(session.insert_image_bytes_at(bytes, mime_type, caret))
     }
 
     pub fn set_image_size_enqueue(
@@ -908,6 +1001,31 @@ impl WasmSession {
         let origin_y =
             anchor_origin_from_u8(origin_y).ok_or_else(|| "invalid anchor origin_y".to_string())?;
         self.enqueue_edit(session.set_image_anchor(
+            id,
+            tw_model::ImageAnchor {
+                x,
+                y,
+                origin_x,
+                origin_y,
+            },
+        ))
+    }
+
+    pub fn set_shape_anchor_enqueue(
+        &self,
+        shape_id: &str,
+        x: f32,
+        y: f32,
+        origin_x: u8,
+        origin_y: u8,
+    ) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let id = parse_run_id(Some(shape_id)).ok_or_else(|| "invalid shape id".to_string())?;
+        let origin_x =
+            anchor_origin_from_u8(origin_x).ok_or_else(|| "invalid anchor origin_x".to_string())?;
+        let origin_y =
+            anchor_origin_from_u8(origin_y).ok_or_else(|| "invalid anchor origin_y".to_string())?;
+        self.enqueue_edit(session.set_shape_anchor(
             id,
             tw_model::ImageAnchor {
                 x,
@@ -1069,12 +1187,71 @@ impl WasmSession {
     pub fn poll_event_json(&self) -> Option<String> {
         let session = self.session().expect("WasmSession not initialized");
         session.poll_event().map(|event| {
+            record_bridge_event(&event);
             serde_json::json!({
                 "event_type": bridge_event_type(&event),
                 "request_id": event.request_id(),
             })
             .to_string()
         })
+    }
+
+    pub fn open_bytes_async(
+        &self,
+        data: Vec<u8>,
+        path_hint: Option<String>,
+        password: Option<String>,
+    ) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let request_id = session
+            .open_bytes_with_path_and_password(data, path_hint, password)
+            .ok_or_else(|| "engine shut down".to_string())?;
+        if let Ok(mut guard) = ASYNC_RESULTS.lock() {
+            guard.track(request_id);
+        }
+        Ok(request_id)
+    }
+
+    pub fn save_bytes_async(&self) -> Result<u64, String> {
+        let session = self.session().expect("WasmSession not initialized");
+        let request_id = session
+            .save()
+            .ok_or_else(|| "engine shut down".to_string())?;
+        if let Ok(mut guard) = ASYNC_RESULTS.lock() {
+            guard.track(request_id);
+        }
+        Ok(request_id)
+    }
+
+    pub fn take_open_result(&self, request_id: u64) -> i32 {
+        let Ok(mut guard) = ASYNC_RESULTS.lock() else {
+            return -1;
+        };
+        match guard.take(request_id) {
+            None => -3,
+            Some(AsyncResult::Pending) => 1,
+            Some(AsyncResult::Failed) => -2,
+            Some(AsyncResult::Done(_)) => 0,
+        }
+    }
+
+    pub fn take_saved_document(&self, request_id: u64) -> Result<Option<Vec<u8>>, i32> {
+        let Ok(mut guard) = ASYNC_RESULTS.lock() else {
+            return Err(-1);
+        };
+        match guard.take(request_id) {
+            None => Err(-3),
+            Some(AsyncResult::Pending) => Err(1),
+            Some(AsyncResult::Failed) => Err(-2),
+            Some(AsyncResult::Done(bytes)) => Ok(Some(bytes)),
+        }
+    }
+
+    pub fn image_asset_bytes(&self, asset_id: &str) -> Option<Vec<u8>> {
+        let session = self.session().expect("WasmSession not initialized");
+        session
+            .image_asset_bytes(asset_id)
+            .map(|arc| arc.as_ref().clone())
     }
 
     pub fn display_list(&self) -> (Vec<u8>, u64, f32, f32, u32) {
@@ -1159,6 +1336,12 @@ impl WasmSession {
     pub fn accessibility_issues_json(&self) -> String {
         self.session()
             .and_then(|s| s.accessibility_issues_json())
+            .unwrap_or_else(|| "[]".to_string())
+    }
+
+    pub fn revisions_json(&self) -> String {
+        self.session()
+            .and_then(|s| s.revisions_json())
             .unwrap_or_else(|| "[]".to_string())
     }
 
@@ -1402,6 +1585,69 @@ pub mod bindgen_exports {
                     Err(JsValue::from_str(&e.to_string()))
                 }
             }
+        }
+
+        /// Enqueue open; completion via worker event + [`Self::take_open_result`].
+        pub fn open_document_async(
+            &mut self,
+            data: &[u8],
+            path: &str,
+            password: &str,
+        ) -> Result<f64, JsValue> {
+            let hint = if path.is_empty() {
+                None
+            } else {
+                Some(path.to_string())
+            };
+            let pw = if password.is_empty() {
+                None
+            } else {
+                Some(password.to_string())
+            };
+            match self
+                .session
+                .open_bytes_async(data.to_vec(), hint, pw)
+            {
+                Ok(id) => {
+                    self.record_enqueue(id);
+                    Ok(id as f64)
+                }
+                Err(e) => {
+                    self.record_error(e.clone());
+                    Err(JsValue::from_str(&e))
+                }
+            }
+        }
+
+        pub fn take_open_result(&self, request_id: f64) -> i32 {
+            self.session.take_open_result(request_id as u64)
+        }
+
+        pub fn save_document_async(&mut self) -> Result<f64, JsValue> {
+            match self.session.save_bytes_async() {
+                Ok(id) => {
+                    self.record_enqueue(id);
+                    Ok(id as f64)
+                }
+                Err(e) => {
+                    self.record_error(e.clone());
+                    Err(JsValue::from_str(&e))
+                }
+            }
+        }
+
+        pub fn take_saved_document(&self, request_id: f64) -> Result<Vec<u8>, JsValue> {
+            match self.session.take_saved_document(request_id as u64) {
+                Ok(Some(bytes)) => Ok(bytes),
+                Ok(None) => Err(JsValue::from_str("empty save result")),
+                Err(1) => Err(JsValue::from_str("not ready")),
+                Err(-2) => Err(JsValue::from_str(&self.last_error())),
+                Err(code) => Err(JsValue::from_str(&format!("take_saved_document failed: {code}"))),
+            }
+        }
+
+        pub fn get_image_asset(&self, asset_id: &str) -> Option<Vec<u8>> {
+            self.session.image_asset_bytes(asset_id)
         }
 
         pub fn save_document(&mut self) -> Result<Vec<u8>, JsValue> {
@@ -2105,24 +2351,68 @@ pub mod bindgen_exports {
             self.enqueue_op(self.session.insert_image_enqueue(width, height))
         }
 
-        pub fn insert_shape(&mut self, shape_type: i32) -> Result<f64, JsValue> {
-            self.enqueue_op(self.session.insert_shape_enqueue(shape_type))
+        pub fn insert_shape(
+            &mut self,
+            shape_type: i32,
+            caret_run_id: &str,
+        ) -> Result<f64, JsValue> {
+            let caret = if caret_run_id.is_empty() {
+                None
+            } else {
+                Some(caret_run_id)
+            };
+            self.enqueue_op(self.session.insert_shape_enqueue(shape_type, caret))
         }
 
-        pub fn insert_text_box(&mut self) -> Result<f64, JsValue> {
-            self.enqueue_op(self.session.insert_text_box_enqueue())
+        pub fn insert_text_box(&mut self, caret_run_id: &str) -> Result<f64, JsValue> {
+            let caret = if caret_run_id.is_empty() {
+                None
+            } else {
+                Some(caret_run_id)
+            };
+            self.enqueue_op(self.session.insert_text_box_enqueue(caret))
         }
 
-        pub fn insert_word_art(&mut self, text: &str) -> Result<f64, JsValue> {
-            self.enqueue_op(self.session.insert_word_art_enqueue(text.to_string()))
+        pub fn insert_word_art(
+            &mut self,
+            text: &str,
+            caret_run_id: &str,
+        ) -> Result<f64, JsValue> {
+            let caret = if caret_run_id.is_empty() {
+                None
+            } else {
+                Some(caret_run_id)
+            };
+            self.enqueue_op(
+                self.session
+                    .insert_word_art_enqueue(text.to_string(), caret),
+            )
         }
 
-        pub fn insert_diagram(&mut self, diagram_type: i32) -> Result<f64, JsValue> {
-            self.enqueue_op(self.session.insert_diagram_enqueue(diagram_type))
+        pub fn insert_diagram(
+            &mut self,
+            diagram_type: i32,
+            caret_run_id: &str,
+        ) -> Result<f64, JsValue> {
+            let caret = if caret_run_id.is_empty() {
+                None
+            } else {
+                Some(caret_run_id)
+            };
+            self.enqueue_op(self.session.insert_diagram_enqueue(diagram_type, caret))
         }
 
-        pub fn insert_chart(&mut self, chart_type: i32) -> Result<f64, JsValue> {
-            self.enqueue_op(self.session.insert_chart_enqueue(chart_type))
+        pub fn insert_chart(
+            &mut self,
+            chart_type: i32,
+            caret_run_id: &str,
+        ) -> Result<f64, JsValue> {
+            let caret = if caret_run_id.is_empty() {
+                None
+            } else {
+                Some(caret_run_id)
+            };
+            self.enqueue_op(self.session.insert_chart_enqueue(chart_type, caret))
         }
 
         pub fn get_chart_data_json(&self, shape_id: &str) -> Result<String, JsValue> {
@@ -2198,11 +2488,22 @@ pub mod bindgen_exports {
             self.enqueue_op(self.session.move_block_enqueue(caret, delta))
         }
 
-        pub fn insert_image_bytes(&mut self, data: &[u8], mime_type: &str) -> Result<f64, JsValue> {
-            self.enqueue_op(
-                self.session
-                    .insert_image_bytes_enqueue(data.to_vec(), mime_type.to_string()),
-            )
+        pub fn insert_image_bytes(
+            &mut self,
+            data: &[u8],
+            mime_type: &str,
+            caret_run_id: &str,
+        ) -> Result<f64, JsValue> {
+            let caret = if caret_run_id.is_empty() {
+                None
+            } else {
+                Some(caret_run_id)
+            };
+            self.enqueue_op(self.session.insert_image_bytes_enqueue(
+                data.to_vec(),
+                mime_type.to_string(),
+                caret,
+            ))
         }
 
         pub fn set_image_size(
@@ -2241,6 +2542,19 @@ pub mod bindgen_exports {
         ) -> Result<f64, JsValue> {
             self.enqueue_op(self.session.set_image_anchor_enqueue(
                 image_id, x, y, origin_x, origin_y,
+            ))
+        }
+
+        pub fn set_shape_anchor(
+            &mut self,
+            shape_id: &str,
+            x: f32,
+            y: f32,
+            origin_x: u8,
+            origin_y: u8,
+        ) -> Result<f64, JsValue> {
+            self.enqueue_op(self.session.set_shape_anchor_enqueue(
+                shape_id, x, y, origin_x, origin_y,
             ))
         }
 
@@ -2454,6 +2768,10 @@ pub mod bindgen_exports {
 
         pub fn accessibility_issues_json(&self) -> String {
             self.session.accessibility_issues_json()
+        }
+
+        pub fn revisions_json(&self) -> String {
+            self.session.revisions_json()
         }
 
         pub fn document_inspect_json(&self) -> String {

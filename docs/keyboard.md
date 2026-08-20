@@ -7,6 +7,10 @@ this document.
 Canonical catalog in code: `app/lib/ui/keyboard_shortcuts.dart`
 (`kWordChordSpecs` → `kWordChordShortcuts` → `kWiredShortcuts`).
 
+The same catalog drives the in-app **Keyboard shortcuts** Help dialog
+(`app/lib/ui/keyboard_help_dialog.dart`): title-bar gear → Keyboard Shortcuts,
+Help → Keyboard Shortcuts on macOS, About → Keyboard shortcuts, or **F1**.
+
 Ctrl and Cmd are both registered for every application chord, so one binary
 serves Windows, Linux and macOS. On macOS the `PlatformMenuBar` in
 `editor_menu.dart` mirrors the common items and shows their key equivalents.
@@ -26,6 +30,7 @@ stays correct for clicks.
 | F12 | Save As (Word for Windows chord) |
 | Ctrl/Cmd+P | Print |
 | Ctrl/Cmd+F2 | Print preview |
+| F1 | Keyboard shortcuts help |
 
 ## Undo and clipboard
 
@@ -255,7 +260,7 @@ accumulate across tests.
 The ribbon (`WordRibbon`) is wrapped in a `FocusTraversalGroup` with
 `ReadingOrderTraversalPolicy`:
 
-1. **Tab strip** — Home → Insert → … → View (Share is disabled and skipped).
+1. **Tab strip** — Home → Insert → … → View (Share opens the OS share sheet with the current document).
 2. **Active tab body** — enabled controls left-to-right / top-to-bottom.
 3. **Activate** — Space or Enter invokes the focused control (`ActivateIntent`).
 4. **Disabled** controls (`onPressed == null`) do not participate in Tab order.

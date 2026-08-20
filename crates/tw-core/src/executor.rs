@@ -18,7 +18,7 @@ mod inline;
 #[cfg(not(target_arch = "wasm32"))]
 mod threaded;
 
-pub use inline::InlineExecutor;
+pub use inline::{InlineExecutor, INLINE_DRIVE_BUDGET};
 #[cfg(not(target_arch = "wasm32"))]
 pub use threaded::ThreadedExecutor;
 

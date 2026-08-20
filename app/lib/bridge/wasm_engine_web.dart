@@ -17,54 +17,58 @@ import 'package:tutuaword/editor/doc_range.dart';
 
 const Duration kWasmEditCompletionTimeout = kEditCompletionTimeout;
 
-/// Browser-hosted engine backed by `tw-wasm` (inline executor).
+/// Browser-hosted engine backed by `tw-wasm` inside a dedicated Web Worker.
 class WasmEngine {
-  WasmEngine._(this._engine);
+  WasmEngine._();
 
   static WasmEngine? _cached;
-
-  final Object _engine;
+  static final Map<String, Object?> _invokeCache = {};
 
   static Future<WasmEngine?> load() async {
     if (_cached != null) return _cached;
     try {
       await twWasmInit();
-      final engine = createWasmEngine();
-      final wasm = WasmEngine._(engine);
-      NativeEventRouter.instance.attachPump(wasm._pump);
-      _cached = wasm;
-      return wasm;
+      attachWasmEventListener(_handleWorkerEvent);
+      NativeEventRouter.instance.attachPump(() {
+        _invokeCache.clear();
+        return 0;
+      });
+      _cached = WasmEngine._();
+      return _cached;
     } catch (e) {
       debugPrint('WasmEngine.load failed: $e');
       return null;
     }
   }
 
-  int _pump() {
-    final count = callMethod(_engine, 'pump', []) as int;
-    _drainEvents();
-    return count;
-  }
-
-  Object _invoke(String method, List<Object?> args) =>
-      callMethod(_engine, method, args);
-
-  void _drainEvents() {
-    while (true) {
-      final json = callMethodOrNull(_engine, 'pop_event', []);
-      if (json == null) break;
-      _handleEventJson(json.toString());
-    }
-  }
-
-  void _handleEventJson(String json) {
+  static void _handleWorkerEvent(Object? event) {
+    if (event == null) return;
     try {
-      final map = jsonDecode(json) as Map<String, dynamic>;
-      final eventType = map['event_type'] as int;
-      final requestId = map['request_id'] as int;
+      final map = (event as dynamic) as Map<Object?, Object?>;
+      final eventType = map['event_type'] as int?;
+      final requestId = map['request_id'] as int?;
+      if (eventType == null || requestId == null) return;
       NativeEventRouter.instance.onEvent(eventType, requestId);
     } catch (_) {}
   }
+
+  static String _invokeKey(String method, List<Object?> args) =>
+      '$method|${args.map((a) => a.toString()).join('|')}';
+
+  Object? _invoke(String method, List<Object?> args) {
+    final key = _invokeKey(method, args);
+    final cached = _invokeCache[key];
+    if (cached != null) return cached;
+    unawaited(
+      invokeWasm(method, args).then((value) {
+        _invokeCache[key] = value;
+      }),
+    );
+    return _invokeCache[key];
+  }
+
+  Future<Object?> _invokeAsync(String method, List<Object?> args) =>
+      invokeWasm(method, args);
 
   bool registerFont(
     String family,
@@ -74,15 +78,18 @@ class WasmEngine {
   }) {
     if (data.isEmpty) return false;
     try {
-      callMethod(_engine, 'register_font', [family, bold, italic, data]);
+      unawaited(_invokeAsync('register_font', [family, bold, italic, data]));
       return true;
     } catch (_) {
       return false;
     }
   }
 
-  int lastRequestId() =>
-      (callMethod(_engine, 'last_request_id', []) as num).toInt();
+  int lastRequestId() {
+    final value = _invoke('last_request_id', []);
+    if (value is num) return value.toInt();
+    return 0;
+  }
 
   Future<bool> awaitEditCompletion({
     Duration timeout = kWasmEditCompletionTimeout,
@@ -94,8 +101,7 @@ class WasmEngine {
           await NativeEventRouter.instance.waitFor(requestId, timeout: timeout);
       return eventType != NativeEventTypes.error;
     } on TimeoutException {
-      fetchDisplayList();
-      return true;
+      return false;
     }
   }
 
@@ -107,8 +113,7 @@ class WasmEngine {
 
   int dispatchCommandBytes(Uint8List jsonBytes) {
     try {
-      callMethod(_engine, 'dispatch', [jsonBytes]);
-      _drainEvents();
+      unawaited(_invokeAsync('dispatch', [jsonBytes]));
       return 0;
     } catch (_) {
       return -1;
@@ -121,8 +126,7 @@ class WasmEngine {
 
   int _enqueueNamed(String name, List<Object?> args) {
     try {
-      callMethod(_engine, name, args);
-      _drainEvents();
+      unawaited(_invokeAsync(name, args));
       return 0;
     } catch (_) {
       return -1;
@@ -131,22 +135,16 @@ class WasmEngine {
 
   DisplayListData? fetchDisplayList() {
     try {
-      final bytes = callMethod(_engine, 'display_list_bytes', []) as Uint8List;
+      final state = wasmCacheState();
+      if (state == null) return null;
+      final pageCount = (getProperty(state, 'pageCount') as num?)?.toInt() ?? 0;
+      final page0 = cachedPageDisplayListBytes(0) ?? Uint8List(0);
       return DisplayListData(
-        bytes: bytes,
-        version:
-            (callMethod(_engine, 'display_list_version', []) as num)
-                .toInt(),
-        pageWidth: (callMethod(_engine, 'display_list_page_width', [])
-            as num)
-            .toDouble(),
-        pageHeight:
-            (callMethod(_engine, 'display_list_page_height', [])
-                as num)
-                .toDouble(),
-        pageCount:
-            (callMethod(_engine, 'display_list_page_count', []) as num)
-                .toInt(),
+        bytes: page0,
+        version: (getProperty(state, 'displayVersion') as num?)?.toInt() ?? 0,
+        pageWidth: 612,
+        pageHeight: 792,
+        pageCount: pageCount,
       );
     } catch (_) {
       return null;
@@ -155,50 +153,40 @@ class WasmEngine {
 
   PageDisplayListData? fetchPageDisplayList(int page) {
     try {
-      final bytes = callMethod(
-        _engine,
-        'page_display_list_bytes',
-        [page],
-      );
-      if (bytes == null) return null;
+      final bytes = cachedPageDisplayListBytes(page);
+      if (bytes == null || bytes.isEmpty) return null;
       return PageDisplayListData(
-        bytes: bytes as Uint8List,
-        version: (callMethod(
-          _engine,
-          'page_display_list_version',
-          [page],
-        ) as num)
-            .toInt(),
-        pageWidth: (callMethod(
-          _engine,
-          'page_display_list_page_width',
-          [page],
-        ) as num)
-            .toDouble(),
-        pageHeight: (callMethod(
-          _engine,
-          'page_display_list_page_height',
-          [page],
-        ) as num)
-            .toDouble(),
+        bytes: bytes,
+        version: _pageVersionFromBytes(bytes),
+        pageWidth: 612,
+        pageHeight: 792,
       );
     } catch (_) {
       return null;
     }
   }
 
+  int _pageVersionFromBytes(Uint8List bytes) {
+    if (bytes.length < 12) return 0;
+    final b = bytes.buffer.asByteData(bytes.offsetInBytes, bytes.length);
+    return b.getUint64(4, Endian.little);
+  }
+
   AtlasData? fetchAtlas() {
     try {
-      final bytes = _invoke('atlas_bytes', []) as Uint8List;
+      final state = wasmCacheState();
+      if (state == null) return null;
+      final atlas = getProperty(state, 'atlas');
+      if (atlas == null) return null;
+      final bytes = getProperty(atlas, 'bytes');
+      if (bytes == null) return null;
+      final list =
+          bytes is Uint8List ? bytes : Uint8List.fromList(List<int>.from(bytes as List));
       return AtlasData(
-        generation:
-            (callMethod(_engine, 'atlas_generation', []) as num)
-                .toInt(),
-        bytes: bytes,
-        width: (callMethod(_engine, 'atlas_width', []) as num)
-            .toInt(),
-        height: (callMethod(_engine, 'atlas_height', []) as num)
-            .toInt(),
+        generation: (getProperty(atlas, 'generation') as num?)?.toInt() ?? 0,
+        bytes: list,
+        width: (getProperty(atlas, 'width') as num?)?.toInt() ?? 0,
+        height: (getProperty(atlas, 'height') as num?)?.toInt() ?? 0,
       );
     } catch (_) {
       return null;
@@ -207,8 +195,11 @@ class WasmEngine {
 
   int? fetchAtlasGeneration() {
     try {
-      return (callMethod(_engine, 'atlas_generation', []) as num)
-          .toInt();
+      final state = wasmCacheState();
+      if (state == null) return null;
+      final atlas = getProperty(state, 'atlas');
+      if (atlas == null) return null;
+      return (getProperty(atlas, 'generation') as num?)?.toInt();
     } catch (_) {
       return null;
     }
@@ -294,6 +285,15 @@ class WasmEngine {
     }
   }
 
+  Uint8List? fetchImageAssetBytes(String assetId) {
+    try {
+      final bytes = _invoke('get_image_asset', [assetId]);
+      return bytes is Uint8List ? bytes : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   String? fetchDocumentOutline() {
     try {
       return _invoke('document_outline_json', []) as String?;
@@ -345,6 +345,18 @@ class WasmEngine {
       return '[]';
     }
   }
+
+  String? fetchRevisions() {
+    try {
+      return _invoke('revisions_json', []) as String?;
+    } catch (_) {
+      return '[]';
+    }
+  }
+
+  String? fetchPluginList() => null;
+
+  bool installSamplePluginNative({required bool grantEdit}) => false;
 
   String? fetchDocumentInspect() {
     try {
@@ -444,8 +456,7 @@ class WasmEngine {
 
   bool newDocument() {
     try {
-      _invoke('new_document', []);
-      _drainEvents();
+      unawaited(_invokeAsync('new_document', []));
       return true;
     } catch (_) {
       return false;
@@ -455,8 +466,6 @@ class WasmEngine {
   int openDocumentBytes(Uint8List bytes, {String? path, String? password}) {
     try {
       final pw = password ?? '';
-      // Blob URLs from the web file picker have no extension — ignore them so
-      // format detection falls back to magic bytes.
       final hint = (path != null &&
               path.isNotEmpty &&
               !path.startsWith('blob:') &&
@@ -464,20 +473,44 @@ class WasmEngine {
           ? path
           : '';
       if (pw.isNotEmpty || hint.isNotEmpty) {
-        try {
-          _invoke('open_document_with_password', [bytes, hint, pw]);
-        } catch (_) {
-          if (hint.isNotEmpty) {
-            _invoke('open_document_with_path', [bytes, hint]);
-          } else {
-            _invoke('open_document', [bytes]);
-          }
-        }
+        unawaited(_invokeAsync('open_document_with_password', [bytes, hint, pw]));
+      } else if (hint.isNotEmpty) {
+        unawaited(_invokeAsync('open_document_with_path', [bytes, hint]));
       } else {
-        _invoke('open_document', [bytes]);
+        unawaited(_invokeAsync('open_document', [bytes]));
       }
-      _drainEvents();
       return 0;
+    } catch (_) {
+      return -1;
+    }
+  }
+
+  Future<int> openDocumentBytesAsync(
+    Uint8List bytes, {
+    String? path,
+    String? password,
+    Duration timeout = const Duration(seconds: 120),
+  }) async {
+    final pw = password ?? '';
+    final hint = (path != null &&
+            path.isNotEmpty &&
+            !path.startsWith('blob:') &&
+            !path.startsWith('data:'))
+        ? path
+        : '';
+    try {
+      final requestId = await _invokeAsync(
+        'open_document_async',
+        [bytes, hint, pw],
+      );
+      if (requestId is! num) return -1;
+      final eventType = await NativeEventRouter.instance.waitFor(
+        requestId.toInt(),
+        timeout: timeout,
+      );
+      if (eventType == NativeEventTypes.error) return -1;
+      final result = await _invokeAsync('take_open_result', [requestId]);
+      return (result is num && result.toInt() == 0) ? 0 : -1;
     } catch (_) {
       return -1;
     }
@@ -486,6 +519,24 @@ class WasmEngine {
   Uint8List? saveDocumentBytes() {
     try {
       return _invoke('save_document', []) as Uint8List;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<Uint8List?> saveDocumentBytesAsync({
+    Duration timeout = const Duration(seconds: 120),
+  }) async {
+    try {
+      final requestId = await _invokeAsync('save_document_async', []);
+      if (requestId is! num) return null;
+      final eventType = await NativeEventRouter.instance.waitFor(
+        requestId.toInt(),
+        timeout: timeout,
+      );
+      if (eventType == NativeEventTypes.error) return null;
+      final bytes = await _invokeAsync('take_saved_document', [requestId]);
+      return bytes is Uint8List ? bytes : null;
     } catch (_) {
       return null;
     }
@@ -706,12 +757,12 @@ class WasmEngine {
           offset: offset,
         )));
     if (!ok) return null;
-    return _fetchLastSplitCaret();
+    return fetchLastSplitCaret();
   }
 
-  HitTestResult? _fetchLastSplitCaret() {
+  HitTestResult? fetchLastSplitCaret() {
     try {
-      final json = callMethodOrNull(_engine, 'last_split_caret', []);
+      final json = _invoke('last_split_caret', []);
       if (json == null) return null;
       final map = jsonDecode(json.toString()) as Map<String, dynamic>;
       return HitTestResult(
@@ -1126,24 +1177,36 @@ class WasmEngine {
   Future<bool> insertImageBlockAsync(double width, double height) =>
       enqueueEdit(() => _enqueueNamed('insert_image', [width, height]));
 
-  Future<bool> insertShapeBlockAsync(int shapeType) =>
-      enqueueEdit(() => _enqueueNamed('insert_shape', [shapeType]));
+  Future<bool> insertShapeBlockAsync(int shapeType, {String? caretRunId}) =>
+      enqueueEdit(
+        () => _enqueueNamed('insert_shape', [shapeType, caretRunId ?? '']),
+      );
 
-  Future<bool> insertTextBoxAsync() =>
-      enqueueEdit(() => _enqueueNamed('insert_text_box', []));
+  Future<bool> insertTextBoxAsync({String? caretRunId}) =>
+      enqueueEdit(() => _enqueueNamed('insert_text_box', [caretRunId ?? '']));
 
-  Future<bool> insertWordArtAsync(String text) =>
-      enqueueEdit(() => _enqueueNamed('insert_word_art', [text]));
+  Future<bool> insertWordArtAsync(String text, {String? caretRunId}) =>
+      enqueueEdit(
+        () => _enqueueNamed('insert_word_art', [text, caretRunId ?? '']),
+      );
 
-  Future<bool> insertDiagramAsync({int diagramType = 0}) =>
-      enqueueEdit(() => _enqueueNamed('insert_diagram', [diagramType]));
+  Future<bool> insertDiagramAsync({int diagramType = 0, String? caretRunId}) =>
+      enqueueEdit(
+        () => _enqueueNamed('insert_diagram', [diagramType, caretRunId ?? '']),
+      );
 
-  Future<bool> insertChartAsync({int chartType = 0}) =>
-      enqueueEdit(() => _enqueueNamed('insert_chart', [chartType]));
+  Future<bool> insertChartAsync({int chartType = 0, String? caretRunId}) =>
+      enqueueEdit(
+        () => _enqueueNamed('insert_chart', [chartType, caretRunId ?? '']),
+      );
 
   Future<bool> setChartDataAsync(String shapeId, Map<String, dynamic> chartData) =>
       enqueueEdit(
         () => _enqueueNamed('set_chart_data_json', [shapeId, jsonEncode(chartData)]),
+      );
+
+  Future<bool> ensureShapeTextAsync(String shapeId) => enqueueEdit(
+        () => dispatchCommand(CommandCodec.ensureShapeText(shapeId: shapeId)),
       );
 
   Future<bool> insertOfficeMathAsync({
@@ -1169,8 +1232,17 @@ class WasmEngine {
   Future<bool> deleteBlockAsync(String blockId) =>
       enqueueEdit(() => _enqueueNamed('delete_block', [blockId]));
 
-  Future<bool> insertImageBytesAsync(Uint8List bytes, String mimeType) =>
-      enqueueEdit(() => _enqueueNamed('insert_image_bytes', [bytes, mimeType]));
+  Future<bool> insertImageBytesAsync(
+    Uint8List bytes,
+    String mimeType, {
+    String? caretRunId,
+  }) =>
+      enqueueEdit(
+        () => _enqueueNamed(
+          'insert_image_bytes',
+          [bytes, mimeType, caretRunId ?? ''],
+        ),
+      );
 
   Future<bool> setImageSizeAsync(String imageId, double width, double height) =>
       enqueueEdit(() => _enqueueNamed('set_image_size', [imageId, width, height]));
@@ -1194,6 +1266,17 @@ class WasmEngine {
   }) =>
       enqueueEdit(
         () => _enqueueNamed('set_image_anchor', [imageId, x, y, originX, originY]),
+      );
+
+  Future<bool> setShapeAnchorAsync(
+    String shapeId,
+    double x,
+    double y, {
+    int originX = 0,
+    int originY = 0,
+  }) =>
+      enqueueEdit(
+        () => _enqueueNamed('set_shape_anchor', [shapeId, x, y, originX, originY]),
       );
 
   Future<bool> setImageTransformAsync(

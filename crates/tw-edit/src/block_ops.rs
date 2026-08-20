@@ -322,6 +322,67 @@ pub fn insert_chart(
     })
 }
 
+/// Ensure [shape_id] hosts at least one empty body paragraph for typing.
+///
+/// Tables already contain cell paragraphs; treating them as success lets the
+/// editor enter cell text mode after object-select (same path as shapes).
+pub fn ensure_shape_text(
+    doc: &mut Document,
+    shape_id: NodeId,
+) -> Result<EditResult, EditError> {
+    let (si, bi) = doc
+        .find_block_location(shape_id)
+        .ok_or(EditError::BlockNotFound(shape_id))?;
+    let block = doc
+        .block_at_mut(si, bi)
+        .ok_or(EditError::BlockNotFound(shape_id))?;
+
+    if let Some(table) = block.table() {
+        let seed = table
+            .rows
+            .first()
+            .and_then(|r| r.cells.first())
+            .and_then(|c| c.blocks.iter().find_map(|b| b.paragraph()))
+            .and_then(|p| p.runs.first())
+            .map(|r| r.id);
+        return Ok(EditResult {
+            affected_nodes: vec![shape_id],
+            seed_run_id: seed,
+            ..Default::default()
+        });
+    }
+
+    let Some(shape) = block.shape_mut() else {
+        return Err(EditError::BlockNotFound(shape_id));
+    };
+    if !shape.shape.shape_type.accepts_body_text() {
+        return Err(EditError::InvalidRange);
+    }
+    let want = if shape.shape.shape_type == tw_model::ShapeKind::Diagram {
+        shape.diagram_kind.node_count().max(1)
+    } else {
+        1
+    };
+    while shape.paragraphs.len() < want {
+        shape.paragraphs.push(tw_model::Paragraph::new());
+    }
+    for para in &mut shape.paragraphs {
+        if para.runs.is_empty() {
+            para.runs.push(tw_model::Run::new_text(""));
+        }
+    }
+    let seed = shape
+        .paragraphs
+        .first()
+        .and_then(|p| p.runs.first())
+        .map(|r| r.id);
+    Ok(EditResult {
+        affected_nodes: vec![shape_id],
+        seed_run_id: seed,
+        ..Default::default()
+    })
+}
+
 pub fn set_chart_data(
     doc: &mut Document,
     shape_id: NodeId,
@@ -546,6 +607,102 @@ pub fn set_image_anchor(
         old_image_anchor: Some(old_anchor),
         ..Default::default()
     })
+}
+
+pub fn set_shape_anchor(
+    doc: &mut Document,
+    shape_id: NodeId,
+    anchor: tw_model::ImageAnchor,
+) -> Result<EditResult, EditError> {
+    let (si, bi) = doc
+        .find_block_location(shape_id)
+        .ok_or(EditError::BlockNotFound(shape_id))?;
+
+    let block = doc
+        .block_at_mut(si, bi)
+        .ok_or(EditError::BlockNotFound(shape_id))?;
+
+    if let Some(shape) = block.shape_mut() {
+        let old_wrap = shape.wrap;
+        let old_anchor = shape.anchor;
+        shape.anchor = Some(anchor);
+        if shape.wrap == tw_model::TextWrap::Inline {
+            shape.wrap = tw_model::TextWrap::Square;
+        }
+        return Ok(EditResult {
+            affected_nodes: vec![shape_id],
+            old_shape_wrap: Some(old_wrap),
+            old_shape_anchor: Some(old_anchor),
+            ..Default::default()
+        });
+    }
+
+    if let Some(table) = block.table_mut() {
+        let old_anchor = table.anchor;
+        table.anchor = Some(anchor);
+        return Ok(EditResult {
+            affected_nodes: vec![shape_id],
+            // Tables have no separate wrap; treat prior floating as Square.
+            old_shape_wrap: Some(if old_anchor.is_some() {
+                tw_model::TextWrap::Square
+            } else {
+                tw_model::TextWrap::Inline
+            }),
+            old_shape_anchor: Some(old_anchor),
+            ..Default::default()
+        });
+    }
+
+    Err(EditError::BlockNotFound(shape_id))
+}
+
+pub fn restore_shape_layout(
+    doc: &mut Document,
+    shape_id: NodeId,
+    wrap: tw_model::TextWrap,
+    anchor: Option<tw_model::ImageAnchor>,
+) -> Result<EditResult, EditError> {
+    let (si, bi) = doc
+        .find_block_location(shape_id)
+        .ok_or(EditError::BlockNotFound(shape_id))?;
+
+    let block = doc
+        .block_at_mut(si, bi)
+        .ok_or(EditError::BlockNotFound(shape_id))?;
+
+    if let Some(shape) = block.shape_mut() {
+        let old_wrap = shape.wrap;
+        let old_anchor = shape.anchor;
+        shape.wrap = wrap;
+        shape.anchor = anchor;
+        return Ok(EditResult {
+            affected_nodes: vec![shape_id],
+            old_shape_wrap: Some(old_wrap),
+            old_shape_anchor: Some(old_anchor),
+            ..Default::default()
+        });
+    }
+
+    if let Some(table) = block.table_mut() {
+        let old_anchor = table.anchor;
+        table.anchor = if matches!(wrap, tw_model::TextWrap::Inline) {
+            None
+        } else {
+            anchor
+        };
+        return Ok(EditResult {
+            affected_nodes: vec![shape_id],
+            old_shape_wrap: Some(if old_anchor.is_some() {
+                tw_model::TextWrap::Square
+            } else {
+                tw_model::TextWrap::Inline
+            }),
+            old_shape_anchor: Some(old_anchor),
+            ..Default::default()
+        });
+    }
+
+    Err(EditError::BlockNotFound(shape_id))
 }
 
 pub fn restore_image_layout(
@@ -1373,7 +1530,9 @@ pub fn delete_table_column(
         if span > 1 {
             let start = row.grid_column_for_cell_index(cell_idx);
             if grid_col == start || grid_col == start + span - 1 {
-                row.cells.get_mut(cell_idx).unwrap().format.colspan -= 1;
+                if let Some(cell) = row.cells.get_mut(cell_idx) {
+                    cell.format.colspan -= 1;
+                }
                 removed_cells.push(tw_model::TableCell::new());
             } else {
                 return Err(EditError::InvalidRange);
@@ -1421,7 +1580,9 @@ pub fn restore_table_column(
     for (row, cell) in table.rows.iter_mut().zip(cells) {
         let insert_at = row.cell_index_at_grid_column(grid_col).unwrap_or(row.cells.len());
         if insert_at < row.cells.len() && row.cells[insert_at].format.colspan > 1 {
-            row.cells.get_mut(insert_at).unwrap().format.colspan += 1;
+            if let Some(cell) = row.cells.get_mut(insert_at) {
+                cell.format.colspan += 1;
+            }
         } else {
             row.cells.insert(insert_at, cell);
         }

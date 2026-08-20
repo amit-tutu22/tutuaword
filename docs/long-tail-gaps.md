@@ -14,13 +14,13 @@ Core editing (DOCX import/export fidelity, glyph-mode formatting, layout correct
 
 | Area | Status | Blocks core editing? | Target phase |
 |------|--------|----------------------|--------------|
-| [PDF font embedding](#1-pdf-font-embedding-tw-pdf) | Partial — real glyph positions, fixed Helvetica 12pt | No | Phase 2 |
-| [Hunspell spell check](#2-hunspell-spell-check-tw-spell) | MVP — embedded list + suggestions; chip apply wired | No | Phase 3 |
-| [HTML / Markdown parsers](#3-html--markdown-parsers) | MVP — basic text formatting only | No | Phase 3 |
-| [Hyperlinks and comments](#4-hyperlinks-and-comments-tw-model) | Partial — model + DOCX RT + insert/reply/resolve pane | No | Phase 5 |
-| [Plugin WASM sandbox](#5-plugin-wasm-sandbox-tw-plugin) | Spec + traits only | No | Phase 6 |
-| [Production AI providers](#6-production-ai-providers-tw-ai) | Router + mocks only | No | Phase 4 |
-| [Track-change accept/reject UI](#7-track-change-acceptreject-ui) | Accept/Reject all + caret nav wired in Review ribbon | No | Phase 2 |
+| [PDF font embedding](#1-pdf-font-embedding-tw-pdf) | Partial — outlines + link annotations; glyph usage tracked for subset | No | Phase 2 |
+| [Hunspell spell check](#2-hunspell-spell-check-tw-spell) | MVP — en_US lazy list + embedded core; AI RULES route wired | No | Phase 3 |
+| [HTML / Markdown parsers](#3-html--markdown-parsers) | MVP — HTML `a[href]` import; lists/tables still open for MD/ODT | No | Phase 3 |
+| [Hyperlinks and comments](#4-hyperlinks-and-comments-tw-model) | Shipped — model + DOCX + UI; glyph follow link works | No | Phase 5 |
+| [Plugin WASM sandbox](#5-plugin-wasm-sandbox-tw-plugin) | Host + FFI list/install; invoke via Dart mirror until session hook | No | Phase 6 |
+| [Production AI providers](#6-production-ai-providers-tw-ai) | Partial — Flutter HTTP + Translate; Rust RULES→spell; streaming open | No | Phase 4 |
+| [Track-change accept/reject UI](#7-track-change-acceptreject-ui) | Shipped — caret + ribbon + **Changes pane** (F17.S2) | No | Phase 2 |
 
 ---
 
@@ -68,9 +68,15 @@ The six areas in this document were always **long-tail** — valuable for fideli
 
 ### Remaining gap vs full Word visual match
 
-- No glyph subsetting (file size); widths use `/DW 1000` with per-glyph `Tm` positioning.
-- PDF bookmarks, metadata, hyperlinks ([file-formats.md](architecture/file-formats.md)) still open.
-- Standard-14 **Helvetica-Bold / Helvetica-Oblique** mapping for structural bold/italic runs (next-release polish).
+- Glyph subsetting collects used GIDs; full font subsetter not linked yet (faces embed whole SFNT).
+- ~~PDF bookmarks, metadata, hyperlinks~~ — **Outlines + link annotations shipped** (Phase 2).
+
+### Exit criteria (Phase 2)
+
+- [x] `/Outlines` from document headings
+- [x] Link `/Annot` for hyperlink runs
+- [x] Glyph usage tracked for subset intent
+- [ ] True GID subsetting (size win deferred)
 
 ### Key files
 
@@ -93,26 +99,23 @@ The six areas in this document were always **long-tail** — valuable for fideli
 
 ### Current state (as built)
 
-- [`crates/tw-spell/src/lib.rs`](../crates/tw-spell/src/lib.rs) uses an in-memory `HashSet<String>` plus edit-distance **`suggest()`** for replacements.
-- Dictionary: ~384 tokens from [`crates/tw-spell/data/en_core.txt`](../crates/tw-spell/data/en_core.txt) plus hardcoded Indic-Latin tokens.
+- [`crates/tw-spell/src/lib.rs`](../crates/tw-spell/src/lib.rs): lazy **`english_us()`** dictionary (`OnceLock`) + edit-distance **`suggest()`**.
+- Dictionaries: [`en_core.txt`](../crates/tw-spell/data/en_core.txt) + expanded [`en_us.txt`](../crates/tw-spell/data/en_us.txt) (embedded word lists, not full Hunspell `.aff`/`.dic`).
+- AI **`RULES`** route in [`tw-ai/router.rs`](../crates/tw-ai/src/router.rs) calls `tw_spell::SpellChecker::english_us()` for spell-fix completions.
 - Worker integration returns **`SpellCheckResult` JSON** with offsets and suggestions to Flutter.
-- Review tab **spell suggestions dialog** (`spell_suggestions_dialog.dart`) lets users pick replacements.
+- Review tab **spell suggestions dialog** lets users pick replacements.
 
 ### Remaining gap vs spec
 
-- Full **Hunspell** `.aff`/`.dic` backends for English + Indic (roadmap Phase 3).
+- Full **Hunspell** `.aff`/`.dic` backends for English + Indic.
 - Grammar checking beyond spell.
 
-### Future work
+### Exit criteria (Phase 3)
 
-1. Add Hunspell backend (`hunspell-rs` or similar); ship `.aff`/`.dic` under `crates/tw-spell/data/`.
-2. Lazy-load dictionaries on first check; keep embedded list as offline fallback.
-
-### Exit criteria (documentation target)
-
-- `"teh"` flagged; top suggestion `"the"`.
-- Optional Hindi dictionary loads without blocking app startup.
-- Flutter shows suggestion list when engine is connected.
+- [x] `"teh"` flagged; top suggestion `"the"` (en_US list + suggest)
+- [x] Flutter shows suggestion list when engine is connected
+- [x] AI RULES route wired to spell suggest
+- [ ] Optional Hindi `.aff`/`.dic` lazy load
 
 ---
 
@@ -125,23 +128,24 @@ The six areas in this document were always **long-tail** — valuable for fideli
 - Hand-rolled scanner; import tags: `h1`–`h6`, `p`, `div`, `b`/`strong`, `i`/`em`, `br`.
 - Export maps **Heading 1–6 by style name** → `<h1>`–`<h6>`; Quote/Caption/Normal → `<p>` (F23.S3).
 - Heading StyleIds resolved from the target document’s stylesheet (no foreign UUID).
-- **Still open:** `a[href]`, tables, images, lists, underline, `html5ever`.
+- **Shipped (Phase 5):** `a[href]` → `RunContent::Hyperlink`; basic table rows from `<tr>` boundaries.
+- **Still open:** full list numbering, images, underline, `html5ever`.
 
 ### Markdown (`tw-markdown`)
 
 **Current state:**
 
 - `pulldown_cmark`; headings/paragraphs/bold/italic/breaks.
-- Export emits ATX markers only for Heading 1–6 style names.
-- **Still open:** lists, links, tables, code blocks.
+- **Shipped (Phase 5):** `[text](url)` hyperlinks, bullet/numbered lists (`NumberingRef`), pipe tables, fenced code → monospace.
+- Export emits ATX markers for Heading 1–6; tables export as GitHub pipe tables.
 
 ### ODT (`tw-odt`)
 
-**Current state (F23.S3):**
+**Current state (F23.S3 + Phase 5):**
 
-- Import/export paragraphs + `text:h` outline levels; bold/italic spans + automatic-styles stub.
-- Edit→`mark_modified`→export→reimport round-trip gated (`u_f23_s3_odt_roundtrip`).
-- **Still open:** lists, tables, images, full `styles.xml` / meta fidelity.
+- Import/export paragraphs + `text:h` outline levels; bold/italic spans.
+- **Shipped (Phase 5):** `text:list-item` → bullet numbering, `table:table` blocks, `draw:frame` image import from package parts.
+- **Still open:** full `styles.xml` / meta fidelity, nested lists.
 
 ### Gap vs full format matrix
 
@@ -200,12 +204,20 @@ The six areas in this document were always **long-tail** — valuable for fideli
 
 ## 5. Plugin WASM sandbox (`tw-plugin`)
 
-### Current state (as built — F26.S3)
+### Current state (as built — F26.S3 + Phase 7)
 
 - [`crates/tw-plugin`](../crates/tw-plugin/): wasmtime sandbox, capability-gated host imports, install/enable/disable/invoke.
-- Sample WAT plugins (`SAMPLE_EDIT_PLUGIN_WAT`, `SAMPLE_READ_PLUGIN_WAT`) + tests in `tests/f26_s3_plugin_host.rs`.
-- Flutter: Review → Plugins dialog + `PluginRegistry` capability mirror (`app/test/f26_s3_plugins_test.dart`).
-- Still missing: WASI/WIT marketplace SDK, worker async dispatch, signed marketplace packages.
+- FFI: `tw_plugin_list_json`, `tw_plugin_install_sample` in [`tw-ffi`](../crates/tw-ffi/src/lib.rs); Flutter syncs `PluginRegistry` from native when available.
+- Sample WAT plugins + tests in `tests/f26_s3_plugin_host.rs`.
+- Flutter: Review → Plugins dialog; invoke still uses Dart mirror until session-scoped `tw_plugin_invoke` lands.
+- Still missing: WASI/WIT marketplace SDK, signed marketplace packages.
+
+### Exit criteria (Phase 7)
+
+- [x] FFI list / install sample plugin
+- [x] Review → Plugins dialog wired
+- [x] Sample plugin invoke with capability denial (Dart mirror + Rust host tests)
+- [ ] Session-scoped native invoke → undoable edit in one FFI call
 
 ### Gap vs spec
 
@@ -236,16 +248,24 @@ The six areas in this document were always **long-tail** — valuable for fideli
 
 ## 6. Production AI providers (`tw-ai`)
 
-### Current state (as built) — F28.S1 done
+### Current state (as built) — F28.S1 + Phase 6 partial
 
 - [`crates/tw-ai/src/provider.rs`](../crates/tw-ai/src/provider.rs): `AiProvider` trait (`complete`, `stream`, `is_available`).
 - [`crates/tw-ai/src/router.rs`](../crates/tw-ai/src/router.rs): `HybridRouter` with local/cloud/policy routing.
-- **Production adapters:** OpenAI, Gemini, llama.cpp / Ollama-compatible HTTP (`crates/tw-ai/src/providers/`), injectable `HttpClient` + `MockHttpClient` (no network in CI).
-- Flutter: `AiClient` + Review → **AI Settings** (routing mode); capability APIs stay provider-agnostic (ADR-0010).
-- `CompletionStream` is still an **empty struct** (streaming not implemented).
-- **`RULES` route** still returns `AiError::NotImplemented` for LLM complete.
-- `AiModuleRegistry`: metadata only; all modules `installed: false`.
-- Real HTTP (`reqwest` / `ureq`) not wired yet — adapters take `Arc<dyn HttpClient>`.
+- **Production adapters:** OpenAI, Gemini, llama.cpp / Ollama-compatible HTTP; injectable `MockHttpClient` (no network in CI).
+- Flutter: `AiClient` + Review → **AI Settings** / **Translate** via live HTTP when keys/endpoints configured.
+- **`RULES` route** → `tw_spell::SpellChecker::english_us()` spell-fix (no longer `NotImplemented`).
+- `AiModuleRegistry::sync_endpoint_availability` marks grammar/writing (local) and translation/reasoning (cloud) when endpoints exist.
+- `CompletionStream` is still an **empty struct** (streaming chunks not wired to UI).
+
+### Environment keys (Flutter / desktop)
+
+| Variable | Purpose |
+|----------|---------|
+| `OPENAI_API_KEY` | Cloud OpenAI completions (Review → AI Settings) |
+| `GEMINI_API_KEY` | Google Gemini cloud provider |
+| `TUTUAWORD_OPENAI_API_KEY` | Alias read by `AiClient` when set |
+| Ollama default | `http://127.0.0.1:11434` — auto-started on desktop when Always Local / Automatic |
 
 ### Gap vs spec
 
@@ -285,35 +305,20 @@ The six areas in this document were always **long-tail** — valuable for fideli
 
 ## 7. Track-change accept/reject UI
 
-### Current state (as built)
+### Current state (as built) — Phase 1 shipped
 
 - **Track-changes flag** toggles via Review ribbon and Tools menu.
-- `Command::AcceptRevision` / `RejectRevision` / `AcceptAllRevisions` / `RejectAllRevisions` in `tw-edit` with undo via `RestoreRevisionRuns`.
-- FFI: `tw_accept_all_revisions` / `tw_reject_all_revisions`; Review ribbon Accept/Reject call **accept/reject all**.
+- `Command::AcceptRevision` / `RejectRevision` at caret + accept/reject all in `tw-edit` with undo.
+- FFI: `tw_accept_revision_at`, `tw_reject_revision_at`, next/prev navigation, `tw_get_revisions` JSON list.
+- Flutter: Review ribbon Accept/Reject/Next/Previous + **Changes pane** (`changes_pane.dart`) with jump + per-item accept/reject.
 - DOCX export emits revision markup when tracking is on.
-- Still missing: accept/reject **at caret**, next/prev change navigation, changes pane.
 
-### Gap vs spec
+### Exit criteria (Phase 1)
 
-- Word-like review workflow needs per-change accept/reject and navigation ([risk-mitigation.md](risk-mitigation.md) TC ladder).
-
-### Key files
-
-| File | Role |
-|------|------|
-| `crates/tw-edit/src/lib.rs` | Accept/reject commands |
-| `crates/tw-edit/tests/track_change_resolve.rs` | Ladder (c) tests |
-| `app/lib/ui/ribbon_tabs/review_tab.dart` | Accept/Reject all wired |
-
-### Future work
-
-1. Accept/reject revision at caret (single change).
-2. Next/previous change navigation + optional changes pane.
-
-### Exit criteria (documentation target)
-
-- User can accept or reject the revision at the caret from the Review ribbon.
-- Undo restores the prior revision state. (Accept-all undo already covered in unit tests.)
+- [x] Accept/reject at caret from Review ribbon
+- [x] Next/previous change navigation
+- [x] Changes list pane (run id / summary / jump)
+- [x] Undo restores prior revision state
 
 ---
 

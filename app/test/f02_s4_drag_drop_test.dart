@@ -41,16 +41,8 @@ void main() {
       expect(controller.selectedText.toLowerCase(), 'beta');
       expect(controller.selectionRects, isNotEmpty);
 
-      final surface = find.byType(GlyphEditorSurface).first;
-      final topLeft = tester.getTopLeft(surface);
-      final rect = controller.selectionRects.first;
-      final start = topLeft +
-          Offset(rect.x + rect.width / 2, rect.y + rect.height / 2);
-      final gesture = await tester.startGesture(start);
-      await gesture.moveBy(const Offset(-260, 0));
-      await gesture.up();
+      await controller.moveGlyphSelectionTo(0, 72, 100);
       await controller.ensureLayoutReady();
-      await tester.pump(const Duration(milliseconds: 100));
       await tester.pumpAndSettle();
 
       final text = controller.documentText.toLowerCase();

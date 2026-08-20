@@ -34,7 +34,7 @@ impl NativeFormat {
             format_version: "1.0".into(),
             created: now.clone(),
             modified: now,
-            app_version: "26.08.01".into(),
+            app_version: "26.08.19".into(),
             generator: "tutuaword".into(),
         };
 

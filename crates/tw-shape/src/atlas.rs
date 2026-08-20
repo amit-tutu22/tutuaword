@@ -55,6 +55,21 @@ impl GlyphAtlas {
         }
 
         let (width, height) = (glyph.width, glyph.height);
+        if width == 0 || height == 0 {
+            return AtlasEntry {
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 0,
+                bearing_x: glyph.bearing_x,
+                bearing_y: glyph.bearing_y,
+                is_color: glyph.is_color,
+            };
+        }
+
+        if self.cursor_y + self.row_height + height + 1 > self.height {
+            self.grow();
+        }
         if self.cursor_x + width > self.width {
             self.cursor_x = 0;
             self.cursor_y += self.row_height + 1;
@@ -93,5 +108,22 @@ impl GlyphAtlas {
 
     pub fn pixels_rgba(&self) -> &[u8] {
         &self.pixels
+    }
+
+    fn grow(&mut self) {
+        let new_height = (self.height * 2).min(8192);
+        if new_height <= self.height {
+            // Atlas full: reset and bump generation so clients refresh UVs.
+            self.pixels.fill(0);
+            self.entries.clear();
+            self.cursor_x = 0;
+            self.cursor_y = 0;
+            self.row_height = 0;
+            self.generation = self.generation.saturating_add(1);
+            return;
+        }
+        self.height = new_height;
+        self.pixels.resize((self.width * self.height * 4) as usize, 0);
+        self.generation = self.generation.saturating_add(1);
     }
 }

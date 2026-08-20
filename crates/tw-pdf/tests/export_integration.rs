@@ -189,3 +189,70 @@ fn gif_image_exports_as_pdf_xobject_without_aborting() {
         "GIF should decode into a PDF image XObject"
     );
 }
+
+#[test]
+fn export_headings_emit_linked_outlines() {
+    let mut doc = Document::new();
+    let h1 = doc.styles.find_style_by_name("Heading 1").unwrap().id;
+    let h2 = doc.styles.find_style_by_name("Heading 2").unwrap().id;
+    let mut first = Paragraph::with_text("Alpha");
+    first.style_id = Some(h1);
+    let mut second = Paragraph::with_text("Beta");
+    second.style_id = Some(h2);
+    doc.sections[0].blocks = vec![Block::Paragraph(first), Block::Paragraph(second)];
+
+    let pdf = DisplayListPdfExporter
+        .export(&doc, &PdfExportOptions::default())
+        .unwrap();
+    let pdf_str = String::from_utf8_lossy(&pdf);
+    assert!(pdf_str.contains("/Type /Outlines"), "{pdf_str}");
+    assert!(pdf_str.contains("/Next "), "outline items must form a linked list");
+    assert!(pdf_str.contains("/Prev "), "outline items must form a linked list");
+    // Destinations must not all be the page top — heading Y should appear.
+    let dests: Vec<_> = pdf_str
+        .match_indices("/XYZ 0 ")
+        .map(|(i, _)| {
+            let rest = &pdf_str[i + "/XYZ 0 ".len()..];
+            rest.split_whitespace()
+                .next()
+                .and_then(|s| s.parse::<f32>().ok())
+        })
+        .collect();
+    assert!(dests.len() >= 2, "expected outline Dest entries, got {dests:?}");
+    let tops: Vec<f32> = dests.into_iter().flatten().collect();
+    assert!(
+        tops.windows(2).any(|w| (w[0] - w[1]).abs() > 1.0),
+        "outline Dest Y values should differ per heading, got {tops:?}"
+    );
+}
+
+#[test]
+fn export_internal_hyperlink_uses_goto() {
+    use tw_model::{bookmark_run, hyperlink_run};
+
+    let mut doc = Document::new();
+    let mut target = Paragraph::with_text("Target heading");
+    target.runs.insert(0, bookmark_run("sec1", 1));
+    let mut source = Paragraph::new();
+    source.runs = vec![hyperlink_run("#sec1", "jump", None)];
+    let pad: Vec<_> = (0..20)
+        .map(|i| Block::Paragraph(Paragraph::with_text(format!("Pad {i}"))))
+        .collect();
+    let mut blocks = vec![Block::Paragraph(source)];
+    blocks.extend(pad);
+    blocks.push(Block::Paragraph(target));
+    doc.sections[0].blocks = blocks;
+
+    let pdf = DisplayListPdfExporter
+        .export(&doc, &PdfExportOptions::default())
+        .unwrap();
+    let pdf_str = String::from_utf8_lossy(&pdf);
+    assert!(
+        pdf_str.contains("/S /GoTo"),
+        "internal #anchor links must use GoTo, not URI: {pdf_str}"
+    );
+    assert!(
+        !pdf_str.contains("/URI (#sec1)"),
+        "internal anchors must not be URI actions"
+    );
+}

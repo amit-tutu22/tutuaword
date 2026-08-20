@@ -65,6 +65,9 @@ pub fn document_plain_text(doc: &Document) -> String {
 }
 
 fn diff_lines(left: &[&str], right: &[&str]) -> Vec<CompareChange> {
+    if left.len().saturating_mul(right.len()) > 250_000 {
+        return greedy_diff_lines(left, right);
+    }
     let lcs = longest_common_subsequence(left, right);
     let mut out = Vec::new();
     let mut li = 0usize;
@@ -90,6 +93,49 @@ fn diff_lines(left: &[&str], right: &[&str]) -> Vec<CompareChange> {
         });
         li = l_idx + 1;
         ri = r_idx + 1;
+    }
+    while li < left.len() {
+        out.push(CompareChange {
+            kind: CompareChangeKind::Delete,
+            text: left[li].to_string(),
+        });
+        li += 1;
+    }
+    while ri < right.len() {
+        out.push(CompareChange {
+            kind: CompareChangeKind::Insert,
+            text: right[ri].to_string(),
+        });
+        ri += 1;
+    }
+    out
+}
+
+/// Bounded-memory fallback when line-count product would OOM the LCS table.
+fn greedy_diff_lines(left: &[&str], right: &[&str]) -> Vec<CompareChange> {
+    let mut out = Vec::new();
+    let mut li = 0usize;
+    let mut ri = 0usize;
+    while li < left.len() && ri < right.len() {
+        if left[li] == right[ri] {
+            out.push(CompareChange {
+                kind: CompareChangeKind::Equal,
+                text: left[li].to_string(),
+            });
+            li += 1;
+            ri += 1;
+        } else {
+            out.push(CompareChange {
+                kind: CompareChangeKind::Delete,
+                text: left[li].to_string(),
+            });
+            out.push(CompareChange {
+                kind: CompareChangeKind::Insert,
+                text: right[ri].to_string(),
+            });
+            li += 1;
+            ri += 1;
+        }
     }
     while li < left.len() {
         out.push(CompareChange {

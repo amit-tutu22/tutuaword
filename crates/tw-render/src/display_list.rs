@@ -4,8 +4,10 @@ use tw_shape::GlyphAtlas;
 /// v2 added path and image batches; v3 added encoded image payloads; v4 drops embedded atlas pixels;
 /// v5 adds stable image block ids for selection/resize;
 /// v6 adds rotation, opacity, and crop metadata per image (F10.S4);
-/// v7 adds read-only shape selection bounds for SmartArt placeholders (F12.S3).
-pub const DISPLAY_LIST_VERSION: u32 = 7;
+/// v7 adds read-only shape selection bounds for SmartArt placeholders (F12.S3);
+/// v8 adds formatting mark positions (spaces, tabs, ¶) for non-printing overlay.
+/// v9 omits embedded image payloads; hosts fetch bytes via image-by-id FFI.
+pub const DISPLAY_LIST_VERSION: u32 = 9;
 
 /// ARGB fill for read-only imported shape placeholders (F11.S1).
 pub const SHAPE_PLACEHOLDER_COLOR: u32 = 0xFFD0DCE8;
@@ -35,6 +37,16 @@ pub struct DisplayList {
     pub image_batch: ImageBatch,
     pub path_batch: PathBatch,
     pub shape_selection_batch: ShapeSelectionBatch,
+    pub formatting_marks_batch: FormattingMarksBatch,
+}
+
+/// Non-printing character overlay positions (wire format v8+).
+#[derive(Debug, Clone, Default)]
+pub struct FormattingMarksBatch {
+    /// Parallel triplets: x, y, height.
+    pub positions: Vec<f32>,
+    /// 0 = space, 1 = tab, 2 = paragraph.
+    pub kinds: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -93,17 +105,28 @@ pub struct DisplayListBuilder;
 
 impl DisplayListBuilder {
     pub fn from_page(page: &PageLayout, atlas: &GlyphAtlas, version: u64) -> DisplayList {
+        let mut list = Self::from_page_without_atlas(page, version);
+        list.atlas_width = atlas.width;
+        list.atlas_height = atlas.height;
+        list.atlas_pixels = atlas.pixels_rgba().to_vec();
+        list
+    }
+
+    /// Build a page display list without embedding atlas pixels (v4+ page payload).
+    pub fn from_page_without_atlas(page: &PageLayout, version: u64) -> DisplayList {
         let mut atlas_batch = AtlasBatch::default();
         let mut rect_batch = RectBatch::default();
         let mut image_batch = ImageBatch::default();
         let mut path_batch = PathBatch::default();
         let mut shape_selection_batch = ShapeSelectionBatch::default();
+        let mut formatting_marks_batch = FormattingMarksBatch::default();
 
         for layout_box in &page.boxes {
             match layout_box {
                 LayoutBox::TextLine(line) => {
                     append_line_decorations(line, &mut rect_batch);
                     append_line_glyphs(line, &mut atlas_batch);
+                    append_line_formatting_marks(line, &mut formatting_marks_batch);
                 }
                 LayoutBox::Rect {
                     x,
@@ -196,7 +219,13 @@ impl DisplayListBuilder {
                         table.width,
                         table.height,
                     ]);
-                    append_table_layout(table, &mut rect_batch, &mut path_batch, &mut atlas_batch);
+                    append_table_layout(
+                        table,
+                        &mut rect_batch,
+                        &mut path_batch,
+                        &mut atlas_batch,
+                        &mut formatting_marks_batch,
+                    );
                 }
             }
         }
@@ -205,24 +234,16 @@ impl DisplayListBuilder {
             version,
             page_width: page.width,
             page_height: page.height,
-            atlas_width: atlas.width,
-            atlas_height: atlas.height,
-            atlas_pixels: atlas.pixels_rgba().to_vec(),
+            atlas_width: 0,
+            atlas_height: 0,
+            atlas_pixels: Vec::new(),
             atlas_batch,
             rect_batch,
             image_batch,
             path_batch,
             shape_selection_batch,
+            formatting_marks_batch,
         }
-    }
-
-    /// Build a page display list without embedding atlas pixels (v4 page payload).
-    pub fn from_page_without_atlas(page: &PageLayout, version: u64) -> DisplayList {
-        let mut list = Self::from_page(page, &GlyphAtlas::default(), version);
-        list.atlas_width = 0;
-        list.atlas_height = 0;
-        list.atlas_pixels.clear();
-        list
     }
 
     /// Serialize a page display list without embedded atlas pixels (wire format v4).
@@ -236,8 +257,9 @@ impl DisplayListBuilder {
         write_glyph_batch(&mut bytes, &list.atlas_batch);
         write_rect_batch(&mut bytes, &list.rect_batch);
         write_path_batch(&mut bytes, &list.path_batch);
-        write_image_batch(&mut bytes, &list.image_batch);
+        write_image_batch(&mut bytes, &list.image_batch, true);
         write_shape_selection_batch(&mut bytes, &list.shape_selection_batch);
+        write_formatting_marks_batch(&mut bytes, &list.formatting_marks_batch);
 
         bytes
     }
@@ -309,8 +331,9 @@ impl DisplayListBuilder {
         write_glyph_batch(&mut bytes, &list.atlas_batch);
         write_rect_batch(&mut bytes, &list.rect_batch);
         write_path_batch(&mut bytes, &list.path_batch);
-        write_image_batch(&mut bytes, &list.image_batch);
+        write_image_batch(&mut bytes, &list.image_batch, false);
         write_shape_selection_batch(&mut bytes, &list.shape_selection_batch);
+        write_formatting_marks_batch(&mut bytes, &list.formatting_marks_batch);
 
         bytes
     }
@@ -358,6 +381,12 @@ impl DisplayListBuilder {
             ShapeSelectionBatch::default()
         };
 
+        let formatting_marks_batch = if file_version >= 8 {
+            read_formatting_marks_batch(bytes, &mut offset).unwrap_or_default()
+        } else {
+            FormattingMarksBatch::default()
+        };
+
         Some(DisplayList {
             version,
             page_width,
@@ -370,6 +399,7 @@ impl DisplayListBuilder {
             image_batch,
             path_batch,
             shape_selection_batch,
+            formatting_marks_batch,
         })
     }
 }
@@ -400,6 +430,7 @@ fn append_table_layout(
     rect_batch: &mut RectBatch,
     path_batch: &mut PathBatch,
     atlas_batch: &mut AtlasBatch,
+    formatting_marks_batch: &mut FormattingMarksBatch,
 ) {
     for cell in &table.cells {
         if let Some(bg) = cell.background {
@@ -408,9 +439,16 @@ fn append_table_layout(
         for line in &cell.lines {
             append_line_decorations(line, rect_batch);
             append_line_glyphs(line, atlas_batch);
+            append_line_formatting_marks(line, formatting_marks_batch);
         }
         for nested in &cell.nested_tables {
-            append_table_layout(nested, rect_batch, path_batch, atlas_batch);
+            append_table_layout(
+                nested,
+                rect_batch,
+                path_batch,
+                atlas_batch,
+                formatting_marks_batch,
+            );
         }
     }
     for chunk in table.grid_lines.chunks(4) {
@@ -434,8 +472,39 @@ fn append_line_decorations(line: &TextLine, batch: &mut RectBatch) {
     }
 }
 
+fn append_line_formatting_marks(line: &TextLine, batch: &mut FormattingMarksBatch) {
+    let height = line.line_height.max(line.ascent + line.descent).max(1.0);
+    for g in &line.glyphs {
+        let kind = match g.codepoint {
+            ' ' => Some(0u8),
+            '\t' => Some(1u8),
+            '\n' | '\r' => Some(2u8),
+            _ => None,
+        };
+        if let Some(k) = kind {
+            batch.positions.push(g.x);
+            batch.positions.push(g.y);
+            batch.positions.push(height);
+            batch.kinds.push(k);
+        }
+    }
+    if let Some(last) = line.glyphs.last() {
+        if last.codepoint != '\n' && last.codepoint != '\r' {
+            let end_x = last.x + last.width.max(0.0);
+            batch.positions.push(end_x);
+            batch.positions.push(last.y);
+            batch.positions.push(height);
+            batch.kinds.push(2);
+        }
+    }
+}
+
 fn append_line_glyphs(line: &TextLine, batch: &mut AtlasBatch) {
     for g in &line.glyphs {
+        // Invisible / space glyphs have no atlas coverage — skip GPU draw.
+        if g.atlas_w <= 0.0 || g.atlas_h <= 0.0 {
+            continue;
+        }
         batch.transforms.push(g.x);
         batch.transforms.push(g.y);
         batch.rects.push(g.atlas_x);
@@ -519,19 +588,21 @@ fn append_diagram_process_preview(
 ) {
     const NODE_FILL: u32 = 0xFF5B9BD5;
     const ARROW: u32 = 0xFF2F5496;
-    let pad_x = shape.width * 0.08;
-    let pad_top = shape.height * 0.28;
-    let pad_bottom = shape.height * 0.18;
-    let body_h = (shape.height - pad_top - pad_bottom).max(24.0);
-    let gap = shape.width * 0.06;
-    let node_w = ((shape.width - pad_x * 2.0 - gap * 2.0) / 3.0).max(28.0);
-    let node_h = body_h.min(shape.height * 0.42).max(20.0);
-    let y = shape.y + pad_top + (body_h - node_h) * 0.5;
-
-    for i in 0..3 {
-        let x = shape.x + pad_x + i as f32 * (node_w + gap);
+    let rects = tw_layout::diagram_node_rects(
+        tw_model::DiagramKind::Process,
+        shape.x,
+        shape.y,
+        shape.width,
+        shape.height,
+    );
+    for (i, &[x, y, node_w, node_h]) in rects.iter().enumerate() {
         append_rect(x, y, node_w, node_h, NODE_FILL, rect_batch);
         if i < 2 {
+            let gap = if i + 1 < rects.len() {
+                rects[i + 1][0] - (x + node_w)
+            } else {
+                shape.width * 0.06
+            };
             let ax1 = x + node_w + 4.0;
             let ax2 = x + node_w + gap - 4.0;
             let ay = y + node_h * 0.5;
@@ -549,10 +620,16 @@ fn append_diagram_hierarchy_preview(
 ) {
     const NODE_FILL: u32 = 0xFF5B9BD5;
     const LINE: u32 = 0xFF2F5496;
-    let top_w = shape.width * 0.28;
-    let top_h = shape.height * 0.16;
-    let top_x = shape.x + (shape.width - top_w) * 0.5;
-    let top_y = shape.y + shape.height * 0.28;
+    let rects = tw_layout::diagram_node_rects(
+        tw_model::DiagramKind::Hierarchy,
+        shape.x,
+        shape.y,
+        shape.width,
+        shape.height,
+    );
+    let Some(&[top_x, top_y, top_w, top_h]) = rects.first() else {
+        return;
+    };
     append_rect(top_x, top_y, top_w, top_h, NODE_FILL, rect_batch);
 
     let mid_y = top_y + top_h + 12.0;
@@ -565,17 +642,23 @@ fn append_diagram_hierarchy_preview(
         path_batch,
     );
 
-    let child_w = shape.width * 0.22;
-    let child_h = shape.height * 0.16;
-    let gap = shape.width * 0.06;
-    let row_w = child_w * 3.0 + gap * 2.0;
-    let row_x = shape.x + (shape.width - row_w) * 0.5;
-    append_path_line(row_x + child_w * 0.5, mid_y, row_x + row_w - child_w * 0.5, mid_y, LINE, path_batch);
-
-    for i in 0..3 {
-        let x = row_x + i as f32 * (child_w + gap);
-        append_path_line(x + child_w * 0.5, mid_y, x + child_w * 0.5, mid_y + 8.0, LINE, path_batch);
-        append_rect(x, mid_y + 8.0, child_w, child_h, NODE_FILL, rect_batch);
+    if rects.len() >= 4 {
+        let child_w = rects[1][2];
+        let row_x = rects[1][0];
+        let row_w = rects[3][0] + rects[3][2] - row_x;
+        append_path_line(
+            row_x + child_w * 0.5,
+            mid_y,
+            row_x + row_w - child_w * 0.5,
+            mid_y,
+            LINE,
+            path_batch,
+        );
+        for rect in &rects[1..] {
+            let [x, y, w, h] = *rect;
+            append_path_line(x + w * 0.5, mid_y, x + w * 0.5, mid_y + 8.0, LINE, path_batch);
+            append_rect(x, y, w, h, NODE_FILL, rect_batch);
+        }
     }
 }
 
@@ -597,11 +680,14 @@ fn append_diagram_cycle_preview(
         append_path_line(prev.0, prev.1, next.0, next.1, RING, path_batch);
         prev = next;
     }
-    for i in 0..3 {
-        let t = -std::f32::consts::FRAC_PI_2 + std::f32::consts::TAU * i as f32 / 3.0;
-        let nx = cx + radius * t.cos() - 18.0;
-        let ny = cy + radius * t.sin() - 12.0;
-        append_rect(nx, ny, 36.0, 24.0, NODE_FILL, rect_batch);
+    for &[nx, ny, nw, nh] in &tw_layout::diagram_node_rects(
+        tw_model::DiagramKind::Cycle,
+        shape.x,
+        shape.y,
+        shape.width,
+        shape.height,
+    ) {
+        append_rect(nx, ny, nw, nh, NODE_FILL, rect_batch);
     }
 }
 
@@ -653,26 +739,43 @@ fn append_chart_preview(
         return;
     }
 
-    // Legend swatches (Series 1 / Series 2) along the top-right.
-    let legend_y = shape.y + shape.height * 0.08;
-    let mut legend_x = shape.x + shape.width - 18.0;
-    for (idx, _) in data.series.iter().enumerate().take(4).rev() {
-        let color = CHART_SERIES_COLORS[idx % CHART_SERIES_COLORS.len()];
-        append_rect(legend_x - 28.0, legend_y, 12.0, 8.0, color, rect_batch);
-        legend_x -= 40.0;
-    }
+    // Vertical legend swatches on the right — text labels are laid out as
+    // decorative TextLines beside these keys (see layout_chart_legend_labels).
+    append_chart_legend_swatches(shape, data, rect_batch);
 
     match data.kind {
-        tw_model::ChartKind::Pie => append_chart_pie(shape, data, rect_batch, path_batch),
+        tw_model::ChartKind::Pie => append_chart_pie(shape, data, path_batch),
         tw_model::ChartKind::Bar => append_chart_bar(shape, data, rect_batch, path_batch),
         tw_model::ChartKind::Line => append_chart_line(shape, data, rect_batch, path_batch),
         tw_model::ChartKind::Column => append_chart_column(shape, data, rect_batch, path_batch),
     }
 }
 
+fn append_chart_legend_swatches(
+    shape: &ShapeLayout,
+    data: &tw_model::ChartData,
+    rect_batch: &mut RectBatch,
+) {
+    let entry_count = match data.kind {
+        tw_model::ChartKind::Pie => data.categories.len().min(4),
+        _ => data.series.len().min(4),
+    };
+    if entry_count == 0 {
+        return;
+    }
+    let swatch_x = shape.x + shape.width * 0.72;
+    let mut key_y = shape.y + shape.height * 0.30;
+    for i in 0..entry_count {
+        let color = CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.len()];
+        append_rect(swatch_x, key_y, 10.0, 8.0, color, rect_batch);
+        key_y += 16.0;
+    }
+}
+
 fn chart_plot_rect(shape: &ShapeLayout) -> (f32, f32, f32, f32) {
     let pad_l = shape.width * 0.12;
-    let pad_r = shape.width * 0.08;
+    // Leave room for the vertical legend + labels on the right.
+    let pad_r = shape.width * 0.30;
     let pad_t = shape.height * 0.22;
     let pad_b = shape.height * 0.14;
     (
@@ -805,7 +908,6 @@ fn append_chart_line(
 fn append_chart_pie(
     shape: &ShapeLayout,
     data: &tw_model::ChartData,
-    rect_batch: &mut RectBatch,
     path_batch: &mut PathBatch,
 ) {
     // Use first series values as slice sizes (Word pie of categories).
@@ -844,21 +946,6 @@ fn append_chart_pie(
         let next = (cx + radius * t.cos(), cy + radius * t.sin());
         append_path_line(prev.0, prev.1, next.0, next.1, CHART_AXIS, path_batch);
         prev = next;
-    }
-
-    // Category color key on the right.
-    let mut key_y = shape.y + shape.height * 0.30;
-    for (i, _) in data.categories.iter().enumerate().take(4) {
-        let color = CHART_SERIES_COLORS[i % CHART_SERIES_COLORS.len()];
-        append_rect(
-            shape.x + shape.width * 0.72,
-            key_y,
-            10.0,
-            8.0,
-            color,
-            rect_batch,
-        );
-        key_y += 16.0;
     }
 }
 
@@ -1068,7 +1155,7 @@ fn read_path_batch(bytes: &[u8], offset: &mut usize) -> Option<PathBatch> {
     Some(PathBatch { points, colors })
 }
 
-fn write_image_batch(bytes: &mut Vec<u8>, batch: &ImageBatch) {
+fn write_image_batch(bytes: &mut Vec<u8>, batch: &ImageBatch, omit_payloads: bool) {
     let image_count = (batch.transforms.len() / 2) as u32;
     bytes.extend_from_slice(&image_count.to_le_bytes());
     for val in &batch.transforms {
@@ -1088,8 +1175,12 @@ fn write_image_batch(bytes: &mut Vec<u8>, batch: &ImageBatch) {
         bytes.extend_from_slice(bytes_id);
     }
     for payload in &batch.payloads {
-        bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-        bytes.extend_from_slice(payload);
+        if omit_payloads {
+            bytes.extend_from_slice(&0u32.to_le_bytes());
+        } else {
+            bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+            bytes.extend_from_slice(payload);
+        }
     }
     if !batch.rotations.is_empty() {
         for val in &batch.rotations {
@@ -1225,6 +1316,33 @@ fn read_shape_selection_batch(bytes: &[u8], offset: &mut usize) -> Option<ShapeS
     Some(ShapeSelectionBatch { shape_ids, rects })
 }
 
+fn write_formatting_marks_batch(bytes: &mut Vec<u8>, batch: &FormattingMarksBatch) {
+    let mark_count = batch.kinds.len() as u32;
+    bytes.extend_from_slice(&mark_count.to_le_bytes());
+    for val in &batch.positions {
+        bytes.extend_from_slice(&val.to_le_bytes());
+    }
+    bytes.extend_from_slice(&batch.kinds);
+}
+
+fn read_formatting_marks_batch(bytes: &[u8], offset: &mut usize) -> Option<FormattingMarksBatch> {
+    if *offset + 4 > bytes.len() {
+        return Some(FormattingMarksBatch::default());
+    }
+    let mark_count = read_u32(bytes, offset)? as usize;
+    let positions_len = mark_count.saturating_mul(3);
+    if *offset + positions_len * 4 + mark_count > bytes.len() {
+        return None;
+    }
+    let mut positions = Vec::with_capacity(positions_len);
+    for _ in 0..positions_len {
+        positions.push(read_f32(bytes, offset)?);
+    }
+    let kinds = bytes[*offset..*offset + mark_count].to_vec();
+    *offset += mark_count;
+    Some(FormattingMarksBatch { positions, kinds })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1252,7 +1370,7 @@ mod tests {
         let page = layout.pages.first().unwrap();
         let list = DisplayListBuilder::from_page_without_atlas(page, 2);
         let bytes = DisplayListBuilder::to_page_bytes(&list);
-        assert_eq!(u32::from_le_bytes(bytes[0..4].try_into().unwrap()), 7);
+        assert_eq!(u32::from_le_bytes(bytes[0..4].try_into().unwrap()), DISPLAY_LIST_VERSION);
         let decoded = DisplayListBuilder::from_bytes(&bytes).unwrap();
         assert_eq!(decoded.version, 2);
         assert!(decoded.atlas_pixels.is_empty());
@@ -1276,5 +1394,34 @@ mod tests {
         assert_eq!(decoded.width, atlas.width);
         assert_eq!(decoded.height, atlas.height);
         assert_eq!(decoded.pixels.len(), atlas.pixels_rgba().len());
+    }
+
+    #[test]
+    fn from_page_without_atlas_skips_pixel_buffer() {
+        let doc = Document::with_paragraph("Hello World");
+        let mut engine = LayoutEngine::new();
+        let layout = engine.layout_document(&doc);
+        let page = layout.pages.first().unwrap();
+        let list = DisplayListBuilder::from_page_without_atlas(page, 1);
+        assert!(list.atlas_pixels.is_empty());
+        assert_eq!(list.atlas_width, 0);
+        assert_eq!(list.atlas_height, 0);
+        assert!(!list.formatting_marks_batch.kinds.is_empty()
+            || !list.atlas_batch.transforms.is_empty());
+    }
+
+    #[test]
+    fn identical_page_bytes_match_content_ignores_layout_version() {
+        let doc = Document::with_paragraph("Same");
+        let mut engine = LayoutEngine::new();
+        let layout = engine.layout_document(&doc);
+        let page = layout.pages.first().unwrap();
+        let a = DisplayListBuilder::to_page_bytes(&DisplayListBuilder::from_page_without_atlas(
+            page, 1,
+        ));
+        let b = DisplayListBuilder::to_page_bytes(&DisplayListBuilder::from_page_without_atlas(
+            page, 99,
+        ));
+        assert!(DisplayListBuilder::page_bytes_match_content(&a, &b));
     }
 }

@@ -111,6 +111,35 @@ void main() {
         _kindFor(LogicalKeyboardKey.enter, control: true),
         EditorInputKind.pageBreak,
       );
+      expect(_kindFor(LogicalKeyboardKey.numpadEnter), EditorInputKind.newline);
+    });
+
+    test('Space is a character, not an editing intent', () {
+      expect(_kindFor(LogicalKeyboardKey.space), isNull);
+      expect(
+        EditorInputEvent.fromLogicalKey(
+          LogicalKeyboardKey.space,
+          character: ' ',
+        )?.kind,
+        EditorInputKind.character,
+      );
+    });
+
+    test('Enter CR/LF character payloads map to newline', () {
+      expect(
+        EditorInputEvent.fromLogicalKey(
+          LogicalKeyboardKey.enter,
+          character: '\r',
+        )?.kind,
+        EditorInputKind.newline,
+      );
+      expect(
+        EditorInputEvent.fromLogicalKey(
+          LogicalKeyboardKey.keyA,
+          character: '\n',
+        )?.kind,
+        EditorInputKind.newline,
+      );
     });
 
     test('Home and End reach the line, Ctrl reaches the document', () {
@@ -164,6 +193,15 @@ void main() {
         EditorInputKind.deleteWordForward,
       );
       expect(_kindFor(LogicalKeyboardKey.backspace), EditorInputKind.backspace);
+      expect(_kindFor(LogicalKeyboardKey.delete), EditorInputKind.delete);
+    });
+
+    test('Tab and Shift+Tab are editing intents', () {
+      expect(_kindFor(LogicalKeyboardKey.tab), EditorInputKind.tab);
+      expect(
+        EditorInputEvent.fromLogicalKey(LogicalKeyboardKey.tab, shift: true)!.shift,
+        isTrue,
+      );
     });
 
     test('Shift extends only caret motion', () {
@@ -1079,6 +1117,7 @@ void main() {
         'Ctrl/Cmd+Shift+T',
         'Ctrl/Cmd+0',
         'Ctrl+Up, Ctrl+Down',
+        'F1',
       ]) {
         expect(labels, contains(required));
       }

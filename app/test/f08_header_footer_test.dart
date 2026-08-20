@@ -133,7 +133,9 @@ void main() {
         InsertTab(controller: controller),
         size: const Size(1400, 120),
       );
-      expect(find.byKey(const Key('header_footer_link_previous')), findsNothing);
+      // Always visible; disabled until a non-body header/footer zone is active
+      // in section 2+.
+      expect(find.byKey(const Key('header_footer_link_previous')), findsOneWidget);
 
       controller.insertSectionBreak();
       await settleEngineStyle(tester);
@@ -155,6 +157,34 @@ void main() {
       expect(controller.headerFooterLinked, isFalse);
       expect(engine.fetchHeaderFooterLinked(isHeader: true, pageIndex: 1), isFalse);
       expect(controller.sessionController.statusText, contains('Unlinked from previous'));
+    });
+
+    testWidgets('I-F08-S1-open-header restores editor focus epoch', (tester) async {
+      final engine = MockDocumentEngine();
+      final controller = createTestEditorController(engine: engine);
+      addTearDown(controller.dispose);
+
+      final before = controller.editorFocusEpoch;
+      await controller.openHeaderEdit();
+      await settleEngineStyle(tester);
+
+      expect(controller.editZone, DocumentEditZone.header);
+      expect(controller.editorFocusEpoch, greaterThan(before));
+      expect(controller.selectionController.caretGeometry, isNotNull);
+    });
+
+    testWidgets('I-F08-S1-body-click exits header edit zone', (tester) async {
+      final engine = MockDocumentEngine();
+      final controller = createTestEditorController(engine: engine);
+      addTearDown(controller.dispose);
+
+      await controller.openHeaderEdit();
+      await settleEngineStyle(tester);
+      expect(controller.editZone, DocumentEditZone.header);
+
+      // Click clearly inside the body content band.
+      controller.beginGlyphSelection(0, controller.marginLeft + 8, controller.marginTop + 20);
+      expect(controller.editZone, DocumentEditZone.body);
     });
   });
 }

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:tutuaword/bridge/bookmark_entry.dart';
 
 /// Result of Insert/Edit Hyperlink (F19.S3).
 class HyperlinkDialogResult {
@@ -211,6 +212,43 @@ class _BookmarkNameDialogState extends State<BookmarkNameDialog> {
           onPressed: _submit,
           child: const Text('Add'),
         ),
+      ],
+    );
+  }
+}
+
+/// Picks a bookmark target for Insert → Cross-Reference (F16.S4).
+class CrossReferenceDialog extends StatelessWidget {
+  const CrossReferenceDialog({super.key, required this.bookmarks});
+
+  final List<DocumentBookmarkEntry> bookmarks;
+
+  static Future<String?> show(
+    BuildContext context,
+    List<DocumentBookmarkEntry> bookmarks,
+  ) {
+    return showDialog<String>(
+      context: context,
+      builder: (context) => CrossReferenceDialog(bookmarks: bookmarks),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SimpleDialog(
+      key: const Key('cross_reference_dialog'),
+      title: const Text('Cross-reference'),
+      children: [
+        for (final entry in bookmarks)
+          SimpleDialogOption(
+            key: Key('cross_ref_bookmark_${entry.name}'),
+            onPressed: () => Navigator.of(context).pop(entry.name),
+            child: ListTile(
+              leading: const Icon(Icons.bookmark_outline),
+              title: Text(entry.name),
+              subtitle: Text('Page ${entry.page + 1}'),
+            ),
+          ),
       ],
     );
   }

@@ -15,6 +15,7 @@ fn u_f11_s1_shape_placeholder_rect_in_display_list() {
             height: 80.0,
         },
         wrap: tw_model::TextWrap::Inline,
+        anchor: None,
         style: ShapeStyle::placeholder(),
         paragraphs: Vec::new(),
         preview_image: None,

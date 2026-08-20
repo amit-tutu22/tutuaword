@@ -196,10 +196,12 @@ pub fn layout_paragraph(
 
     let text = paragraph_layout_text(para, frame.field_context.as_ref());
     if text.trim().is_empty() {
+        // Claim the frame width so blank-area hit-testing (and arrow probes)
+        // treat empty table/shape cells as owning their column, not a 0-wide point.
         lines.push(super::types::TextLine {
             y: current_y + ascent,
             x,
-            width: 0.0,
+            width: max_width.max(0.0),
             ascent,
             descent,
             line_height,
@@ -382,7 +384,7 @@ pub fn layout_paragraph(
         lines.push(super::types::TextLine {
             y: current_y + ascent,
             x,
-            width: 0.0,
+            width: max_width.max(0.0),
             ascent,
             descent,
             line_height,
@@ -966,6 +968,24 @@ fn shape_line(
                         color: tint,
                         font_id: g.font_key(),
                     });
+                } else {
+                    // Spaces and other invisible glyphs still need a positioned
+                    // slot so PDF / accessibility export can recover the text
+                    // (atlas rasterization yields a 0×0 bitmap for them).
+                    glyphs.push(super::types::PositionedGlyph {
+                        glyph_id: g.glyph_id,
+                        codepoint,
+                        x: cursor_x + g.x_offset,
+                        y: baseline_y + baseline_shift + g.y_offset,
+                        width: g.x_advance.max(0.0),
+                        height: 0.0,
+                        atlas_x: 0.0,
+                        atlas_y: 0.0,
+                        atlas_w: 0.0,
+                        atlas_h: 0.0,
+                        color,
+                        font_id: g.font_key(),
+                    });
                 }
                 cursor_x += g.x_advance;
                 if let Some(spacing) = run.format.character_spacing {
@@ -1106,16 +1126,19 @@ fn run_segments_for_range(
             continue;
         }
 
-        let local_start = start_byte.saturating_sub(run_start);
-        let local_end = (end_byte - run_start).min(run_text.len());
-        if local_start >= local_end {
+        let local_start_byte = start_byte.saturating_sub(run_start);
+        let local_end_byte = (end_byte - run_start).min(run_text.len());
+        if local_start_byte >= local_end_byte {
             continue;
         }
 
+        // Document offsets are Unicode scalars; run_map must not store UTF-8 bytes.
+        let char_offset = run_text[..local_start_byte].chars().count();
+
         segments.push((
-            run_text[local_start..local_end].to_string(),
+            run_text[local_start_byte..local_end_byte].to_string(),
             run.clone(),
-            local_start,
+            char_offset,
         ));
     }
 

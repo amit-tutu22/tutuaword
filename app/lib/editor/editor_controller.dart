@@ -7,6 +7,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:tutuaword/ui/changes_pane.dart';
 import 'package:tutuaword/bridge/accessibility_issue.dart';
 import 'package:tutuaword/bridge/bookmark_entry.dart';
 import 'package:tutuaword/bridge/comment_thread.dart';
@@ -35,8 +36,10 @@ import 'package:tutuaword/editor/controllers/selection_controller.dart';
 import 'package:tutuaword/editor/controllers/view_controller.dart';
 import 'package:tutuaword/editor/doc_range.dart';
 import 'package:tutuaword/editor/document_edit_zone.dart';
+import 'package:tutuaword/bridge/compare_diff.dart';
 import 'package:tutuaword/bridge/document_io.dart';
 import 'package:tutuaword/bridge/document_picker.dart';
+import 'package:tutuaword/ui/compare_results_dialog.dart';
 import 'package:tutuaword/editor/change_case.dart';
 import 'package:tutuaword/editor/chart_data.dart';
 import 'package:tutuaword/editor/equation_omml.dart';
@@ -45,6 +48,7 @@ import 'package:tutuaword/editor/formatting_marks.dart';
 import 'package:tutuaword/editor/recent_symbols.dart';
 import 'package:tutuaword/editor/image_hit_test.dart';
 import 'package:tutuaword/editor/shape_hit_test.dart';
+import 'package:tutuaword/editor/key_event_text.dart';
 import 'package:tutuaword/editor/text_to_speech.dart';
 import 'package:tutuaword/editor/text_to_speech_platform.dart';
 import 'package:tutuaword/ui/chart_data_dialog.dart';
@@ -55,6 +59,7 @@ import 'package:tutuaword/editor/document_templates.dart';
 import 'package:tutuaword/editor/document_view_layout.dart';
 import 'package:tutuaword/ui/goto_dialog.dart';
 import 'package:tutuaword/ui/about_dialog.dart';
+import 'package:tutuaword/ui/keyboard_help_dialog.dart';
 import 'package:tutuaword/ui/settings_dialog.dart';
 import 'package:tutuaword/ui/zoom_dialog.dart';
 import 'package:tutuaword/bridge/mail_merge_csv.dart';
@@ -164,6 +169,7 @@ class EditorController extends ChangeNotifier {
         _formatting.syncFromCaret();
         unawaited(_onSelectionChangedFormatPainter());
       },
+      onCaretPageChanged: (_) => requestEditorFocus(),
     );
     _formatting = FormattingController(host: _host, selection: _selection);
     _find = FindController(
@@ -200,6 +206,12 @@ class EditorController extends ChangeNotifier {
 
     if (_sessionStore != null) {
       _recentSymbols.loadIds(_sessionStore!.loadRecentSymbolIds());
+    }
+
+    // Desktop ribbon / dialogs keep FocusNodes after click. Letter keys then
+    // never reach GlyphEditorSurface even though the caret is painted.
+    if (!usesSoftKeyboardGlyphInput) {
+      HardwareKeyboard.instance.addHandler(_onDesktopDocumentKey);
     }
   }
 
@@ -250,12 +262,20 @@ class EditorController extends ChangeNotifier {
   final AiClient _aiClient;
   String _proofingLanguageId = kDefaultProofingLanguageId;
   DocumentEditZone _editZone = DocumentEditZone.body;
+  /// Bumped when a ribbon action needs the page surface to reclaim key focus
+  /// (Header/Footer edit, etc.). Desktop ribbon Focusables steal focus on tap.
+  int _editorFocusEpoch = 0;
   String? _selectedImageId;
   int? _selectedImagePage;
   Rect? _selectedImageRect;
   String? _selectedDiagramId;
   int? _selectedDiagramPage;
   Rect? _selectedDiagramRect;
+  Rect? _previewDiagramRect;
+  /// True after entering shape/SmartArt/table cell text until the object is
+  /// selected again or the user clicks outside the shape.
+  bool _shapeTextEditActive = false;
+  String? _shapeTextEditShapeId;
   Rect? _previewImageRect;
   ImageResizeHandle? _activeImageHandle;
   Rect? _resizeStartRect;
@@ -263,6 +283,7 @@ class EditorController extends ChangeNotifier {
   Rect? _moveStartRect;
   double _selectedImageRotation = 0;
   List<AccessibilityIssue> _accessibilityIssues = const [];
+  List<TrackedChangeEntry> _trackedChanges = const [];
   bool _accessibilityChecked = false;
   bool _readingAloud = false;
 
@@ -278,6 +299,100 @@ class EditorController extends ChangeNotifier {
   FormattingController get formattingController => _formatting;
   DocumentSessionController get sessionController => _session;
   DocumentEditZone get editZone => _editZone;
+  int get editorFocusEpoch => _editorFocusEpoch;
+
+  /// Return keyboard focus to the glyph editor after a ribbon / dialog action.
+  void requestEditorFocus() {
+    _editorFocusEpoch++;
+    focusGlyphInput();
+    notifyListeners();
+  }
+
+  /// Debug label on every [GlyphEditorSurface] [FocusNode]. Used to skip the
+  /// desktop hardware handler when the page already owns the key stream.
+  static const glyphEditorFocusLabel = 'GlyphEditorSurface';
+
+  /// Same as [requestEditorFocus], then again after the next two frames so a
+  /// popped dialog cannot restore ribbon focus on top of the caret.
+  void requestEditorFocusAfterOverlay() {
+    requestEditorFocus();
+    void again() {
+      if (_disposed) return;
+      requestEditorFocus();
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      again();
+      WidgetsBinding.instance.addPostFrameCallback((_) => again());
+    });
+  }
+
+  /// Desktop: insert printable keys even when a ribbon button still has focus.
+  ///
+  /// Space/Enter on a [FocusableActionDetector] still activate the control.
+  /// Text fields (Find, dialogs) keep their keys. Web/mobile use the hidden
+  /// [TextField] instead. When the glyph surface already has focus it handles
+  /// keys itself so this path must not double-insert.
+  bool _onDesktopDocumentKey(KeyEvent event) {
+    if (_disposed) return false;
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) return false;
+    if (_glyphEditorHasPrimaryFocus()) return false;
+    if (_isTypingIntoTextField()) return false;
+    if (_isRibbonActivateKey(event)) return false;
+
+    final editing = EditorInputEvent.fromKeyEvent(event);
+    if (editing != null) {
+      if (editing.kind == EditorInputKind.character) {
+        final char = editing.character ?? printableCharacterFromKeyEvent(event);
+        if (char == null ||
+            char.isEmpty ||
+            HardwareKeyboard.instance.isControlPressed ||
+            HardwareKeyboard.instance.isMetaPressed) {
+          return false;
+        }
+        unawaited(handleEditorInput(EditorInputEvent.character(char)));
+        return true;
+      }
+      unawaited(handleEditorInput(editing));
+      return true;
+    }
+
+    final char = printableCharacterFromKeyEvent(event);
+    if (char == null ||
+        char.isEmpty ||
+        HardwareKeyboard.instance.isControlPressed ||
+        HardwareKeyboard.instance.isMetaPressed) {
+      return false;
+    }
+    unawaited(handleEditorInput(EditorInputEvent.character(char)));
+    return true;
+  }
+
+  bool _glyphEditorHasPrimaryFocus() {
+    return FocusManager.instance.primaryFocus?.debugLabel ==
+        glyphEditorFocusLabel;
+  }
+
+  bool _isTypingIntoTextField() {
+    final focused = FocusManager.instance.primaryFocus?.context;
+    if (focused == null) return false;
+    return focused.widget is EditableText ||
+        focused.findAncestorWidgetOfExactType<EditableText>() != null ||
+        focused.findAncestorWidgetOfExactType<TextField>() != null;
+  }
+
+  bool _isRibbonActivateKey(KeyEvent event) {
+    final key = event.logicalKey;
+    if (key != LogicalKeyboardKey.space &&
+        key != LogicalKeyboardKey.enter &&
+        key != LogicalKeyboardKey.numpadEnter) {
+      return false;
+    }
+    final focused = FocusManager.instance.primaryFocus?.context;
+    if (focused == null) return false;
+    return focused.findAncestorWidgetOfExactType<FocusableActionDetector>() !=
+        null;
+  }
 
   // ── Engine / rendering ────────────────────────────────────────────────────
   bool get isEngineConnected => _host.isConnected;
@@ -424,8 +539,13 @@ class EditorController extends ChangeNotifier {
   void _onUnsolicitedEngineEvent(int eventType, int _) {
     if (_disposed) return;
     if (eventType != NativeEventTypes.displayListReady) return;
-    // Background reflow / late open completion — pull the latest pages.
-    _host.refreshFromEngine(full: true);
+    final pageBefore = caretPage;
+    // Background reflow — refresh only the visible page to avoid full-doc churn.
+    _host.refreshFromEngine(dirtyPage: currentPage);
+    _selection.syncCaretGeometry();
+    if (caretPage != pageBefore) {
+      ensureCaretVisible(notify: false);
+    }
     notifyListeners();
   }
 
@@ -446,7 +566,9 @@ class EditorController extends ChangeNotifier {
   bool get showNavigationPane => _view.showNavigationPane;
   bool get showStyleInspector => _view.showStyleInspector;
   bool get showAccessibilityChecker => _view.showAccessibilityChecker;
+  bool get showChangesPane => _view.showChangesPane;
   List<AccessibilityIssue> get accessibilityIssues => _accessibilityIssues;
+  List<TrackedChangeEntry> get trackedChanges => _trackedChanges;
   bool get accessibilityChecked => _accessibilityChecked;
 
   /// Status-bar summary for the last accessibility check (F21.S4).
@@ -540,6 +662,9 @@ class EditorController extends ChangeNotifier {
   Future<void> openAboutDialog(BuildContext context) =>
       TutuawordAboutDialog.show(context);
 
+  Future<void> openKeyboardHelpDialog(BuildContext context) =>
+      KeyboardHelpDialog.show(context);
+
   Future<void> openSettingsDialog(BuildContext context) =>
       AppSettingsDialog.show(context);
 
@@ -593,21 +718,12 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Non-printing mark positions for [pageIndex] (spaces, tabs, ¶).
-  List<FormattingMark> formattingMarksForPage(int pageIndex) {
-    if (!_view.showFormattingMarks || _host.engine == null) {
+  /// Non-printing mark positions for [pageIndex] from display-list payload.
+  List<FormattingMark> formattingMarksForPage(int pageIndex, DisplayListSnapshot? snapshot) {
+    if (!_view.showFormattingMarks || snapshot == null) {
       return const [];
     }
-    final runId = _selection.defaultRunId();
-    if (runId == null) return const [];
-    final text = documentText;
-    if (text.isEmpty) return const [];
-    return collectFormattingMarks(
-      engine: _host.engine!,
-      pageIndex: pageIndex,
-      runId: runId,
-      text: text,
-    );
+    return formattingMarksFromSnapshot(snapshot);
   }
   void toggleNavigationPane() => _view.toggleNavigationPane();
   void showNavigationOutline() {
@@ -617,6 +733,54 @@ class EditorController extends ChangeNotifier {
 
   void toggleStyleInspector() => _view.toggleStyleInspector();
   void hideAccessibilityChecker() => _view.hideAccessibilityCheckerPane();
+
+  /// Show the tracked-changes list pane and refresh from engine (F17.S2).
+  Future<void> showChangesPanePanel() async {
+    await refreshRevisions();
+    _view.showChangesPanePanel();
+    notifyListeners();
+  }
+
+  void hideChangesPane() => _view.hideChangesPanePanel();
+
+  /// Reload tracked-change entries from the engine.
+  Future<void> refreshRevisions() async {
+    final json = _host.engine?.fetchRevisions();
+    if (json == null || json.isEmpty) {
+      _trackedChanges = const [];
+      notifyListeners();
+      return;
+    }
+    final decoded = jsonDecode(json);
+    if (decoded is! List) {
+      _trackedChanges = const [];
+    } else {
+      _trackedChanges = decoded
+          .whereType<Map>()
+          .map((e) => TrackedChangeEntry.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+    }
+    notifyListeners();
+  }
+
+  /// Drop a change from the local list after accept/reject (avoids a full refetch).
+  void removeTrackedChangeLocally(String runId) {
+    if (runId.isEmpty) return;
+    final next = _trackedChanges.where((e) => e.runId != runId).toList();
+    if (next.length == _trackedChanges.length) return;
+    _trackedChanges = next;
+    notifyListeners();
+  }
+
+  /// Move caret to a revision-marked run (Changes pane).
+  void focusRevision(String runId) {
+    if (runId.isEmpty) return;
+    clearImageSelection();
+    clearDiagramSelection();
+    _selection.setCaret(runId, 0);
+    _session.setStatusText('Tracked change');
+    notifyListeners();
+  }
 
   /// Run F21.S4 accessibility rules and show the results pane.
   void checkAccessibility() {
@@ -714,8 +878,12 @@ class EditorController extends ChangeNotifier {
 
   /// Follow a hyperlink at the caret. Internal anchors always navigate;
   /// external URLs open only when [allowExternal] is true (mobile tap or
-  /// Ctrl/Cmd+click).
-  Future<bool> tryFollowHyperlink({required bool allowExternal}) async {
+  /// Ctrl/Cmd+click). When [context] is set, the user must confirm before
+  /// leaving the app. Only http(s) / mailto / tel schemes are allowed.
+  Future<bool> tryFollowHyperlink({
+    required bool allowExternal,
+    BuildContext? context,
+  }) async {
     if (!_host.isConnected) return false;
     final runId = _selection.defaultRunId();
     if (runId == null) return false;
@@ -741,7 +909,16 @@ class EditorController extends ChangeNotifier {
     }
     final uri = Uri.tryParse(url);
     if (uri == null || !uri.hasScheme) return false;
-    final opened = uri.scheme == 'mailto'
+    if (!isAllowedDocumentLinkUri(uri)) {
+      _session.setStatusText('Blocked unsafe link (${uri.scheme})');
+      notifyListeners();
+      return false;
+    }
+    if (context != null && context.mounted) {
+      final ok = await confirmOpenDocumentLink(context, uri);
+      if (!ok) return false;
+    }
+    final opened = uri.scheme.toLowerCase() == 'mailto'
         ? await openEmailUri(uri)
         : await openExternalUri(uri);
     if (opened) {
@@ -815,10 +992,24 @@ class EditorController extends ChangeNotifier {
   void ensureGlyphCaret() => _selection.ensureGlyphCaret();
   void hitTestAt(int pageIndex, double x, double y) => _selection.hitTestAt(pageIndex, x, y);
   void moveGlyphCaretByArrow(LogicalKeyboardKey key, {bool? extend}) {
+    if (hasSelectedDiagram) {
+      // Enter cell/shape text, then honor the same arrow so the caret actually
+      // moves instead of only clearing object selection.
+      unawaited(() async {
+        final entered = await enterSelectedShapeTextEdit();
+        if (!entered || _disposed) return;
+        _selection.moveGlyphCaretByArrow(key, extend: extend);
+        ensureCaretVisible(notify: false);
+      }());
+      return;
+    }
     _selection.moveGlyphCaretByArrow(key, extend: extend);
     // Selection already notified this frame; queue without a second notify.
     ensureCaretVisible(notify: false);
   }
+
+  void extendGlyphSelectionTo(int pageIndex, double x, double y) =>
+      _selection.extendGlyphSelectionTo(pageIndex, x, y);
 
   void moveGlyphCaretToLineEdge({required bool toEnd, bool extend = false}) {
     _selection.moveGlyphCaretToLineEdge(toEnd: toEnd, extend: extend);
@@ -847,6 +1038,11 @@ class EditorController extends ChangeNotifier {
 
   /// Single dispatcher for keyboard input — every path must call this.
   Future<void> handleEditorInput(EditorInputEvent event) async {
+    if (hasSelectedDiagram && _isNavigationInput(event)) {
+      final entered = await enterSelectedShapeTextEdit();
+      if (!entered) return;
+      // Fall through so the navigation key still moves within the table/shape.
+    }
     final extend = event.extendsSelection;
     switch (event.kind) {
       case EditorInputKind.character:
@@ -861,14 +1057,17 @@ class EditorController extends ChangeNotifier {
         // Word only changes the list level from the start of the list
         // paragraph; Tab anywhere else in the text inserts a tab character.
         // Shift+Tab promotes from anywhere in the item.
+        // Inside SmartArt / multi-cell shapes, Tab jumps to the next node.
         if (event.shift) {
           if (isInList) {
             demoteListLevel();
-          } else {
+          } else if (!_selection.tryMoveGlyphCaretToAdjacentBlock(direction: -1)) {
             decreaseIndent();
           }
         } else if (isInList && caretOffset == 0) {
           promoteListLevel();
+        } else if (_selection.tryMoveGlyphCaretToAdjacentBlock(direction: 1)) {
+          ensureCaretVisible(notify: false);
         } else {
           await insertGlyphCharacter('\t');
         }
@@ -917,8 +1116,10 @@ class EditorController extends ChangeNotifier {
   /// (the caller already notified, or will notify next).
   void ensureCaretVisible({bool notify = true}) {
     final page = _selection.caretPage;
-    if (page != _view.currentPage) {
+    final pageChanged = page != _view.currentPage;
+    if (pageChanged) {
       _selectPage(page);
+      requestEditorFocus();
     }
     final geom = _selection.caretGeometry;
     if (geom != null) {
@@ -930,7 +1131,16 @@ class EditorController extends ChangeNotifier {
     if (notify) notifyListeners();
   }
 
-  void beginGlyphSelection(int p, double x, double y) => _selection.beginGlyphSelection(p, x, y);
+  void beginGlyphSelection(int p, double x, double y) {
+    // Word exits header/footer edit when the user clicks the body.
+    if (_editZone == DocumentEditZone.header && y > marginTop) {
+      closeHeaderFooterEdit();
+    } else if (_editZone == DocumentEditZone.footer &&
+        y < pageHeight - marginBottom) {
+      closeHeaderFooterEdit();
+    }
+    _selection.beginGlyphSelection(p, x, y);
+  }
   void updateGlyphSelection(int p, double x, double y) => _selection.updateGlyphSelection(p, x, y);
   void endGlyphSelection(int p, double x, double y) => _selection.endGlyphSelection(p, x, y);
   bool isPointInGlyphSelection(int p, Offset pt) => _selection.isPointInGlyphSelection(p, pt);
@@ -948,8 +1158,23 @@ class EditorController extends ChangeNotifier {
   bool get hasSelectedDiagram => _selectedDiagramId != null;
   String? get selectedDiagramId => _selectedDiagramId;
   int? get selectedDiagramPage => _selectedDiagramPage;
-  Rect? get selectedDiagramRect => _selectedDiagramRect;
+  Rect? get selectedDiagramRect => _previewDiagramRect ?? _selectedDiagramRect;
   bool get isImageResizing => _activeImageHandle != null;
+
+  /// Original object bounds while a move preview is active (content drag).
+  Rect? get contentDragSourceRect {
+    if (_previewDiagramRect != null) return _selectedDiagramRect;
+    if (_previewImageRect != null) return _selectedImageRect;
+    return null;
+  }
+
+  /// Pixel offset from [contentDragSourceRect] to the live preview position.
+  Offset get contentDragOffset {
+    final origin = contentDragSourceRect;
+    final preview = _previewDiagramRect ?? _previewImageRect;
+    if (origin == null || preview == null) return Offset.zero;
+    return preview.topLeft - origin.topLeft;
+  }
 
   void selectImage(int pageIndex, ImageBounds bounds) {
     clearDiagramSelection();
@@ -990,45 +1215,190 @@ class EditorController extends ChangeNotifier {
   void selectDiagram(int pageIndex, ShapeBounds bounds) {
     clearImageSelection();
     _selection.collapseToCaret();
+    // Word hides the text caret while object handles are shown. Leaving a
+    // caret inside the shape made Backspace delete the whole object (or no-op)
+    // instead of editing characters.
+    _selection.clearCaretVisual();
+    _shapeTextEditActive = false;
+    _shapeTextEditShapeId = null;
     _selectedDiagramId = bounds.shapeId;
     _selectedDiagramPage = pageIndex;
     _selectedDiagramRect = bounds.rect;
+    _previewDiagramRect = null;
     notifyListeners();
   }
 
   void clearDiagramSelection() {
-    if (_selectedDiagramId == null && _selectedDiagramRect == null) {
+    if (_selectedDiagramId == null &&
+        _selectedDiagramRect == null &&
+        _previewDiagramRect == null) {
       return;
     }
     _selectedDiagramId = null;
     _selectedDiagramPage = null;
     _selectedDiagramRect = null;
+    _previewDiagramRect = null;
     notifyListeners();
   }
 
   /// Selects a chart / SmartArt / shape / table object.
   ///
-  /// First click selects the object. A second click inside an already-selected
-  /// object that contains text (table cell / text box) falls through so the
-  /// caret can be placed for editing. Border clicks always keep object selection.
+  /// Border clicks keep object selection. A second interior click (or a click
+  /// onto another SmartArt node while already typing in the diagram) places
+  /// the caret in the text under the pointer.
   bool trySelectDiagramAt(int pageIndex, Offset point, DisplayListSnapshot snapshot) {
     final hit = hitTestShape(snapshot, point);
     if (hit == null) {
+      _shapeTextEditActive = false;
+      _shapeTextEditShapeId = null;
       clearDiagramSelection();
       return false;
     }
 
     final nearBorder = hit.containsNearBorder(point);
     final alreadySelected = _selectedDiagramId == hit.shapeId;
-    final textHit = _host.engine?.hitTestPage(pageIndex, point.dx, point.dy);
-    // Second click inside an already-selected text-containing object falls
-    // through for caret placement. Border clicks always keep object selection.
-    if (alreadySelected && textHit != null && !nearBorder) {
-      clearDiagramSelection();
-      return false;
+
+    if (!nearBorder && alreadySelected) {
+      unawaited(enterSelectedShapeTextEdit(at: point));
+      return true;
+    }
+
+    // Already typing in this SmartArt/shape: move caret to the clicked node
+    // instead of re-selecting the whole object.
+    if (!nearBorder &&
+        _shapeTextEditActive &&
+        _shapeTextEditShapeId == hit.shapeId) {
+      _selection.beginGlyphSelection(pageIndex, point.dx, point.dy);
+      requestEditorFocus();
+      notifyListeners();
+      return true;
     }
 
     selectDiagram(pageIndex, hit);
+    return true;
+  }
+
+  /// Places the caret inside the selected shape so typing edits its body text.
+  ///
+  /// Returns false when the selection is missing or the shape cannot host text
+  /// (charts, lines). Tables succeed via [ensureShapeTextAsync] (no-op) and
+  /// hit-testing into a cell. When [at] is set (click into a SmartArt node),
+  /// that point wins over the EnsureShapeText seed run.
+  Future<bool> enterSelectedShapeTextEdit({Offset? at}) async {
+    final id = _selectedDiagramId;
+    final page = _selectedDiagramPage;
+    final rect = _selectedDiagramRect;
+    if (id == null || page == null || rect == null || _host.engine == null) {
+      return false;
+    }
+
+    final ensured = await _host.performNativeEdit(
+      () => _host.engine!.ensureShapeTextAsync(id),
+      full: true,
+    );
+    if (!ensured) {
+      return false;
+    }
+    await _host.ensureLayoutReady();
+
+    _shapeTextEditActive = true;
+    _shapeTextEditShapeId = id;
+    clearDiagramSelection();
+
+    if (at != null) {
+      final direct = _host.engine!.hitTestPage(page, at.dx, at.dy);
+      if (direct != null) {
+        _selection.beginGlyphSelection(page, at.dx, at.dy);
+        _selection.syncCaretGeometry();
+        if (_selection.caretRunId == direct.runId) {
+          requestEditorFocusAfterOverlay();
+          notifyListeners();
+          return true;
+        }
+      }
+    }
+
+    final seed = _host.engine!.fetchLastSplitCaret();
+    for (final probe in _shapeTextProbes(rect)) {
+      final hit = _host.engine!.hitTestPage(page, probe.dx, probe.dy);
+      if (hit == null) continue;
+      if (seed != null && hit.runId != seed.runId) continue;
+      _selection.beginGlyphSelection(page, probe.dx, probe.dy);
+      _selection.syncCaretGeometry();
+      if (_selection.caretRunId == hit.runId) {
+        requestEditorFocusAfterOverlay();
+        notifyListeners();
+        return true;
+      }
+    }
+
+    if (seed != null) {
+      final existing = _host.engine!.fetchTextRange(
+            seed.runId,
+            0,
+            seed.runId,
+            1 << 16,
+          ) ??
+          '';
+      _selection.setCaret(seed.runId, existing.length, page: page);
+      _selection.syncCaretGeometry();
+      requestEditorFocusAfterOverlay();
+      notifyListeners();
+      return true;
+    }
+
+    // No seed (e.g. mock): accept any text hit inside the shape frame.
+    for (final probe in _shapeTextProbes(rect)) {
+      final hit = _host.engine!.hitTestPage(page, probe.dx, probe.dy);
+      if (hit == null) continue;
+      _selection.beginGlyphSelection(page, probe.dx, probe.dy);
+      _selection.syncCaretGeometry();
+      if (_selection.defaultRunId() != null) {
+        requestEditorFocus();
+        notifyListeners();
+        return true;
+      }
+    }
+    notifyListeners();
+    return false;
+  }
+
+  List<Offset> _shapeTextProbes(Rect rect) {
+    final probes = <Offset>[
+      Offset(rect.left + 10.0, rect.top + 14.0),
+      Offset(rect.left + 10.0, rect.top + rect.height * 0.45),
+      Offset(rect.left + rect.width * 0.25, rect.top + rect.height * 0.35),
+      Offset(rect.left + rect.width * 0.5, rect.top + rect.height * 0.55),
+      Offset(rect.left + rect.width * 0.22, rect.top + rect.height * 0.55),
+      Offset(rect.left + 8.0, rect.top + 8.0),
+      Offset(rect.center.dx, rect.center.dy),
+    ];
+    for (var i = 1; i <= 4; i++) {
+      for (var j = 1; j <= 4; j++) {
+        probes.add(Offset(
+          rect.left + rect.width * i / 5,
+          rect.top + rect.height * j / 5,
+        ));
+      }
+    }
+    return probes;
+  }
+
+  /// Ensures the caret is inside a table cell before Layout → Table actions.
+  ///
+  /// Object-selected tables clear the text caret; Sort / Sum / Nested need a
+  /// cell run id.
+  Future<bool> _prepareTableCellEdit() async {
+    if (!_host.isConnected) return false;
+    if (hasSelectedDiagram) {
+      final entered = await enterSelectedShapeTextEdit();
+      if (!entered) {
+        _session.setStatusText('Click inside a table cell first');
+        notifyListeners();
+        return false;
+      }
+    }
+    requestEditorFocus();
     return true;
   }
 
@@ -1172,7 +1542,7 @@ class EditorController extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    await _session.applyEngineStyle(
+    final ok = await _session.applyEngineStyle(
       () => _host.engine!.setImageAnchorAsync(
         id,
         rect.left - marginLeft,
@@ -1181,7 +1551,9 @@ class EditorController extends ChangeNotifier {
       'Image moved',
       full: true,
     );
-    _selectedImageRect = rect;
+    if (ok) {
+      _selectedImageRect = rect;
+    }
     _previewImageRect = null;
     notifyListeners();
   }
@@ -1190,6 +1562,62 @@ class EditorController extends ChangeNotifier {
     _moveStartPoint = null;
     _moveStartRect = null;
     _previewImageRect = null;
+    notifyListeners();
+  }
+
+  bool isPointOnSelectedDiagram(Offset point) {
+    final rect = selectedDiagramRect;
+    return rect != null && rect.contains(point);
+  }
+
+  void beginShapeMove(Offset point) {
+    final rect = _selectedDiagramRect;
+    if (rect == null) return;
+    _moveStartPoint = point;
+    _moveStartRect = rect;
+    _previewDiagramRect = rect;
+    notifyListeners();
+  }
+
+  void updateShapeMove(Offset current) {
+    final start = _moveStartPoint;
+    final origin = _moveStartRect;
+    if (start == null || origin == null) return;
+    _previewDiagramRect = origin.shift(current - start);
+    notifyListeners();
+  }
+
+  Future<void> commitShapeMove() async {
+    final id = _selectedDiagramId;
+    final rect = _previewDiagramRect ?? _selectedDiagramRect;
+    _moveStartPoint = null;
+    _moveStartRect = null;
+    if (id == null || rect == null || !_host.isConnected) {
+      _previewDiagramRect = null;
+      notifyListeners();
+      return;
+    }
+    final ok = await _session.applyEngineStyle(
+      () => _host.engine!.setShapeAnchorAsync(
+        id,
+        rect.left - marginLeft,
+        rect.top - marginTop,
+      ),
+      'Object moved',
+      full: true,
+    );
+    _previewDiagramRect = null;
+    if (ok) {
+      await _host.ensureLayoutReady();
+      selectDiagramById(id);
+    }
+    notifyListeners();
+  }
+
+  void cancelShapeMove() {
+    _moveStartPoint = null;
+    _moveStartRect = null;
+    _previewDiagramRect = null;
     notifyListeners();
   }
 
@@ -1243,6 +1671,9 @@ class EditorController extends ChangeNotifier {
     if (id == null || !_host.isConnected || _host.engine == null) return '';
     return _host.engine!.fetchImageAltText(id) ?? '';
   }
+
+  Uint8List? fetchImageAssetBytes(String assetId) =>
+      _host.engine?.fetchImageAssetBytes(assetId);
 
   Future<void> setSelectedImageAltText(String? altText) async {
     final id = _selectedImageId;
@@ -1667,11 +2098,38 @@ class EditorController extends ChangeNotifier {
   // ── Read aloud (F21.S5) ───────────────────────────────────────────────────
   bool get isReadingAloud => _readingAloud || _tts.isSpeaking;
 
-  /// Speaks the current selection via platform TTS. Requires non-empty selection.
+  /// Speaks [text] in paragraph-bounded chunks so platform TTS limits are not hit.
+  Future<void> _speakChunked(String text) async {
+    const maxChunkChars = 3000;
+    final chunks = <String>[];
+    for (final block in text.split(RegExp(r'\n{2,}'))) {
+      final trimmed = block.trim();
+      if (trimmed.isEmpty) continue;
+      if (trimmed.length <= maxChunkChars) {
+        chunks.add(trimmed);
+        continue;
+      }
+      var start = 0;
+      while (start < trimmed.length) {
+        final end = (start + maxChunkChars).clamp(0, trimmed.length);
+        chunks.add(trimmed.substring(start, end));
+        start = end;
+      }
+    }
+    for (final chunk in chunks) {
+      if (!_readingAloud) break;
+      await _tts.speak(chunk);
+    }
+  }
+
+  /// Speaks the current selection, or the whole document when nothing is
+  /// selected — Word's Read Aloud falls back to the document rather than
+  /// requiring a selection first.
   Future<void> readAloudSelection() async {
-    final text = selectedText.trim();
+    final selection = selectedText.trim();
+    final text = selection.isNotEmpty ? selection : documentText.trim();
     if (text.isEmpty) {
-      _session.setStatusText('Select text to read aloud');
+      _session.setStatusText('Nothing to read aloud');
       notifyListeners();
       return;
     }
@@ -1679,10 +2137,12 @@ class EditorController extends ChangeNotifier {
       await stopReadAloud();
     }
     _readingAloud = true;
-    _session.setStatusText('Reading aloud…');
+    _session.setStatusText(
+      selection.isNotEmpty ? 'Reading selection…' : 'Reading document…',
+    );
     notifyListeners();
     try {
-      await _tts.speak(text);
+      await _speakChunked(text);
       if (_readingAloud) {
         _session.setStatusText('Finished reading aloud');
       }
@@ -1696,8 +2156,8 @@ class EditorController extends ChangeNotifier {
 
   Future<void> stopReadAloud() async {
     final wasReading = _readingAloud || _tts.isSpeaking;
-    await _tts.stop();
     _readingAloud = false;
+    await _tts.stop();
     if (wasReading) {
       _session.setStatusText('Read aloud stopped');
     }
@@ -1823,52 +2283,88 @@ class EditorController extends ChangeNotifier {
     return previous.then((_) => body()).whenComplete(released.complete);
   }
 
+  bool _isNavigationInput(EditorInputEvent event) {
+    switch (event.kind) {
+      case EditorInputKind.arrowLeft:
+      case EditorInputKind.arrowRight:
+      case EditorInputKind.arrowUp:
+      case EditorInputKind.arrowDown:
+      case EditorInputKind.wordLeft:
+      case EditorInputKind.wordRight:
+      case EditorInputKind.paragraphUp:
+      case EditorInputKind.paragraphDown:
+      case EditorInputKind.lineStart:
+      case EditorInputKind.lineEnd:
+      case EditorInputKind.documentStart:
+      case EditorInputKind.documentEnd:
+      case EditorInputKind.pageUp:
+      case EditorInputKind.pageDown:
+        return true;
+      default:
+        return false;
+    }
+  }
+
   Future<void> insertGlyphCharacter(String char) async {
     if (char == '\n' || char == '\r') return;
-    if (char != '\t' && char.codeUnitAt(0) < 0x20) return;
-    await _insertGlyphText(char);
+    // Reject C0 controls and DEL (U+007F) — Delete keys must not insert text.
+    final code = char.codeUnitAt(0);
+    if (char != '\t' && (code < 0x20 || code == 0x7f)) return;
+    await _runGlyphMutation(() async {
+      if (_selection.hasGlyphSelection) {
+        await _selection.deleteGlyphSelection();
+      }
+      await _insertGlyphText(char);
+    });
   }
 
   /// Shift+Enter — a manual line break stays inside the paragraph. `\n` in run
   /// text is the engine's line break: layout treats it as a mandatory break and
   /// the DOCX exporter writes it as `<w:br/>`, matching Word.
-  Future<void> insertGlyphLineBreak() => _insertGlyphText('\n');
+  Future<void> insertGlyphLineBreak() => _runGlyphMutation(() async {
+        if (_selection.hasGlyphSelection) {
+          await _selection.deleteGlyphSelection();
+        }
+        await _insertGlyphText('\n');
+      });
 
   Future<void> _insertGlyphText(String char) async {
     if (_host.engine == null) return;
-    await _runGlyphMutation(() async {
-      final runId = _selection.defaultRunId();
-      if (runId == null) return;
-      final offset = _selection.caretOffset;
-      final edit = _host.performNativeEdit(
-        () => _host.engine!.tryInsertTextAsync(runId, offset, char),
-        dirtyPage: _selection.caretPage,
-      );
-      // Logical caret advances before the worker acknowledges so the next
-      // keystroke targets the right offset. Geometry must wait for the edit —
-      // querying the engine earlier still sees the pre-insert layout.
-      final optimistic = offset + char.length;
-      _selection.afterInsert(runId, optimistic);
-      _session.markDocumentDirty();
-      notifyListeners();
-      if (!await edit) {
-        _rollbackCaret(runId, from: optimistic, to: offset);
-      } else if (_selection.caretRunId == runId &&
-          _selection.caretOffset == optimistic) {
-        final pageBefore = _selection.caretPage;
-        final yBefore = _selection.caretGeometry?.y;
-        _selection.syncCaretGeometry();
-        final yAfter = _selection.caretGeometry?.y;
-        final movedVertically = _selection.caretPage != pageBefore ||
-            yAfter == null ||
-            yBefore == null ||
-            (yAfter - yBefore).abs() > 0.5;
-        if (movedVertically) {
-          ensureCaretVisible(notify: false);
-        }
+    if (hasSelectedDiagram) {
+      final entered = await enterSelectedShapeTextEdit();
+      if (!entered) return;
+    }
+    final runId = _selection.defaultRunId();
+    if (runId == null) return;
+    final offset = _selection.caretOffset;
+    // Advance the logical caret synchronously so overlapping keystrokes
+    // capture sequential offsets before any worker await.
+    final optimistic = offset + char.runes.length;
+    _selection.afterInsert(runId, optimistic);
+    _session.markDocumentDirty();
+    notifyListeners();
+    final edit = _host.performNativeEdit(
+      () => _host.engine!.tryInsertTextAsync(runId, offset, char),
+      dirtyPage: _selection.caretPage,
+    );
+    if (!await edit) {
+      _rollbackCaret(runId, from: optimistic, to: offset);
+    } else if (_selection.caretRunId == runId &&
+        _selection.caretOffset == optimistic) {
+      await _host.ensureLayoutReady();
+      final pageBefore = _selection.caretPage;
+      final yBefore = _selection.caretGeometry?.y;
+      _selection.syncCaretGeometry();
+      final yAfter = _selection.caretGeometry?.y;
+      final movedVertically = _selection.caretPage != pageBefore ||
+          yAfter == null ||
+          yBefore == null ||
+          (yAfter - yBefore).abs() > 0.5;
+      if (movedVertically) {
+        ensureCaretVisible(notify: false);
       }
-      notifyListeners();
-    });
+    }
+    notifyListeners();
   }
 
   /// Undoes an optimistic caret advance, but only when nothing has moved the
@@ -1883,9 +2379,18 @@ class EditorController extends ChangeNotifier {
   Future<void> insertGlyphParagraphBreak() async {
     if (_host.engine == null) return;
     await _runGlyphMutation(() async {
+      if (hasSelectedDiagram) {
+        final entered = await enterSelectedShapeTextEdit();
+        if (!entered) return;
+      }
+      if (_selection.hasGlyphSelection) {
+        await _selection.deleteGlyphSelection();
+      }
       final runId = _selection.defaultRunId();
       if (runId == null) return;
-      _selection.syncCaretGeometry();
+      // Capture the logical caret *before* any geometry sync. Geometry refresh
+      // must never rewrite the split offset (stale hit-tests used to snap to 0,
+      // so Enter moved the whole line and looked like a copy).
       final splitOffset = _selection.caretOffset;
       HitTestResult? newCaret;
       // Full refresh: Enter may soft-paginate onto a new page; dirty-page-only
@@ -1913,8 +2418,12 @@ class EditorController extends ChangeNotifier {
     if (_host.engine == null) return;
     await _runGlyphMutation(() async {
       if (hasSelectedObject) {
-        await deleteSelectedObject();
-        return;
+        if (_preferShapeTextDeleteOverObjectDelete()) {
+          clearDiagramSelection();
+        } else {
+          await deleteSelectedObject();
+          return;
+        }
       }
       if (_selection.hasGlyphSelection) {
         await _selection.deleteGlyphSelection();
@@ -1928,6 +2437,7 @@ class EditorController extends ChangeNotifier {
         final edit = _host.performNativeEdit(
           () => _host.engine!.deleteRangeAsync(runId, off - 1, off),
           dirtyPage: _selection.caretPage,
+          full: true,
         );
         final optimistic = off - 1;
         _selection.afterInsert(runId, optimistic);
@@ -1942,6 +2452,17 @@ class EditorController extends ChangeNotifier {
         notifyListeners();
       }
     });
+  }
+
+  /// True when Backspace/Delete should edit shape body text rather than remove
+  /// the selected object (caret still inside the frame).
+  bool _preferShapeTextDeleteOverObjectDelete() {
+    if (!hasSelectedDiagram) return false;
+    final rect = _selectedDiagramRect;
+    final geom = _selection.caretGeometry;
+    if (rect == null || geom == null) return false;
+    final point = Offset(geom.x, geom.y + geom.height * 0.5);
+    return rect.inflate(4).contains(point);
   }
 
   /// Ctrl+Backspace / Ctrl+Delete — remove the adjacent word in one undo step.
@@ -1981,8 +2502,12 @@ class EditorController extends ChangeNotifier {
     if (_host.engine == null) return;
     await _runGlyphMutation(() async {
       if (hasSelectedObject) {
-        await deleteSelectedObject();
-        return;
+        if (_preferShapeTextDeleteOverObjectDelete()) {
+          clearDiagramSelection();
+        } else {
+          await deleteSelectedObject();
+          return;
+        }
       }
       if (_selection.hasGlyphSelection) {
         await _selection.deleteGlyphSelection();
@@ -1995,10 +2520,15 @@ class EditorController extends ChangeNotifier {
       final edit = _host.performNativeEdit(
         () => _host.engine!.deleteRangeAsync(runId, off, off + 1),
         dirtyPage: _selection.caretPage,
+        full: true,
       );
       _selection.collapseToCaret();
       notifyListeners();
-      if (await edit) _session.markDocumentDirty();
+      if (await edit) {
+        _session.markDocumentDirty();
+        _selection.syncCaretGeometry();
+      }
+      notifyListeners();
     });
   }
 
@@ -2463,10 +2993,27 @@ class EditorController extends ChangeNotifier {
         picked.bytes,
         path: picked.path,
       );
+      final currentText = documentText;
       compareWithText(otherText);
+      final diff = compareDocumentLines(currentText, otherText);
+      // Prefer the engine summary when present; keep Dart counts as fallback.
+      _session.setCompareSummary(diff.summary);
+      _session.setStatusText('Compare complete (${diff.summary})');
+      notifyListeners();
+      if (!context.mounted) return;
+      await CompareResultsDialog.show(
+        context,
+        result: diff,
+        otherLabel: picked.name,
+      );
     } catch (e) {
       _session.setStatusText('Compare failed: $e');
       notifyListeners();
+      if (context.mounted) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(content: Text('Compare failed: $e')),
+        );
+      }
     }
   }
   void toggleRestrictEditing() => _session.toggleRestrictEditing();
@@ -2485,7 +3032,49 @@ class EditorController extends ChangeNotifier {
       'Table inserted ($safeRows×$safeCols)',
       full: true,
     );
+    await _placeCaretInLatestShape();
     notifyListeners();
+  }
+
+  /// After insert, put the caret in the new table/shape so typing works
+  /// without an extra click (ribbon buttons otherwise keep keyboard focus).
+  Future<void> _placeCaretInLatestShape() async {
+    if (_host.engine == null) {
+      requestEditorFocus();
+      return;
+    }
+    await _host.ensureLayoutReady();
+    ShapeBounds? latest;
+    var latestPage = _view.currentPage;
+    final pages = <int>[_view.currentPage];
+    for (var page = 0; page < pageCount; page++) {
+      if (page != _view.currentPage) pages.add(page);
+    }
+    for (final page in pages) {
+      final snap = DisplayListSnapshot.fromBytes(_host.displayListForPage(page));
+      if (snap.shapeIds.isEmpty) continue;
+      final index = snap.shapeIds.length - 1;
+      if (snap.shapeRects.length < (index + 1) * 4) continue;
+      latest = ShapeBounds(
+        shapeId: snap.shapeIds[index],
+        index: index,
+        rect: Rect.fromLTWH(
+          snap.shapeRects[index * 4],
+          snap.shapeRects[index * 4 + 1],
+          snap.shapeRects[index * 4 + 2],
+          snap.shapeRects[index * 4 + 3],
+        ),
+      );
+      latestPage = page;
+      break;
+    }
+    if (latest == null) {
+      requestEditorFocusAfterOverlay();
+      return;
+    }
+    selectDiagram(latestPage, latest);
+    await enterSelectedShapeTextEdit();
+    requestEditorFocusAfterOverlay();
   }
 
   static const int shapeRectangle = 0;
@@ -2500,30 +3089,45 @@ class EditorController extends ChangeNotifier {
       _ => 'Rectangle inserted',
     };
     await _session.applyEngineStyle(
-      () => _host.engine!.insertShapeBlockAsync(shapeType),
+      () => _host.engine!.insertShapeBlockAsync(
+        shapeType,
+        caretRunId: _selection.defaultRunId(),
+      ),
       label,
       full: true,
     );
+    if (shapeType != shapeLine) {
+      await _placeCaretInLatestShape();
+    } else {
+      requestEditorFocus();
+    }
     notifyListeners();
   }
 
   Future<void> insertTextBox() async {
     if (!_host.isConnected) return;
     await _session.applyEngineStyle(
-      () => _host.engine!.insertTextBoxAsync(),
+      () => _host.engine!.insertTextBoxAsync(
+        caretRunId: _selection.defaultRunId(),
+      ),
       'Text box inserted',
       full: true,
     );
+    await _placeCaretInLatestShape();
     notifyListeners();
   }
 
   Future<void> insertWordArt(String text) async {
     if (!_host.isConnected) return;
     await _session.applyEngineStyle(
-      () => _host.engine!.insertWordArtAsync(text),
+      () => _host.engine!.insertWordArtAsync(
+        text,
+        caretRunId: _selection.defaultRunId(),
+      ),
       'WordArt inserted',
       full: true,
     );
+    await _placeCaretInLatestShape();
     notifyListeners();
   }
 
@@ -2535,15 +3139,19 @@ class EditorController extends ChangeNotifier {
   Future<void> insertSmartArt({int diagramType = smartArtProcess}) async {
     if (!_host.isConnected) return;
     final label = switch (diagramType) {
-      smartArtHierarchy => 'Hierarchy SmartArt inserted (read-only)',
-      smartArtCycle => 'Cycle SmartArt inserted (read-only)',
-      _ => 'Process SmartArt inserted (read-only)',
+      smartArtHierarchy => 'Hierarchy SmartArt inserted',
+      smartArtCycle => 'Cycle SmartArt inserted',
+      _ => 'Process SmartArt inserted',
     };
     await _session.applyEngineStyle(
-      () => _host.engine!.insertDiagramAsync(diagramType: diagramType),
+      () => _host.engine!.insertDiagramAsync(
+        diagramType: diagramType,
+        caretRunId: _selection.defaultRunId(),
+      ),
       label,
       full: true,
     );
+    await _placeCaretInLatestShape();
     notifyListeners();
   }
 
@@ -2562,7 +3170,10 @@ class EditorController extends ChangeNotifier {
       _ => 'Column chart inserted',
     };
     await _session.applyEngineStyle(
-      () => _host.engine!.insertChartAsync(chartType: chartType),
+      () => _host.engine!.insertChartAsync(
+        chartType: chartType,
+        caretRunId: _selection.defaultRunId(),
+      ),
       label,
       full: true,
     );
@@ -2765,7 +3376,7 @@ class EditorController extends ChangeNotifier {
   }
 
   Future<void> deleteTableRow() async {
-    if (!_host.isConnected) return;
+    if (!await _prepareTableCellEdit()) return;
     await _session.applyEngineStyle(
       () => _host.engine!.deleteTableRowAsync(
         caretRunId: _selection.defaultRunId(),
@@ -2777,7 +3388,7 @@ class EditorController extends ChangeNotifier {
   }
 
   Future<void> deleteTableColumn() async {
-    if (!_host.isConnected) return;
+    if (!await _prepareTableCellEdit()) return;
     await _session.applyEngineStyle(
       () => _host.engine!.deleteTableColumnAsync(
         caretRunId: _selection.defaultRunId(),
@@ -2789,7 +3400,7 @@ class EditorController extends ChangeNotifier {
   }
 
   Future<void> mergeTableCells() async {
-    if (!_host.isConnected) return;
+    if (!await _prepareTableCellEdit()) return;
     await _session.applyEngineStyle(
       () => _host.engine!.mergeTableCellsAsync(
         caretRunId: _selection.defaultRunId(),
@@ -2801,7 +3412,7 @@ class EditorController extends ChangeNotifier {
   }
 
   Future<void> splitTableCell() async {
-    if (!_host.isConnected) return;
+    if (!await _prepareTableCellEdit()) return;
     await _session.applyEngineStyle(
       () => _host.engine!.splitTableCellAsync(
         caretRunId: _selection.defaultRunId(),
@@ -2822,7 +3433,7 @@ class EditorController extends ChangeNotifier {
   }
 
   Future<void> applyTableDesign(TableDesignValues values) async {
-    if (!_host.isConnected) return;
+    if (!await _prepareTableCellEdit()) return;
     final caret = _selection.defaultRunId();
 
     if (values.autofitToWindow) {
@@ -2883,7 +3494,7 @@ class EditorController extends ChangeNotifier {
   }
 
   Future<void> sortTableAscending() async {
-    if (!_host.isConnected) return;
+    if (!await _prepareTableCellEdit()) return;
     await _session.applyEngineStyle(
       () => _host.engine!.sortTableRowsAsync(
         caretRunId: _selection.defaultRunId(),
@@ -2896,7 +3507,7 @@ class EditorController extends ChangeNotifier {
   }
 
   Future<void> sortTableDescending() async {
-    if (!_host.isConnected) return;
+    if (!await _prepareTableCellEdit()) return;
     await _session.applyEngineStyle(
       () => _host.engine!.sortTableRowsAsync(
         caretRunId: _selection.defaultRunId(),
@@ -2909,7 +3520,7 @@ class EditorController extends ChangeNotifier {
   }
 
   Future<void> insertNestedTable() async {
-    if (!_host.isConnected) return;
+    if (!await _prepareTableCellEdit()) return;
     await _session.applyEngineStyle(
       () => _host.engine!.insertNestedTableAsync(
         caretRunId: _selection.defaultRunId(),
@@ -2923,7 +3534,7 @@ class EditorController extends ChangeNotifier {
   }
 
   Future<void> insertTableSumFormula() async {
-    if (!_host.isConnected) return;
+    if (!await _prepareTableCellEdit()) return;
     await _session.applyEngineStyle(
       () => _host.engine!.insertTableSumFieldAsync(
         caretRunId: _selection.defaultRunId(),
@@ -2937,7 +3548,11 @@ class EditorController extends ChangeNotifier {
   Future<void> insertImageBytes(Uint8List bytes, String mimeType) async {
     if (!_host.isConnected) return;
     await _session.applyEngineStyle(
-      () => _host.engine!.insertImageBytesAsync(bytes, mimeType),
+      () => _host.engine!.insertImageBytesAsync(
+        bytes,
+        mimeType,
+        caretRunId: _selection.defaultRunId(),
+      ),
       'Picture inserted',
       full: true,
     );
@@ -3099,10 +3714,17 @@ class EditorController extends ChangeNotifier {
         enabled ? 'Line numbers enabled' : 'Line numbers disabled',
       );
 
-  void setDifferentFirstPage(bool enabled) => _applySectionFormat(
-        PageSetupPresets.withDifferentFirstPage(_currentSectionFormat(), enabled),
-        enabled ? 'Different first page on' : 'Different first page off',
+  void setDifferentFirstPage(bool enabled) {
+    _applySectionFormat(
+      PageSetupPresets.withDifferentFirstPage(_currentSectionFormat(), enabled),
+      enabled ? 'Different first page on' : 'Different first page off',
+    );
+    if (_editZone != DocumentEditZone.body) {
+      unawaited(
+        _activateHeaderFooterEdit(isHeader: _editZone == DocumentEditZone.header),
       );
+    }
+  }
 
   Future<void> setEvenAndOddHeaders(bool enabled) async {
     if (!_host.isConnected) return;
@@ -3111,6 +3733,11 @@ class EditorController extends ChangeNotifier {
       enabled ? 'Odd & even headers on' : 'Odd & even headers off',
       full: true,
     );
+    if (_editZone != DocumentEditZone.body) {
+      await _activateHeaderFooterEdit(
+        isHeader: _editZone == DocumentEditZone.header,
+      );
+    }
     notifyListeners();
   }
 
@@ -3269,15 +3896,25 @@ class EditorController extends ChangeNotifier {
       isHeader: isHeader,
       pageIndex: _selection.caretPage,
     );
-    if (seed == null) return;
+    if (seed == null) {
+      _session.setStatusText(
+        isHeader ? 'Header edit failed' : 'Footer edit failed',
+      );
+      notifyListeners();
+      return;
+    }
+    clearDiagramSelection();
+    clearImageSelection();
     _editZone = isHeader ? DocumentEditZone.header : DocumentEditZone.footer;
     _selection.setCaret(seed, 0, page: _selection.caretPage);
     _selection.syncCaretGeometry();
     _formatting.syncFromCaret();
-    notifyListeners();
+    ensureCaretVisible(notify: false);
+    requestEditorFocus();
   }
 
   void closeHeaderFooterEdit() {
+    if (_editZone == DocumentEditZone.body) return;
     _editZone = DocumentEditZone.body;
     _selection.ensureGlyphCaret();
     _selection.syncCaretGeometry();
@@ -3308,6 +3945,7 @@ class EditorController extends ChangeNotifier {
     );
 
     _moveCaretToHeaderFooterEnd();
+    requestEditorFocus();
     notifyListeners();
   }
 
@@ -3373,7 +4011,7 @@ class EditorController extends ChangeNotifier {
       'Footnote inserted',
       full: true,
     );
-    notifyListeners();
+    requestEditorFocus();
   }
 
   /// Inserts an endnote reference at the caret.
@@ -3390,7 +4028,7 @@ class EditorController extends ChangeNotifier {
       'Endnote inserted',
       full: true,
     );
-    notifyListeners();
+    requestEditorFocus();
   }
 
   /// Inserts a comment anchor at the caret (F17.S3).
@@ -3423,7 +4061,7 @@ class EditorController extends ChangeNotifier {
       'Table of contents inserted',
       full: true,
     );
-    notifyListeners();
+    requestEditorFocus();
   }
 
   /// Materializes a table of figures from caption paragraphs.
@@ -3436,7 +4074,7 @@ class EditorController extends ChangeNotifier {
       'Table of figures inserted',
       full: true,
     );
-    notifyListeners();
+    requestEditorFocus();
   }
 
   /// Inserts a citation for the default sample source (F16.S3).
@@ -3463,7 +4101,7 @@ class EditorController extends ChangeNotifier {
       'Citation inserted',
       full: true,
     );
-    notifyListeners();
+    requestEditorFocus();
   }
 
   /// Materializes a bibliography section from cited sources (F16.S3).
@@ -3471,12 +4109,22 @@ class EditorController extends ChangeNotifier {
     if (!_host.isConnected) return;
     _selection.ensureGlyphCaret();
     final runId = _selection.defaultRunId();
+    // Ensure at least one source exists — Bibliography alone used to fail with
+    // a cryptic "Edit failed" when the document had no citations yet.
     await _session.applyEngineStyle(
-      () => _host.engine!.insertBibliographyAsync(caretRunId: runId),
+      () async {
+        await _host.engine!.addBibliographySourceAsync(
+          key: 'Smith2020',
+          author: 'Smith, John',
+          title: 'Example Research',
+          year: '2020',
+        );
+        return _host.engine!.insertBibliographyAsync(caretRunId: runId);
+      },
       'Bibliography inserted',
       full: true,
     );
-    notifyListeners();
+    requestEditorFocus();
   }
 
   /// Inserts a bookmark anchor at the caret (F16.S4 / F19.S3).
@@ -3497,7 +4145,7 @@ class EditorController extends ChangeNotifier {
       'Bookmark inserted',
       full: true,
     );
-    notifyListeners();
+    requestEditorFocus();
   }
 
   /// Inserts or edits a hyperlink at the caret (F19.S3).
@@ -3812,9 +4460,14 @@ class EditorController extends ChangeNotifier {
   /// Review → Translate: AI-translate the selection into a chosen language.
   Future<void> translateSelection(BuildContext context) async {
     if (!_host.isConnected || _host.engine == null) return;
-    if (!_selection.hasGlyphSelection) {
+    if (!_selection.selectWordAtCaret()) {
       _session.setStatusText('Select text to translate');
       notifyListeners();
+      if (context.mounted) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          const SnackBar(content: Text('Select text to translate')),
+        );
+      }
       return;
     }
     final original = selectedText;
@@ -3890,15 +4543,20 @@ class EditorController extends ChangeNotifier {
   /// Review → Thesaurus: suggest synonyms and optionally replace the word.
   Future<void> openThesaurus(BuildContext context) async {
     if (!_host.isConnected || _host.engine == null) return;
-    if (!_selection.hasGlyphSelection) {
-      _session.setStatusText('Select a word for thesaurus');
+    if (!_selection.selectWordAtCaret()) {
+      _session.setStatusText('Place the caret in a word for thesaurus');
       notifyListeners();
+      if (context.mounted) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          const SnackBar(content: Text('Place the caret in a word for thesaurus')),
+        );
+      }
       return;
     }
     final original = selectedText;
     final lemma = thesaurusLemma(original);
     if (lemma.isEmpty) {
-      _session.setStatusText('Select a word for thesaurus');
+      _session.setStatusText('Place the caret in a word for thesaurus');
       notifyListeners();
       return;
     }
@@ -4198,17 +4856,30 @@ class EditorController extends ChangeNotifier {
 
   /// Opens the Plugins manager dialog (F26.S3).
   Future<void> managePlugins(BuildContext context) async {
+    _syncPluginsFromHost();
     await PluginsDialog.show(
       context,
       registry: _pluginRegistry,
       onChanged: notifyListeners,
+      onInstallSample: (grantEdit) => installSamplePlugin(grantEdit: grantEdit),
+      onInvoke: (id) => _pluginRegistry.invoke(id),
     );
     notifyListeners();
   }
 
+  void _syncPluginsFromHost() {
+    final json = _host.engine?.fetchPluginList();
+    _pluginRegistry.syncFromEngine(json);
+  }
+
   /// Installs the sample edit plugin with optional document.edit grant (F26.S3).
   void installSamplePlugin({bool grantEdit = true}) {
-    _pluginRegistry.installSampleEditPlugin(grantEdit: grantEdit);
+    final native = _host.engine?.installSamplePluginNative(grantEdit: grantEdit);
+    if (native == true) {
+      _syncPluginsFromHost();
+    } else {
+      _pluginRegistry.installSampleEditPlugin(grantEdit: grantEdit);
+    }
     _session.setStatusText(
       grantEdit
           ? 'Sample plugin installed (edit granted)'
@@ -4272,23 +4943,59 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Inserts a REF field pointing at [SectionRef] (F16.S4).
+  /// Inserts a REF field pointing at a document bookmark (F16.S4).
   Future<void> insertCrossReference(BuildContext context) async {
     if (!_host.isConnected) return;
     _selection.ensureGlyphCaret();
     final runId = _selection.defaultRunId();
     if (runId == null) return;
-    const bookmarkName = 'SectionRef';
+
+    var bookmarks = documentBookmarks;
+    if (bookmarks.isEmpty) {
+      // Hard-coded "SectionRef" used to fail silently when no bookmark existed.
+      final name = await BookmarkNameDialog.show(context);
+      if (name == null || name.isEmpty || !context.mounted) return;
+      await _session.applyEngineStyle(
+        () => _host.engine!.insertBookmarkAsync(
+          runId: runId,
+          offset: _selection.caretOffset,
+          name: name,
+        ),
+        'Bookmark inserted',
+        full: true,
+      );
+      bookmarks = documentBookmarks;
+      if (bookmarks.isEmpty) {
+        _session.setStatusText('Bookmark required for cross-reference');
+        notifyListeners();
+        return;
+      }
+    }
+
+    String? bookmarkName;
+    if (bookmarks.length == 1) {
+      bookmarkName = bookmarks.first.name;
+    } else {
+      final preferred = bookmarks.where((b) => b.name == 'SectionRef');
+      if (preferred.isNotEmpty) {
+        bookmarkName = preferred.first.name;
+      } else if (context.mounted) {
+        bookmarkName = await CrossReferenceDialog.show(context, bookmarks);
+      }
+    }
+    if (bookmarkName == null || bookmarkName.isEmpty) return;
+    if (!context.mounted) return;
+
     await _session.applyEngineStyle(
       () => _host.engine!.insertCrossReferenceAsync(
         runId: runId,
         offset: _selection.caretOffset,
-        bookmarkName: bookmarkName,
+        bookmarkName: bookmarkName!,
       ),
       'Cross-reference inserted',
       full: true,
     );
-    notifyListeners();
+    requestEditorFocus();
   }
 
   /// Materializes an index from bookmark targets (F16.S4).
@@ -4296,12 +5003,17 @@ class EditorController extends ChangeNotifier {
     if (!_host.isConnected) return;
     _selection.ensureGlyphCaret();
     final runId = _selection.defaultRunId();
+    if (documentBookmarks.isEmpty) {
+      _session.setStatusText('Insert bookmarks first, then Insert Index');
+      notifyListeners();
+      return;
+    }
     await _session.applyEngineStyle(
       () => _host.engine!.insertIndexAsync(caretRunId: runId),
       'Index inserted',
       full: true,
     );
-    notifyListeners();
+    requestEditorFocus();
   }
 
   // ── Legacy stubs (removed TextField path) ─────────────────────────────────
@@ -4427,6 +5139,7 @@ class EditorController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    HardwareKeyboard.instance.removeHandler(_onDesktopDocumentKey);
     if (identical(NativeEventRouter.instance.onUnsolicitedEvent, _onUnsolicitedEngineEvent)) {
       NativeEventRouter.instance.onUnsolicitedEvent = null;
     }

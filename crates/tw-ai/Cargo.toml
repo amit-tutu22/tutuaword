@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 tw-model = { path = "../tw-model" }
 tw-edit = { path = "../tw-edit" }
+tw-spell = { path = "../tw-spell" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

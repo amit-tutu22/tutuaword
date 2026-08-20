@@ -2,11 +2,12 @@
 
 use crate::capability::{grant_capabilities, Capability};
 use crate::host::SandboxHostState;
-use crate::sandbox::{WasmSandbox, SAMPLE_EDIT_PLUGIN_WAT};
+use crate::sandbox::{invoke_with_engine, WasmSandbox, SAMPLE_EDIT_PLUGIN_WAT};
 use crate::{PluginContext, PluginError, PluginManifest};
 use serde::Serialize;
 use std::collections::HashMap;
 use tw_edit::EditSession;
+use wasmtime::{Engine, Module};
 
 const DEFAULT_FUEL: u64 = 1_000_000;
 
@@ -22,9 +23,37 @@ pub struct PluginInfo {
 
 struct InstalledPlugin {
     manifest: PluginManifest,
-    wasm_bytes: Vec<u8>,
+    module: Module,
     granted: Vec<Capability>,
     enabled: bool,
+}
+
+/// Precompiled invoke payload that can run after releasing the host mutex.
+pub struct PreparedInvoke {
+    module: Module,
+    engine: Engine,
+    context: PluginContext,
+    plugin_id: String,
+}
+
+impl PreparedInvoke {
+    pub fn run(self, session: &mut EditSession) -> Result<i32, PluginError> {
+        let taken = std::mem::replace(session, EditSession::new());
+        let state = SandboxHostState::new(self.context, taken);
+        let (code, state) =
+            invoke_with_engine(&self.engine, &self.module, state, "run", DEFAULT_FUEL)?;
+        *session = state.session;
+        if code < 0 {
+            if let Some(cap) = state.last_denial {
+                return Err(PluginError::CapabilityDenied(cap));
+            }
+            return Err(PluginError::Message(format!(
+                "plugin `{}` returned error code {code}",
+                self.plugin_id
+            )));
+        }
+        Ok(code)
+    }
 }
 
 /// Host-side plugin manager with wasmtime sandbox (F26.S3).
@@ -79,11 +108,12 @@ impl PluginManager {
         }
         let granted = grant_capabilities(&manifest.capabilities, user_granted);
         let id = manifest.id.clone();
+        let module = self.sandbox.compile(&wasm_bytes.into())?;
         self.plugins.insert(
             id,
             InstalledPlugin {
                 manifest,
-                wasm_bytes: wasm_bytes.into(),
+                module,
                 granted,
                 enabled: true,
             },
@@ -139,12 +169,8 @@ impl PluginManager {
         Ok(())
     }
 
-    /// Run the plugin's `run` export against `session` (mutated in place).
-    pub fn invoke(
-        &self,
-        id: &str,
-        session: &mut EditSession,
-    ) -> Result<i32, PluginError> {
+    /// Snapshot module + engine so the caller can drop the host lock before WASM runs.
+    pub fn prepare_invoke(&self, id: &str) -> Result<PreparedInvoke, PluginError> {
         let plugin = self
             .plugins
             .get(id)
@@ -152,26 +178,24 @@ impl PluginManager {
         if !plugin.enabled {
             return Err(PluginError::Message(format!("plugin disabled: {id}")));
         }
-        let context = PluginContext {
-            manifest: plugin.manifest.clone(),
-            granted: plugin.granted.clone(),
-        };
-        // Move session into host state for the sandbox call.
-        let taken = std::mem::replace(session, EditSession::new());
-        let state = SandboxHostState::new(context, taken);
-        let (code, state) =
-            self.sandbox
-                .invoke(&plugin.wasm_bytes, state, "run", DEFAULT_FUEL)?;
-        *session = state.session;
-        if code < 0 {
-            if let Some(cap) = state.last_denial {
-                return Err(PluginError::CapabilityDenied(cap));
-            }
-            return Err(PluginError::Message(format!(
-                "plugin `{id}` returned error code {code}"
-            )));
-        }
-        Ok(code)
+        Ok(PreparedInvoke {
+            module: plugin.module.clone(),
+            engine: self.sandbox.engine(),
+            context: PluginContext {
+                manifest: plugin.manifest.clone(),
+                granted: plugin.granted.clone(),
+            },
+            plugin_id: id.to_string(),
+        })
+    }
+
+    /// Run the plugin's `run` export against `session` (mutated in place).
+    pub fn invoke(
+        &self,
+        id: &str,
+        session: &mut EditSession,
+    ) -> Result<i32, PluginError> {
+        self.prepare_invoke(id)?.run(session)
     }
 }
 

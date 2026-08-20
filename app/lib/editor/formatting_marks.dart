@@ -1,7 +1,7 @@
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:tutuaword/bridge/document_engine.dart';
+import 'package:tutuaword/editor/display_list.dart';
 
 enum FormattingMarkKind { space, tab, paragraph }
 
@@ -19,46 +19,9 @@ class FormattingMark {
   final double height;
 }
 
-/// Collect space / tab / ¶ markers for [pageIndex] using caret geometry.
-List<FormattingMark> collectFormattingMarks({
-  required DocumentEngine engine,
-  required int pageIndex,
-  required String runId,
-  required String text,
-}) {
-  if (text.isEmpty) return const [];
-  final marks = <FormattingMark>[];
-
-  void addAt(int offset, FormattingMarkKind kind) {
-    final caret = engine.caretAtPosition(pageIndex, runId, offset);
-    if (caret == null) return;
-    marks.add(
-      FormattingMark(
-        kind: kind,
-        x: caret.x,
-        y: caret.y,
-        height: caret.height,
-      ),
-    );
-  }
-
-  for (var i = 0; i < text.length; i++) {
-    final ch = text[i];
-    if (ch == ' ') {
-      addAt(i, FormattingMarkKind.space);
-    } else if (ch == '\t') {
-      addAt(i, FormattingMarkKind.tab);
-    } else if (ch == '\n' || ch == '\r') {
-      addAt(i, FormattingMarkKind.paragraph);
-    }
-  }
-
-  // Trailing paragraph mark at end of run (Word always shows ¶ at para end).
-  if (text.isNotEmpty && text[text.length - 1] != '\n') {
-    addAt(text.length, FormattingMarkKind.paragraph);
-  }
-
-  return marks;
+/// Formatting marks embedded in a page [DisplayListSnapshot] (wire v8+).
+List<FormattingMark> formattingMarksFromSnapshot(DisplayListSnapshot snapshot) {
+  return snapshot.formattingMarks;
 }
 
 /// Paints non-printing characters (spaces ·, tabs →, paragraphs ¶).

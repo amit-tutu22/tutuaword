@@ -126,6 +126,7 @@ fn doc_tables_merged() -> Document {
             cell
         }])],
         style_id: None,
+            anchor: None,
     };
     let mut doc = Document::new();
     doc.sections[0].blocks = vec![Block::Table(Table {
@@ -175,6 +176,7 @@ fn doc_tables_merged() -> Document {
             ]),
         ],
         style_id: None,
+            anchor: None,
     })];
     doc
 }

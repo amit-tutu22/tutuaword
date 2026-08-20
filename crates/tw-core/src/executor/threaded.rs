@@ -1,4 +1,4 @@
-use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TryRecvError};
+use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TryRecvError, TrySendError};
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -51,9 +51,11 @@ impl ThreadedExecutor {
 
 impl EngineExecutor for ThreadedExecutor {
     fn submit(&self, command: QueuedCommand) -> bool {
-        // Block until the worker accepts the command (bounded queue backpressure).
-        // Fails only if the worker channel is disconnected (shutdown).
-        self.cmd_tx.send(command).is_ok()
+        match self.cmd_tx.try_send(command) {
+            Ok(()) => true,
+            Err(TrySendError::Full(cmd)) => self.cmd_tx.send(cmd).is_ok(),
+            Err(TrySendError::Disconnected(_)) => false,
+        }
     }
 
     fn try_next_event(&self) -> Option<BridgeEvent> {

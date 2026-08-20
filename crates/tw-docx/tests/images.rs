@@ -26,6 +26,13 @@ fn build_docx(document_body: &str, with_media: bool) -> Vec<u8> {
         )
         .unwrap();
 
+        zip.start_file("[Content_Types].xml", opts).unwrap();
+        write!(
+            zip,
+            r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#
+        )
+        .unwrap();
+
         zip.start_file("word/_rels/document.xml.rels", opts).unwrap();
         write!(
             zip,

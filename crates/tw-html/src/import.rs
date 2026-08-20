@@ -1,4 +1,6 @@
-use tw_model::{Block, CharFormat, Document, Paragraph, Run, StyleSheet};
+use tw_model::{
+    hyperlink_run, Block, CharFormat, Document, Paragraph, Run, RunContent, StyleSheet,
+};
 
 use crate::HtmlError;
 
@@ -19,20 +21,21 @@ pub fn sanitize_html(html: &str) -> String {
 }
 
 fn strip_tag_blocks(html: &str, tag: &str) -> String {
-    let mut result = html.to_string();
     let open = format!("<{tag}");
     let close = format!("</{tag}>");
-    loop {
-        let lower = result.to_ascii_lowercase();
-        let Some(start) = lower.find(&open) else {
-            break;
+    let lower = html.to_ascii_lowercase();
+    let mut result = String::with_capacity(html.len());
+    let mut i = 0;
+    while let Some(rel) = lower[i..].find(&open) {
+        let start = i + rel;
+        result.push_str(&html[i..start]);
+        let Some(rel_close) = lower[start..].find(&close) else {
+            // Unclosed tag — drop the remainder of the block.
+            return result;
         };
-        let Some(rel) = lower[start..].find(&close) else {
-            break;
-        };
-        let end = start + rel + close.len();
-        result.replace_range(start..end, "");
+        i = start + rel_close + close.len();
     }
+    result.push_str(&html[i..]);
     result
 }
 
@@ -42,6 +45,7 @@ fn parse_html(html: &str) -> Document {
     let mut current_runs: Vec<Run> = Vec::new();
     let mut current_format = CharFormat::default();
     let mut heading_level: Option<u8> = None;
+    let mut active_href: Option<String> = None;
 
     let mut chars = html.chars().peekable();
     while let Some(ch) = chars.next() {
@@ -78,7 +82,13 @@ fn parse_html(html: &str) -> Document {
             } else if matches!(name, "td" | "th") && !tag.starts_with('/') {
                 if !current_runs.is_empty() {
                     // Separate table cells with a space when they share a line.
-                    push_decoded_text(&mut current_runs, &current_format, " ");
+                    push_decoded_text(&mut current_runs, &current_format, " ", None);
+                }
+            } else if name == "a" {
+                if tag.starts_with('/') {
+                    active_href = None;
+                } else {
+                    active_href = extract_href_attribute(&tag);
                 }
             } else if matches!(name, "b" | "strong") {
                 current_format.bold = if tag.starts_with('/') {
@@ -96,12 +106,27 @@ fn parse_html(html: &str) -> Document {
         } else if ch == '&' {
             let entity = read_html_entity(&mut chars);
             let decoded = decode_entity(&entity);
-            push_decoded_text(&mut current_runs, &current_format, &decoded);
+            push_decoded_text(&mut current_runs, &current_format, &decoded, active_href.as_deref());
         } else if !ch.is_whitespace() || !current_runs.is_empty() {
-            let mapped = tw_edit_map_char(ch);
-            if let Some(mapped) = mapped {
-                push_decoded_text(&mut current_runs, &current_format, &mapped.to_string());
+            let mut buf = String::new();
+            if let Some(mapped) = tw_edit_map_char(ch) {
+                buf.push(mapped);
             }
+            while let Some(&next) = chars.peek() {
+                if next == '<' || next == '&' {
+                    break;
+                }
+                chars.next();
+                if let Some(mapped) = tw_edit_map_char(next) {
+                    buf.push(mapped);
+                }
+            }
+            push_decoded_text(
+                &mut current_runs,
+                &current_format,
+                &buf,
+                active_href.as_deref(),
+            );
         }
     }
     flush_paragraph(
@@ -120,14 +145,36 @@ fn parse_html(html: &str) -> Document {
     doc
 }
 
-fn push_decoded_text(runs: &mut Vec<Run>, format: &CharFormat, text: &str) {
+fn push_decoded_text(
+    runs: &mut Vec<Run>,
+    format: &CharFormat,
+    text: &str,
+    href: Option<&str>,
+) {
     if text.is_empty() {
+        return;
+    }
+    if let Some(url) = href.filter(|u| !u.is_empty()) {
+        if let Some(last) = runs.last_mut() {
+            if let RunContent::Hyperlink { target, text: existing } = &mut last.content {
+                if target.url == url {
+                    existing.push_str(text);
+                    return;
+                }
+            }
+        }
+        let mut run = hyperlink_run(url, text, None);
+        run.format.merge(format);
+        runs.push(run);
         return;
     }
     let mut run = Run::new_text(text.to_string());
     run.format = format.clone();
     if let Some(last) = runs.last_mut() {
-        if last.format == run.format && last.revision.is_none() {
+        if last.format == run.format
+            && last.revision.is_none()
+            && matches!(last.content, RunContent::Text(_))
+        {
             if let Some(existing) = last.text_mut() {
                 existing.push_str(text);
                 return;
@@ -135,6 +182,22 @@ fn push_decoded_text(runs: &mut Vec<Run>, format: &CharFormat, text: &str) {
         }
     }
     runs.push(run);
+}
+
+fn extract_href_attribute(tag: &str) -> Option<String> {
+    let lower = tag.to_ascii_lowercase();
+    let idx = lower.find("href=")?;
+    let rest = tag[idx + 5..].trim_start();
+    if rest.starts_with('"') {
+        let end = rest[1..].find('"')? + 1;
+        return Some(rest[1..end].to_string());
+    }
+    if rest.starts_with('\'') {
+        let end = rest[1..].find('\'')? + 1;
+        return Some(rest[1..end].to_string());
+    }
+    let end = rest.find(|c: char| c.is_whitespace() || c == '>').unwrap_or(rest.len());
+    Some(rest[..end].to_string())
 }
 
 fn tw_edit_map_char(ch: char) -> Option<char> {
@@ -284,5 +347,24 @@ mod tests {
         assert_ne!(heading.runs[0].format.bold, Some(true));
         let body = doc.sections[0].blocks.last().unwrap().paragraph().unwrap();
         assert!(body.runs.iter().any(|r| r.format.bold == Some(true)));
+    }
+
+    #[test]
+    fn u_f23_s5_html_href_imports_hyperlink_run() {
+        let html = r#"<html><body><p>Visit <a href="https://example.com">Example</a> today.</p></body></html>"#;
+        let doc = import_html(html.as_bytes()).unwrap();
+        let para = doc.sections[0].blocks[0].paragraph().unwrap();
+        assert!(
+            para.runs.iter().any(|r| {
+                matches!(
+                    &r.content,
+                    RunContent::Hyperlink { target, text }
+                        if target.url == "https://example.com" && text == "Example"
+                ) && r.format.underline.is_some()
+                    && r.format.color.is_some()
+            }),
+            "runs: {:?}",
+            para.runs
+        );
     }
 }

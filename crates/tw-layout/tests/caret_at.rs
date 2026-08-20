@@ -80,3 +80,51 @@ fn caret_at_unknown_run_returns_none() {
         "unknown run must not resolve to another run's geometry"
     );
 }
+
+#[test]
+fn caret_at_on_page_zero_is_none_for_wrapped_tail() {
+    let mut doc = Document::new();
+    let text: String = (0..80)
+        .map(|i| format!("Sentence number {i} with enough words to wrap. "))
+        .collect();
+    doc.sections[0].blocks = vec![tw_model::Block::Paragraph(
+        tw_model::Paragraph::with_text(text.clone()),
+    )];
+    let run_id = doc.paragraph_at(0, 0).unwrap().runs[0].id;
+
+    let mut engine = LayoutEngine::new();
+    let layout = engine.layout_document(&doc);
+    assert!(
+        layout.pages.len() > 1,
+        "fixture must wrap to a second page"
+    );
+
+    let page0 = engine.line_map(0).expect("page 0 line map");
+    let page1 = engine.line_map(1).expect("page 1 line map");
+
+    let tail_offset = text.chars().count();
+    let mut page0_end = 0usize;
+    for line in &page0.lines {
+        for (idx, &(_, _, rid, seg_off)) in line.run_map.iter().enumerate() {
+            if rid != run_id {
+                continue;
+            }
+            let seg_chars = line.run_map_chars.get(idx).copied().unwrap_or(0);
+            page0_end = page0_end.max(seg_off + seg_chars);
+        }
+    }
+    assert!(page0_end > 0, "run should appear on page 0");
+
+    assert!(
+        page0_end < tail_offset,
+        "wrapped run should continue beyond page 0"
+    );
+    assert!(
+        page0.caret_at(run_id, page0_end + 1).is_none(),
+        "page 0 must not resolve offsets laid out on page 1"
+    );
+    assert!(
+        page1.caret_at(run_id, tail_offset).is_some(),
+        "page 1 should resolve the document tail"
+    );
+}

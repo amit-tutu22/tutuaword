@@ -106,4 +106,37 @@ impl AiModuleRegistry {
             .filter(|m| m.supports(task))
             .min_by_key(|m| m.size_bytes)
     }
+
+    /// Mark modules available when cloud/local endpoints are configured (F28.S1).
+    pub fn sync_endpoint_availability(
+        &mut self,
+        cloud_available: bool,
+        local_available: bool,
+    ) {
+        use std::path::PathBuf;
+        if local_available {
+            self.install("grammar", PathBuf::from("local"));
+            self.install("writing", PathBuf::from("local"));
+        }
+        if cloud_available {
+            self.install("translation", PathBuf::from("cloud"));
+            self.install("reasoning", PathBuf::from("cloud"));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::task::AiTask;
+
+    #[test]
+    fn sync_marks_modules_when_endpoints_configured() {
+        let mut registry = AiModuleRegistry::with_defaults();
+        assert!(registry.get("grammar").unwrap().installed == false);
+        registry.sync_endpoint_availability(true, true);
+        assert!(registry.get("grammar").unwrap().installed);
+        assert!(registry.get("translation").unwrap().installed);
+        assert!(registry.smallest_for_task(AiTask::Grammar).is_some());
+    }
 }

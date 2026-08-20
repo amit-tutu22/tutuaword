@@ -5,6 +5,17 @@ import 'package:tutuaword/bridge/ollama_host.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  group('Ollama tags health status', () {
+    test('only 2xx counts as healthy', () {
+      expect(isOllamaTagsHealthyStatus(200), isTrue);
+      expect(isOllamaTagsHealthyStatus(204), isTrue);
+      expect(isOllamaTagsHealthyStatus(404), isFalse);
+      expect(isOllamaTagsHealthyStatus(401), isFalse);
+      expect(isOllamaTagsHealthyStatus(500), isFalse);
+      expect(isOllamaTagsHealthyStatus(0), isFalse);
+    });
+  });
+
   group('AI local Ollama auto-start', () {
     test('Always Local ensures Ollama host', () async {
       final host = FakeOllamaHost(

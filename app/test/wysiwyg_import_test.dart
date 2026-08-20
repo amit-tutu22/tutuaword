@@ -84,7 +84,7 @@ void main() {
     });
 
     testWidgets('scrolling down advances the reported page', (tester) async {
-      tester.view.physicalSize = const Size(1400, 1000);
+      tester.view.physicalSize = const Size(800, 400);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
@@ -97,16 +97,22 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(controller.currentPage, 0);
+      expect(controller.pageCount, 4);
 
-      // Each page occupies pageHeight + gap; drag past two of them.
-      final pageExtent = controller.pageHeight + 24;
-      await tester.drag(
-        find.byType(Scrollable).first,
-        Offset(0, -pageExtent * 2),
+      final pageList = find.byKey(const ValueKey('document-page-list'));
+      expect(pageList, findsOneWidget);
+      final scrollable = find.descendant(
+        of: pageList,
+        matching: find.byType(Scrollable),
       );
-      await tester.pumpAndSettle();
+      final position = tester.state<ScrollableState>(scrollable).position;
+      expect(position.maxScrollExtent, greaterThan(0),
+          reason: 'four injected pages must be taller than the viewport');
+      position.jumpTo(position.maxScrollExtent);
+      await tester.pump();
 
-      expect(controller.currentPage, greaterThan(0));
+      expect(controller.currentPage, greaterThan(0),
+          reason: 'scroll offset ${position.pixels} of ${position.maxScrollExtent}');
     });
 
     testWidgets('phone opens at 100% and fits page width without sideways pan',
@@ -193,6 +199,9 @@ Future<void> _expectMobileFitsWidth(
     expect(pageRect.width, lessThanOrEqualTo(viewRect.width + 1.0));
     expect(pageRect.left, greaterThanOrEqualTo(viewRect.left - 1.0));
     expect(pageRect.right, lessThanOrEqualTo(viewRect.right + 1.0));
+    // 100% on mobile fills the canvas width (shrink or grow), leaving only the
+    // inter-page gap as side padding — not a letter-sized island on a tablet.
+    expect(pageRect.width, greaterThan(viewRect.width * 0.85));
   } finally {
     debugDefaultTargetPlatformOverride = null;
     tester.view.reset();

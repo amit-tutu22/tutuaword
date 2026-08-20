@@ -304,6 +304,14 @@ impl DiagramKind {
             Self::Cycle => 2,
         }
     }
+
+    /// Number of editable text nodes in the insert preview.
+    pub fn node_count(self) -> usize {
+        match self {
+            Self::Process | Self::Cycle => 3,
+            Self::Hierarchy => 4,
+        }
+    }
 }
 
 /// Shape kind for floating/inline shapes.
@@ -321,6 +329,21 @@ pub enum ShapeKind {
     /// Chart graphics (F13.S1 — preserve-only).
     Chart,
     Other,
+}
+
+impl ShapeKind {
+    /// Shapes that can host editable body paragraphs (Word "Add Text").
+    pub fn accepts_body_text(self) -> bool {
+        matches!(
+            self,
+            Self::Rectangle
+                | Self::Ellipse
+                | Self::TextBox
+                | Self::WordArt
+                | Self::Diagram
+                | Self::Other
+        )
+    }
 }
 
 /// Fill/stroke styling for editable shapes (F11.S2).
@@ -375,6 +398,10 @@ pub struct ShapeBlock {
     pub id: NodeId,
     pub shape: ShapeData,
     pub wrap: TextWrap,
+    /// Set for floating shapes, which are positioned absolutely and take no
+    /// space in the text flow (same model as [`crate::ImageBlock::anchor`]).
+    #[serde(default)]
+    pub anchor: Option<crate::ImageAnchor>,
     #[serde(default)]
     pub style: ShapeStyle,
     /// Embedded paragraphs for text boxes and WordArt (F11.S3).
@@ -402,6 +429,17 @@ pub struct ShapeBlock {
 
 impl ShapeBlock {
     pub fn new(shape_type: ShapeKind, width: f32, height: f32, style: ShapeStyle) -> Self {
+        // Rectangle / ellipse / text box start with an empty paragraph so the
+        // user can type immediately (Word Add Text). Charts, diagrams, and
+        // lines stay non-textual.
+        let paragraphs = if matches!(
+            shape_type,
+            ShapeKind::Rectangle | ShapeKind::Ellipse | ShapeKind::TextBox | ShapeKind::Other
+        ) {
+            vec![Paragraph::new()]
+        } else {
+            Vec::new()
+        };
         Self {
             id: NodeId::new(),
             shape: ShapeData {
@@ -410,8 +448,9 @@ impl ShapeBlock {
                 height,
             },
             wrap: TextWrap::Inline,
+            anchor: None,
             style,
-            paragraphs: Vec::new(),
+            paragraphs,
             preview_image: None,
             chart_data: None,
             chart_part: None,
@@ -422,9 +461,7 @@ impl ShapeBlock {
     }
 
     pub fn text_box(width: f32, height: f32, style: ShapeStyle) -> Self {
-        let mut shape = Self::new(ShapeKind::TextBox, width, height, style);
-        shape.paragraphs.push(Paragraph::new());
-        shape
+        Self::new(ShapeKind::TextBox, width, height, style)
     }
 
     pub fn word_art(text: impl Into<String>, width: f32, height: f32) -> Self {
@@ -479,6 +516,10 @@ impl ShapeBlock {
     pub fn diagram_with_kind(width: f32, height: f32, kind: DiagramKind) -> Self {
         let mut shape = Self::new(ShapeKind::Diagram, width, height, ShapeStyle::placeholder());
         shape.diagram_kind = kind;
+        // One empty paragraph per preview node so users can type into SmartArt.
+        shape.paragraphs = (0..kind.node_count())
+            .map(|_| Paragraph::new())
+            .collect();
         shape
     }
 

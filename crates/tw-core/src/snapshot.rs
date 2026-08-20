@@ -309,6 +309,14 @@ fn push_block_plain_text(block: &tw_model::Block, lines: &mut Vec<String>) {
                 }
             }
         }
+        tw_model::Block::ShapeBlock(shape) => {
+            for para in &shape.paragraphs {
+                let text = para.visible_text();
+                if !text.is_empty() {
+                    lines.push(text);
+                }
+            }
+        }
         _ => {}
     }
 }

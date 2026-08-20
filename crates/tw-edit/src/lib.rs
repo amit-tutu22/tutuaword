@@ -347,6 +347,10 @@ fn compile_find_pattern(
     use_regex: bool,
     use_wildcards: bool,
 ) -> Result<FindPattern, EditError> {
+    const MAX_FIND_PATTERN_LEN: usize = 512;
+    if find.chars().count() > MAX_FIND_PATTERN_LEN {
+        return Err(EditError::InvalidRegex("find pattern too long".into()));
+    }
     if use_wildcards {
         let converted = wildcard_to_regex(find);
         return Ok(FindPattern::Regex(compile_regex(&converted, match_case)?));
@@ -358,6 +362,9 @@ fn compile_find_pattern(
 }
 
 fn compile_regex(pattern: &str, match_case: bool) -> Result<Regex, EditError> {
+    if pattern.len() > 1024 {
+        return Err(EditError::InvalidRegex("regex pattern too long".into()));
+    }
     let full = if match_case {
         pattern.to_string()
     } else {
@@ -472,6 +479,14 @@ pub fn apply(
             wrap,
             anchor,
         } => block_ops::restore_image_layout(doc, *image_id, *wrap, *anchor)?,
+        Command::SetShapeAnchor { shape_id, anchor } => {
+            block_ops::set_shape_anchor(doc, *shape_id, *anchor)?
+        }
+        Command::RestoreShapeLayout {
+            shape_id,
+            wrap,
+            anchor,
+        } => block_ops::restore_shape_layout(doc, *shape_id, *wrap, *anchor)?,
         Command::SetImageTransform {
             image_id,
             transform,
@@ -531,6 +546,7 @@ pub fn apply(
             shape_id,
             chart_data,
         } => block_ops::set_chart_data(doc, *shape_id, chart_data.clone())?,
+        Command::EnsureShapeText { shape_id } => block_ops::ensure_shape_text(doc, *shape_id)?,
         Command::ApplyParagraphStyle {
             paragraph_id,
             style_name,
@@ -3063,8 +3079,11 @@ fn split_paragraph_at(
                 .and_then(|b| b.paragraph())
                 .and_then(|p| p.runs.first().map(|r| r.id))
                 .ok_or(EditError::ParagraphNotFound(new_para_id))?;
+            // Include the source paragraph so incremental layout rebuilds from
+            // the split point — otherwise empty follow-on paras can keep stale
+            // glyphs from the previous line.
             return Ok(EditResult {
-                affected_nodes: vec![new_run_id, new_para_id],
+                affected_nodes: vec![new_run_id, new_para_id, after_id, run_id],
                 created_node_id: Some(new_para_id),
                 previous_paragraph_id: Some(after_id),
                 split_boundary: Some((run_id, offset)),
@@ -3117,8 +3136,16 @@ fn split_paragraph_at(
         .ok_or(EditError::InvalidRange)?
         .insert(loc.block_index + 1, tw_model::Block::Paragraph(new_para));
 
+    // Always invalidate the paragraph that lost runs (and the boundary run).
+    // Incremental layout that only sees the *new* paragraph leaves the old
+    // line's glyphs on screen — Enter then looks like it "copies" the line.
     Ok(EditResult {
-        affected_nodes: vec![new_run_id, new_para_id],
+        affected_nodes: vec![
+            new_run_id,
+            new_para_id,
+            previous_paragraph_id,
+            run_id,
+        ],
         created_node_id: Some(new_para_id),
         previous_paragraph_id: Some(previous_paragraph_id),
         split_boundary: Some((run_id, offset)),

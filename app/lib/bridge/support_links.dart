@@ -5,6 +5,12 @@ const kSupportEmail = 'amit.blr76@gmail.com';
 
 const kAndroidApplicationId = 'com.manasai.tutuaword';
 
+/// Public privacy policy (GitHub Pages) — use this URL in App Store Connect.
+const kPrivacyPolicyUrl =
+    'https://amit-tutu22.github.io/privacy-policy/tutuaword.html';
+
+Uri get privacyPolicyUri => Uri.parse(kPrivacyPolicyUrl);
+
 /// Numeric Apple App Store ID (App Store Connect → App Information → Apple ID).
 /// Set after the iOS or Mac App Store listing is created.
 const String? kAppleAppStoreId = null;
@@ -50,9 +56,16 @@ Uri get appleAppStoreSearchUri => Uri.https(
 Uri get appleAppStoreFeedbackUri =>
     appleAppStoreReviewUri ?? appleAppStoreSearchUri;
 
-bool get showGooglePlayFeedback => !kIsWeb;
+bool get showGooglePlayFeedback {
+  if (kIsWeb) return false;
+  return defaultTargetPlatform == TargetPlatform.android;
+}
 
-bool get showAppleStoreFeedback => !kIsWeb;
+bool get showAppleStoreFeedback {
+  if (kIsWeb) return false;
+  return defaultTargetPlatform == TargetPlatform.iOS ||
+      defaultTargetPlatform == TargetPlatform.macOS;
+}
 
 String? _encodeQueryParameters(Map<String, String> params) {
   if (params.isEmpty) return null;

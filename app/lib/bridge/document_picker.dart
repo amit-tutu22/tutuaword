@@ -20,6 +20,14 @@ class PickedDocumentFile {
   final String name;
 }
 
+/// Test hook — when set, [pickDocumentFile] delegates here instead of the OS.
+@visibleForTesting
+Future<PickedDocumentFile?> Function({
+  required String dialogTitle,
+  required List<String> allowedExtensions,
+  required FileType type,
+})? debugDocumentPickerOverride;
+
 /// Pick a single file and load its bytes.
 ///
 /// Chrome: [FilePicker]'s default `cancelUploadOnWindowBlur` races the file
@@ -30,6 +38,15 @@ Future<PickedDocumentFile?> pickDocumentFile({
   List<String> allowedExtensions = kSupportedOpenExtensions,
   FileType type = FileType.custom,
 }) async {
+  final override = debugDocumentPickerOverride;
+  if (override != null) {
+    return override(
+      dialogTitle: dialogTitle,
+      allowedExtensions: allowedExtensions,
+      type: type,
+    );
+  }
+
   final result = await FilePicker.pickFiles(
     dialogTitle: dialogTitle,
     type: type,

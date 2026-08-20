@@ -34,6 +34,34 @@ void main() {
     expect(controller.documentText, 'hi');
   });
 
+  testWidgets('WebGlyphTextInput inserts spaces via soft-keyboard field',
+      (tester) async {
+    final controller = EditorController.forTest();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Stack(
+            children: [
+              WebGlyphTextInput(controller: controller),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    controller.ensureGlyphCaret();
+    controller.webGlyphFocusNode.requestFocus();
+    await tester.pump();
+
+    await tester.enterText(find.byType(TextField), 'hi there');
+    await tester.pumpAndSettle();
+
+    expect(controller.documentText, 'hi there');
+  });
+
   testWidgets('enterText hello newline does not duplicate the line', (tester) async {
     final controller = EditorController.forTest();
     addTearDown(controller.dispose);

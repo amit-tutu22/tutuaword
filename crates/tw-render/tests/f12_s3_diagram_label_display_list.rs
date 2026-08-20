@@ -31,6 +31,7 @@ fn u_f12_s3_diagram_shape_selection_batch() {
             height: 216.0,
         },
         wrap: tw_model::TextWrap::Inline,
+        anchor: None,
         style: ShapeStyle::placeholder(),
         paragraphs: Vec::new(),
         preview_image: None,

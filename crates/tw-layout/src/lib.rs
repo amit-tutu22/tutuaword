@@ -1,8 +1,10 @@
+mod diagram;
 mod engine;
 mod line;
 mod tables;
 mod types;
 
+pub use diagram::*;
 pub use engine::*;
 pub use line::*;
 pub use tables::*;

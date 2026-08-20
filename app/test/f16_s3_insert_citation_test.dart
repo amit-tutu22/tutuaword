@@ -39,6 +39,20 @@ void main() {
       expect(controller.sessionController.statusText, contains('Bibliography inserted'));
     });
 
+    testWidgets('I-F16-S3-insert-bibliography-alone-from-references-ribbon', (tester) async {
+      final engine = MockDocumentEngine();
+      final controller = createTestEditorController(engine: engine);
+      addTearDown(controller.dispose);
+
+      await pumpRibbonTab(tester, ReferencesTab(controller: controller));
+      await tester.tap(find.byKey(const Key('insert_bibliography')));
+      await tester.pumpAndSettle();
+      await settleEngineStyle(tester);
+
+      expect(engine.text, contains('Bibliography'));
+      expect(controller.sessionController.statusText, contains('Bibliography inserted'));
+    });
+
     testWidgets('I-F16-S3-insert-citation-direct-api', (tester) async {
       final engine = MockDocumentEngine();
       final controller = createTestEditorController(engine: engine);

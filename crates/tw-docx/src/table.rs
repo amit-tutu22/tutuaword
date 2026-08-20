@@ -71,6 +71,7 @@ pub fn parse_table(tbl_xml: &str, doc: &Document) -> Table {
         },
         rows,
         style_id: None,
+            anchor: None,
     };
     apply_table_style(doc, &mut table, tbl_xml);
     table
@@ -445,6 +446,7 @@ pub fn parse_shape_block(
             height,
         },
         wrap: tw_model::TextWrap::Square,
+        anchor: None,
         style: tw_model::ShapeStyle::placeholder(),
         paragraphs: extract_shape_paragraphs(para_xml),
         preview_image,

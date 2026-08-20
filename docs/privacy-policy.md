@@ -1,7 +1,9 @@
 # Privacy Policy
 
 **Effective date:** August 11, 2026  
-**Last updated:** August 11, 2026
+**Last updated:** August 18, 2026  
+
+**Online copy:** https://amit-tutu22.github.io/privacy-policy/tutuaword.html
 
 ## Who we are
 

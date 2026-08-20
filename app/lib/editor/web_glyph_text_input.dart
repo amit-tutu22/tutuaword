@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
 import 'package:tutuaword/editor/editor_input.dart';
-import 'package:tutuaword/editor/key_event_text.dart';
 import 'package:tutuaword/editor/web_key_listener.dart' show WebKeyListener, createWebKeyListener;
 
 /// Invisible text field overlay for Flutter web / mobile soft keyboard.
@@ -64,19 +63,20 @@ class _WebGlyphTextInputState extends State<WebGlyphTextInput> {
   }
 
   KeyEventResult _handleFocusKey(FocusNode node, KeyEvent event) {
-    if (event is! KeyDownEvent) return KeyEventResult.ignored;
-    final key = event.logicalKey;
-    String? char = printableCharacterFromKeyEvent(event);
-    if (char == null &&
-        (key == LogicalKeyboardKey.space || key.keyLabel.toLowerCase() == 'space')) {
-      char = ' ';
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
     }
-    final input = EditorInputEvent.fromKeyEvent(event, character: char);
+    // Editing keys (Delete/Tab/Enter/arrows/…) take priority over any attached
+    // character payload (e.g. Delete → U+007F) and over focus traversal.
+    final input = EditorInputEvent.fromKeyEvent(event);
     if (input == null) return KeyEventResult.ignored;
     // Printable characters still flow through TextField.onChanged / IME.
     if (input.kind == EditorInputKind.character) {
       return KeyEventResult.ignored;
     }
+    // Prevent the multiline TextField from also committing `\n` / editing the
+    // buffered value for the same keystroke (that re-inserted the line).
+    widget.controller.markWebSpecialKeyConsumed();
     unawaited(widget.controller.handleEditorInput(input));
     return KeyEventResult.handled;
   }
@@ -163,30 +163,66 @@ class _WebGlyphTextInputState extends State<WebGlyphTextInput> {
       top: 0,
       width: 2,
       height: 2,
-      child: TextField(
-        focusNode: widget.controller.webGlyphFocusNode,
-        controller: _textController,
-        // Focus is requested explicitly when the canvas is tapped — autofocus
-        // races with that and can re-attach the iOS keyboard mid-animation.
-        autofocus: false,
-        keyboardType: TextInputType.multiline,
-        textInputAction: TextInputAction.newline,
-        // maxLines > 1 keeps Return as a newline keyplane on iOS instead of
-        // toggling between 216pt / 250pt temporary layouts.
-        minLines: 1,
-        maxLines: 3,
-        style: const TextStyle(fontSize: 16, height: 1, color: Colors.transparent),
-        cursorColor: Colors.transparent,
-        showCursor: false,
-        enableInteractiveSelection: false,
-        decoration: const InputDecoration(
-          border: InputBorder.none,
-          contentPadding: EdgeInsets.zero,
-          isCollapsed: true,
+      // Claim Tab before WidgetsApp's NextFocusIntent when this field has focus.
+      child: Shortcuts(
+        shortcuts: const <ShortcutActivator, Intent>{
+          SingleActivator(LogicalKeyboardKey.tab): _WebInsertTabIntent(),
+          SingleActivator(LogicalKeyboardKey.tab, shift: true): _WebOutdentIntent(),
+        },
+        child: Actions(
+          actions: <Type, Action<Intent>>{
+            _WebInsertTabIntent: CallbackAction<_WebInsertTabIntent>(
+              onInvoke: (_) {
+                unawaited(
+                  widget.controller.handleEditorInput(const EditorInputEvent.tab()),
+                );
+                return null;
+              },
+            ),
+            _WebOutdentIntent: CallbackAction<_WebOutdentIntent>(
+              onInvoke: (_) {
+                unawaited(
+                  widget.controller
+                      .handleEditorInput(const EditorInputEvent.tab(shift: true)),
+                );
+                return null;
+              },
+            ),
+          },
+          child: TextField(
+            focusNode: widget.controller.webGlyphFocusNode,
+            controller: _textController,
+            // Focus is requested explicitly when the canvas is tapped — autofocus
+            // races with that and can re-attach the iOS keyboard mid-animation.
+            autofocus: false,
+            keyboardType: TextInputType.multiline,
+            textInputAction: TextInputAction.newline,
+            // maxLines > 1 keeps Return as a newline keyplane on iOS instead of
+            // toggling between 216pt / 250pt temporary layouts.
+            minLines: 1,
+            maxLines: 3,
+            style: const TextStyle(fontSize: 16, height: 1, color: Colors.transparent),
+            cursorColor: Colors.transparent,
+            showCursor: false,
+            enableInteractiveSelection: false,
+            decoration: const InputDecoration(
+              border: InputBorder.none,
+              contentPadding: EdgeInsets.zero,
+              isCollapsed: true,
+            ),
+            onChanged: _onChanged,
+            onSubmitted: _onSubmitted,
+          ),
         ),
-        onChanged: _onChanged,
-        onSubmitted: _onSubmitted,
       ),
     );
   }
+}
+
+class _WebInsertTabIntent extends Intent {
+  const _WebInsertTabIntent();
+}
+
+class _WebOutdentIntent extends Intent {
+  const _WebOutdentIntent();
 }

@@ -245,16 +245,21 @@ class InsertTab extends StatelessWidget {
                   onPressed: () =>
                       controller.setEvenAndOddHeaders(!controller.evenAndOddHeaders),
                 ),
-                if (controller.canLinkHeaderFooter)
-                  RibbonToggleButton(
-                    key: const Key('header_footer_link_previous'),
-                    icon: Icons.link,
-                    label: 'Link to\nPrevious',
-                    selected: controller.headerFooterLinked,
-                    onPressed: () => controller.setHeaderFooterLinked(
-                      !controller.headerFooterLinked,
-                    ),
-                  ),
+                RibbonToggleButton(
+                  key: const Key('header_footer_link_previous'),
+                  icon: Icons.link,
+                  label: 'Link to\nPrevious',
+                  tooltip: controller.canLinkHeaderFooter
+                      ? 'Link this header/footer to the previous section'
+                      : 'Available while editing a header or footer in section 2+',
+                  selected: controller.canLinkHeaderFooter &&
+                      controller.headerFooterLinked,
+                  onPressed: controller.canLinkHeaderFooter
+                      ? () => controller.setHeaderFooterLinked(
+                            !controller.headerFooterLinked,
+                          )
+                      : null,
+                ),
               ],
             ),
           ),

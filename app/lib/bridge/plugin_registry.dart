@@ -105,6 +105,27 @@ class PluginRegistry {
 
   String listJson() => jsonEncode(list().map((p) => p.toJson()).toList());
 
+  /// Replace registry contents from native host JSON (`tw_plugin_list_json`).
+  void loadFromJson(String json) {
+    _plugins.clear();
+    final decoded = jsonDecode(json);
+    if (decoded is! List) return;
+    for (final item in decoded) {
+      if (item is! Map) continue;
+      final info = PluginManifestInfo.fromJson(Map<String, dynamic>.from(item));
+      if (info.id.isEmpty) continue;
+      _plugins[info.id] = info;
+    }
+    lastError = null;
+  }
+
+  void syncFromEngine(String? json) {
+    if (json == null || json.isEmpty) return;
+    final decoded = jsonDecode(json);
+    if (decoded is! List || decoded.isEmpty) return;
+    loadFromJson(json);
+  }
+
   void install({
     required String id,
     required String name,

@@ -61,13 +61,26 @@ Future<void> expectEventually(
   expect(probe(), matcher);
 }
 
-/// Types [text] the way the on-screen keyboard does: through the hidden field.
+/// Types [text] the way that platform's keyboard does.
+///
+/// On iOS and Android the soft-keyboard overlay is a hidden field and the editor
+/// reads input as the growth of its value, so the new text is appended to
+/// whatever is there; passing [text] alone would shorten the value and be read
+/// as backspaces. Desktop has no such field and takes key events instead.
 Future<void> typeOnKeyboard(
   WidgetTester tester,
   EditorController controller,
   String text,
 ) async {
-  await tester.enterText(find.byType(TextField).first, text);
+  final field = find.byType(TextField);
+  if (field.evaluate().isEmpty) {
+    for (final character in text.split('')) {
+      await tester.sendKeyEvent(LogicalKeyboardKey(character.codeUnitAt(0)));
+    }
+  } else {
+    final existing = tester.widget<TextField>(field.first).controller?.text ?? '';
+    await tester.enterText(field.first, '$existing$text');
+  }
   await tester.pumpAndSettle();
   await controller.ensureLayoutReady();
 }

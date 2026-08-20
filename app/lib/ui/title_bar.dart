@@ -131,6 +131,36 @@ class WordTitleBar extends StatelessWidget {
           onTap: () {
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (context.mounted) {
+                controller.openKeyboardHelpDialog(context);
+              }
+            });
+          },
+          child: const ListTile(
+            dense: true,
+            leading: Icon(Icons.keyboard_alt_outlined, size: 18),
+            title: Text('Keyboard Shortcuts', style: TextStyle(fontSize: 13)),
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        PopupMenuItem<void>(
+          onTap: () {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (context.mounted) {
+                controller.openAboutDialog(context);
+              }
+            });
+          },
+          child: const ListTile(
+            dense: true,
+            leading: Icon(Icons.info_outline, size: 18),
+            title: Text('About Tutuaword', style: TextStyle(fontSize: 13)),
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        PopupMenuItem<void>(
+          onTap: () {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (context.mounted) {
                 controller.openSettingsDialog(context);
               }
             });
@@ -138,7 +168,7 @@ class WordTitleBar extends StatelessWidget {
           child: const ListTile(
             dense: true,
             leading: Icon(Icons.settings_outlined, size: 18),
-            title: Text('Settings', style: TextStyle(fontSize: 13)),
+            title: Text('App Settings', style: TextStyle(fontSize: 13)),
             contentPadding: EdgeInsets.zero,
           ),
         ),
@@ -195,22 +225,95 @@ class WordTitleBar extends StatelessWidget {
               onPressed: () => controller.printDocument(context: context),
             ),
             const Spacer(),
-        _QuickAccessIcon(
-          key: const Key('title_bar_search'),
-          icon: Icons.search,
-          tooltip: 'Find',
-          onPressed: controller.openFindPane,
-        ),
-        _QuickAccessIcon(
-          key: const Key('title_bar_settings'),
-          icon: Icons.settings_outlined,
-          tooltip: 'Settings',
-          onPressed: () => controller.openSettingsDialog(context),
-        ),
-        const SizedBox(width: 12),
+            _QuickAccessIcon(
+              key: const Key('title_bar_search'),
+              icon: Icons.search,
+              tooltip: 'Find',
+              onPressed: controller.openFindPane,
+            ),
+            _HelpSettingsButton(controller: controller),
+            const SizedBox(width: 12),
           ],
         ),
       ],
+    );
+  }
+}
+
+/// Top-right gear: Keyboard Shortcuts, About, and App Settings.
+class _HelpSettingsButton extends StatelessWidget {
+  const _HelpSettingsButton({required this.controller});
+
+  final EditorController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<String>(
+      key: const Key('title_bar_settings'),
+      tooltip: 'Help & settings',
+      padding: EdgeInsets.zero,
+      offset: const Offset(0, 28),
+      onSelected: (value) {
+        switch (value) {
+          case 'keyboard':
+            controller.openKeyboardHelpDialog(context);
+          case 'about':
+            controller.openAboutDialog(context);
+          case 'settings':
+            controller.openSettingsDialog(context);
+        }
+      },
+      itemBuilder: (context) => [
+        const PopupMenuItem(
+          key: Key('title_bar_keyboard_help'),
+          value: 'keyboard',
+          child: ListTile(
+            dense: true,
+            leading: Icon(Icons.keyboard_alt_outlined, size: 18),
+            title: Text('Keyboard Shortcuts', style: TextStyle(fontSize: 13)),
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        const PopupMenuItem(
+          key: Key('title_bar_about'),
+          value: 'about',
+          child: ListTile(
+            dense: true,
+            leading: Icon(Icons.info_outline, size: 18),
+            title: Text('About Tutuaword', style: TextStyle(fontSize: 13)),
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        const PopupMenuItem(
+          key: Key('title_bar_app_settings'),
+          value: 'settings',
+          child: ListTile(
+            dense: true,
+            leading: Icon(Icons.settings_outlined, size: 18),
+            title: Text('App Settings', style: TextStyle(fontSize: 13)),
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+      ],
+      child: const _QuickAccessIconFace(
+        icon: Icons.settings_outlined,
+      ),
+    );
+  }
+}
+
+/// Icon chrome shared by title-bar buttons (hover handled by parent menus).
+class _QuickAccessIconFace extends StatelessWidget {
+  const _QuickAccessIconFace({required this.icon});
+
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 28,
+      height: 28,
+      child: Icon(icon, size: 16, color: WordTheme.titleBarIcon),
     );
   }
 }

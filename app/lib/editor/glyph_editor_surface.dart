@@ -40,7 +40,13 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
   bool _draggingText = false;
   bool _resizingImage = false;
   bool _movingImage = false;
+  bool _movingDiagram = false;
   bool _glyphTap = false;
+  DateTime? _lastShapeTapAt;
+  String? _lastShapeTapId;
+  int _seenEditorFocusEpoch = 0;
+  int _lastRepaintDisplayVersion = -1;
+  int _lastRepaintPageVersion = -1;
 
   void _requestEditorFocus() {
     if (EditorController.usesSoftKeyboardGlyphInput) {
@@ -49,19 +55,25 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
       });
     } else {
       _focusNode.requestFocus();
+      // Ribbon / dialog rebuilds can steal focus in the same frame as a click.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _focusNode.requestFocus();
+      });
     }
   }
 
   @override
   void initState() {
     super.initState();
-    _focusNode = FocusNode();
+    _focusNode = FocusNode(debugLabel: EditorController.glyphEditorFocusLabel);
     widget.controller.addListener(_onControllerUpdate);
     if (widget.pageIndex == 0) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         widget.controller.ensureGlyphCaret();
-        _requestEditorFocus();
+        if (widget.pageIndex == widget.controller.caretPage) {
+          _requestEditorFocus();
+        }
       });
     }
   }
@@ -73,30 +85,59 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
     super.dispose();
   }
 
-  void _onControllerUpdate() => setState(() {});
+  void _onControllerUpdate() {
+    final epoch = widget.controller.editorFocusEpoch;
+    final focusPage = widget.pageIndex == widget.controller.currentPage ||
+        widget.pageIndex == widget.controller.caretPage ||
+        widget.pageIndex == widget.controller.selectedDiagramPage;
+    if (epoch != _seenEditorFocusEpoch && focusPage) {
+      _seenEditorFocusEpoch = epoch;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _requestEditorFocus();
+      });
+    }
+    final displayVersion = widget.controller.displayVersion;
+    final pageVersion = widget.controller.pageDisplayVersion(widget.pageIndex);
+    final caretOnPage = widget.controller.caretPage == widget.pageIndex;
+    final selectionOnPage = widget.controller.selection?.page == widget.pageIndex;
+    final objectOnPage =
+        widget.controller.selectedDiagramPage == widget.pageIndex ||
+            widget.controller.selectedImagePage == widget.pageIndex;
+    if (displayVersion == _lastRepaintDisplayVersion &&
+        pageVersion == _lastRepaintPageVersion &&
+        !caretOnPage &&
+        !selectionOnPage &&
+        !objectOnPage) {
+      return;
+    }
+    _lastRepaintDisplayVersion = displayVersion;
+    _lastRepaintPageVersion = pageVersion;
+    setState(() {});
+  }
 
   KeyEventResult _handleKey(FocusNode node, KeyEvent event) {
-    if (event is! KeyDownEvent) return KeyEventResult.ignored;
-    final key = event.logicalKey;
-    String? char = printableCharacterFromKeyEvent(event);
-    if (char == null &&
-        (key == LogicalKeyboardKey.space || key.keyLabel.toLowerCase() == 'space')) {
-      char = ' ';
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
     }
+
+    // Map editing keys by logical identity first. Platforms often attach a
+    // DEL (U+007F) character to Delete; treating that as text swallows forward
+    // delete. Tab must also win before WidgetsApp's NextFocusIntent.
+    final editing = EditorInputEvent.fromKeyEvent(event);
+    if (editing != null && editing.kind != EditorInputKind.character) {
+      unawaited(widget.controller.handleEditorInput(editing));
+      return KeyEventResult.handled;
+    }
+
+    final char = printableCharacterFromKeyEvent(event);
     if (char != null &&
         char.isNotEmpty &&
         !HardwareKeyboard.instance.isControlPressed &&
-        !HardwareKeyboard.instance.isMetaPressed &&
-        char != '\n' &&
-        char != '\r' &&
-        char != '\t') {
+        !HardwareKeyboard.instance.isMetaPressed) {
       unawaited(widget.controller.handleEditorInput(EditorInputEvent.character(char)));
       return KeyEventResult.handled;
     }
-    final input = EditorInputEvent.fromKeyEvent(event, character: char);
-    if (input == null) return KeyEventResult.ignored;
-    unawaited(widget.controller.handleEditorInput(input));
-    return KeyEventResult.handled;
+    return KeyEventResult.ignored;
   }
 
   void _onPointerDown(PointerDownEvent event) {
@@ -104,6 +145,7 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
     _selecting = false;
     _resizingImage = false;
     _movingImage = false;
+    _movingDiagram = false;
     _glyphTap = false;
 
     final controller = widget.controller;
@@ -124,14 +166,50 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
       }
     }
 
+    final onDiagramPage = controller.selectedDiagramPage == widget.pageIndex;
+    if (onDiagramPage &&
+        controller.hasSelectedDiagram &&
+        controller.isPointOnSelectedDiagram(event.localPosition)) {
+      final id = controller.selectedDiagramId;
+      final now = DateTime.now();
+      final isDoubleTap = id != null &&
+          id == _lastShapeTapId &&
+          _lastShapeTapAt != null &&
+          now.difference(_lastShapeTapAt!) < const Duration(milliseconds: 400);
+      _lastShapeTapAt = now;
+      _lastShapeTapId = id;
+      if (isDoubleTap) {
+        unawaited(controller.enterSelectedShapeTextEdit());
+        _requestEditorFocus();
+        return;
+      }
+      controller.beginShapeMove(event.localPosition);
+      _movingDiagram = true;
+      _requestEditorFocus();
+      return;
+    }
+
     if (controller.trySelectDiagramAt(
       widget.pageIndex,
       event.localPosition,
       widget.snapshot,
     )) {
+      final id = controller.selectedDiagramId;
+      final now = DateTime.now();
+      final isDoubleTap = id != null &&
+          id == _lastShapeTapId &&
+          _lastShapeTapAt != null &&
+          now.difference(_lastShapeTapAt!) < const Duration(milliseconds: 400);
+      _lastShapeTapAt = now;
+      _lastShapeTapId = id;
+      if (isDoubleTap && controller.hasSelectedDiagram) {
+        unawaited(controller.enterSelectedShapeTextEdit());
+      }
       _requestEditorFocus();
       return;
     }
+    _lastShapeTapAt = null;
+    _lastShapeTapId = null;
 
     if (controller.trySelectImageAt(
       widget.pageIndex,
@@ -151,11 +229,19 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
     } else {
       _draggingText = false;
       _glyphTap = true;
-      controller.beginGlyphSelection(
-        widget.pageIndex,
-        event.localPosition.dx,
-        event.localPosition.dy,
-      );
+      if (HardwareKeyboard.instance.isShiftPressed) {
+        controller.extendGlyphSelectionTo(
+          widget.pageIndex,
+          event.localPosition.dx,
+          event.localPosition.dy,
+        );
+      } else {
+        controller.beginGlyphSelection(
+          widget.pageIndex,
+          event.localPosition.dx,
+          event.localPosition.dy,
+        );
+      }
     }
     _requestEditorFocus();
   }
@@ -170,6 +256,10 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
     }
     if (_movingImage) {
       widget.controller.updateImageMove(event.localPosition);
+      return;
+    }
+    if (_movingDiagram) {
+      widget.controller.updateShapeMove(event.localPosition);
       return;
     }
     if (_draggingText) {
@@ -207,6 +297,9 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
     } else if (_movingImage) {
       unawaited(widget.controller.commitImageMove());
       _movingImage = false;
+    } else if (_movingDiagram) {
+      unawaited(widget.controller.commitShapeMove());
+      _movingDiagram = false;
     } else if (_draggingText) {
       widget.controller.completeGlyphDrag(
         widget.pageIndex,
@@ -224,7 +317,11 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
       final allowExternal = EditorController.usesSoftKeyboardGlyphInput ||
           HardwareKeyboard.instance.isControlPressed ||
           HardwareKeyboard.instance.isMetaPressed;
-      unawaited(widget.controller.tryFollowHyperlink(allowExternal: allowExternal));
+      if (!mounted) return;
+      unawaited(widget.controller.tryFollowHyperlink(
+        allowExternal: allowExternal,
+        context: context,
+      ));
     }
     _pointerDown = null;
     _selecting = false;
@@ -234,7 +331,12 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
   @override
   Widget build(BuildContext context) {
     final onCaretPage = widget.pageIndex == widget.controller.caretPage;
-    final caret = onCaretPage ? widget.controller.caretGeometry : null;
+    // Object selection (handles) suppresses the text caret — Word does the same.
+    final caret = onCaretPage &&
+            !widget.controller.hasSelectedDiagram &&
+            !widget.controller.hasSelectedImage
+        ? widget.controller.caretGeometry
+        : null;
     final selection = widget.controller.hasGlyphSelection
         ? widget.controller.selectionRectsForPage(widget.pageIndex)
         : const <GlyphSelectionRect>[];
@@ -322,6 +424,10 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
                 widget.controller.cancelImageMove();
                 _movingImage = false;
               }
+              if (_movingDiagram) {
+                widget.controller.cancelShapeMove();
+                _movingDiagram = false;
+              }
               if (_draggingText) {
                 widget.controller.cancelGlyphDrag();
               }
@@ -338,6 +444,8 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
                     snapshot: widget.snapshot,
                     atlasImage: widget.atlasImage,
                     images: widget.images,
+                    dragSourceRect: widget.controller.contentDragSourceRect,
+                    dragOffset: widget.controller.contentDragOffset,
                   ),
                 ),
                 if (widget.controller.showFormattingMarks)
@@ -347,13 +455,16 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
                       widget.controller.pageHeight,
                     ),
                     painter: FormattingMarksPainter(
-                      marks: widget.controller
-                          .formattingMarksForPage(widget.pageIndex),
+                      marks: widget.controller.formattingMarksForPage(
+                        widget.pageIndex,
+                        widget.snapshot,
+                      ),
                     ),
                   ),
                 if (widget.controller.selectedDiagramPage == widget.pageIndex &&
                     widget.controller.selectedDiagramRect != null)
                   CustomPaint(
+                    key: const Key('shape_selection_handles'),
                     size: Size(widget.controller.pageWidth, widget.controller.pageHeight),
                     painter: _DiagramSelectionPainter(
                       bounds: widget.controller.selectedDiagramRect!,
@@ -374,6 +485,7 @@ class _GlyphEditorSurfaceState extends State<GlyphEditorSurface> {
                   ),
                 if (caret != null && selection.isEmpty && !widget.controller.isGlyphDragActive)
                   Positioned(
+                    key: const Key('glyph_caret'),
                     left: caret.x,
                     top: caret.y - caret.height,
                     child: Container(

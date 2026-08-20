@@ -52,6 +52,7 @@ class MockDocumentEngine implements DocumentEngine {
   final String headerRunId;
   final String footerRunId;
   final Map<String, dynamic> _sectionFormat;
+  HitTestResult? lastSplitCaret;
 
   double get pageWidth => (_sectionFormat['page_width'] as num).toDouble();
   double get pageHeight => (_sectionFormat['page_height'] as num).toDouble();
@@ -164,6 +165,31 @@ class MockDocumentEngine implements DocumentEngine {
   static const _lineHeight = 15.4;
   static const _charWidth = 5.72;
 
+  double get _marginRight => (_sectionFormat['margin_right'] as num).toDouble();
+
+  int get _linesPerPage {
+    final contentHeight = _pageHeight() - _marginTop - _marginBottom;
+    return (contentHeight / _lineHeight).floor().clamp(1, 1000);
+  }
+
+  int get _mockPageCount {
+    final lines = _lineCount(_text);
+    if (lines <= 0) return 1;
+    return ((lines - 1) ~/ _linesPerPage) + 1;
+  }
+
+  int _pageForBodyOffset(int offset) {
+    final (line, _) = _lineColumnForOffset(_text, offset);
+    return line ~/ _linesPerPage;
+  }
+
+  bool _offsetOnPage(int page, String runId, int offset) {
+    if (_stalePages.contains(page)) return false;
+    if (runId == headerRunId || runId == footerRunId) return true;
+    if (runId != defaultRunId) return page == 0;
+    return _pageForBodyOffset(offset) == page;
+  }
+
   String get text => _text;
   String get headerText => resolvedHeaderText(0);
   String get footerText => _footerText;
@@ -198,6 +224,14 @@ class MockDocumentEngine implements DocumentEngine {
   String? get lastImageWrap => _mockImageId == null ? null : _imageWrap;
   double? get lastImageAnchorX => _mockImageId == null ? null : _imageAnchorX;
   double? get lastImageAnchorY => _mockImageId == null ? null : _imageAnchorY;
+  String? _shapeAnchorId;
+  double _shapeAnchorX = 0;
+  double _shapeAnchorY = 0;
+  int _shapeAnchorOriginX = 0;
+  int _shapeAnchorOriginY = 0;
+  String? get lastShapeAnchorId => _shapeAnchorId;
+  double? get lastShapeAnchorX => _shapeAnchorId == null ? null : _shapeAnchorX;
+  double? get lastShapeAnchorY => _shapeAnchorId == null ? null : _shapeAnchorY;
   double? get lastImageRotationDeg => _mockImageId == null ? null : _imageRotationDeg;
   double? get lastImageOpacity => _mockImageId == null ? null : _imageOpacity;
   bool? get lastImageCaptionInserted =>
@@ -241,7 +275,7 @@ class MockDocumentEngine implements DocumentEngine {
         version: _version,
         pageWidth: pageWidth,
         pageHeight: pageHeight,
-        pageCount: 1,
+        pageCount: _mockPageCount,
       );
 
   @override
@@ -433,6 +467,48 @@ class MockDocumentEngine implements DocumentEngine {
     return jsonEncode(issues);
   }
 
+  @override
+  String? fetchRevisions() {
+    if (_trackedRevisions.isEmpty) return '[]';
+    final merged = <String, StringBuffer>{};
+    for (final rev in _trackedRevisions) {
+      merged.putIfAbsent(rev.runId, () => StringBuffer()).write(rev.text);
+    }
+    return jsonEncode(
+      merged.entries.map((entry) {
+        final preview = entry.value.toString();
+        return {
+          'run_id': entry.key,
+          'revision_type': 'insert',
+          'author': 'Author',
+          'preview': preview.length > 80 ? preview.substring(0, 80) : preview,
+        };
+      }).toList(),
+    );
+  }
+
+  final List<Map<String, dynamic>> _installedPlugins = [];
+
+  @override
+  String? fetchPluginList() => jsonEncode(_installedPlugins);
+
+  @override
+  bool installSamplePluginNative({required bool grantEdit}) {
+    _installedPlugins
+      ..clear()
+      ..add({
+        'id': 'com.tutuaword.sample.edit',
+        'name': 'Sample Edit Plugin',
+        'version': '1.0.0',
+        'enabled': true,
+        'capabilities': ['document.read', 'document.edit'],
+        'granted': grantEdit
+            ? ['document.read', 'document.edit']
+            : ['document.read'],
+      });
+    return true;
+  }
+
   int? _mockOutlineLevel() {
     if (_styleName.startsWith('Heading ')) {
       final level = int.tryParse(_styleName.substring('Heading '.length));
@@ -610,7 +686,6 @@ class MockDocumentEngine implements DocumentEngine {
     return true;
   }
 
-  @override
   int openDocumentBytes(Uint8List bytes, {String? path, String? password}) {
     if (_looksPasswordProtected(bytes, path: path)) {
       if (password == null || password.isEmpty) {
@@ -733,6 +808,15 @@ class MockDocumentEngine implements DocumentEngine {
   }
 
   @override
+  Future<int> openDocumentBytesAsync(
+    Uint8List bytes, {
+    String? path,
+    String? password,
+    Duration timeout = const Duration(seconds: 120),
+  }) async =>
+      openDocumentBytes(bytes, path: path, password: password);
+
+  @override
   Uint8List? saveDocumentBytes() {
     final plain = Uint8List.fromList(jsonEncode({
       'body': _text,
@@ -765,6 +849,12 @@ class MockDocumentEngine implements DocumentEngine {
     if (password == null || password.isEmpty) return plain;
     return _mockEncryptedPackage(plain);
   }
+
+  @override
+  Future<Uint8List?> saveDocumentBytesAsync({
+    Duration timeout = const Duration(seconds: 120),
+  }) async =>
+      saveDocumentBytes();
 
   @override
   Uint8List? saveDocumentAsBytes(String formatExtension) => saveDocumentBytes();
@@ -807,14 +897,18 @@ class MockDocumentEngine implements DocumentEngine {
     return Uint8List.fromList(mockPrintPdf);
   }
 
-  CaretGeometry _geomForOffset(String runId, int offset) {
+  CaretGeometry _geomForOffset(String runId, int offset, {int? page}) {
     final buffer = _bufferForRun(runId);
-    final (line, col) = _lineColumnForOffset(buffer, offset);
+    final (globalLine, col) = _lineColumnForOffset(buffer, offset);
     final x = _marginLeft + col * _charWidth;
     final y = switch (runId) {
       _ when runId == headerRunId => _marginTop * 0.25 + _lineHeight,
       _ when runId == footerRunId => _pageHeight() - _marginBottom * 0.75,
-      _ => _marginTop + (line + 1) * _lineHeight,
+      _ => () {
+          final pageIndex = page ?? _pageForBodyOffset(offset);
+          final localLine = globalLine - pageIndex * _linesPerPage;
+          return _marginTop + (localLine + 1) * _lineHeight;
+        }(),
     };
     return CaretGeometry(x: x, y: y, height: _lineHeight);
   }
@@ -846,12 +940,41 @@ class MockDocumentEngine implements DocumentEngine {
     return lineStart + colClamped;
   }
 
+  int _lineIndexFromYOnPage(int page, double y) {
+    final local = ((y - _marginTop - _lineHeight) / _lineHeight).round();
+    if (local < 0) return -1;
+    return page * _linesPerPage + local;
+  }
+
   int _lineIndexFromY(double y) {
     final raw = ((y - _marginTop - _lineHeight) / _lineHeight).round();
     return raw.clamp(0, _lineCount(_text) - 1);
   }
 
   double _pageHeight() => (_sectionFormat['page_height'] as num).toDouble();
+
+  HitTestResult? _bodyHitOnPage(int page, double x, double y) {
+    if (_text.isEmpty) {
+      return page == 0
+          ? HitTestResult(runId: defaultRunId, charOffset: 0)
+          : null;
+    }
+    final lineCount = _lineCount(_text);
+    final pageStart = page * _linesPerPage;
+    final lastLineOnPage =
+        (pageStart + _linesPerPage - 1).clamp(pageStart, lineCount - 1);
+    var line = _lineIndexFromYOnPage(page, y);
+    if (line < pageStart) {
+      line = pageStart;
+    } else if (line > lastLineOnPage) {
+      final offset = _offsetForLineColumn(_text, lastLineOnPage, 1 << 20)
+          .clamp(0, _text.length);
+      return HitTestResult(runId: defaultRunId, charOffset: offset);
+    }
+    final col = ((x - _marginLeft) / _charWidth).round();
+    final offset = _offsetForLineColumn(_text, line, col).clamp(0, _text.length);
+    return HitTestResult(runId: defaultRunId, charOffset: offset);
+  }
 
   @override
   HitTestResult? hitTestPage(int page, double x, double y) {
@@ -864,10 +987,8 @@ class MockDocumentEngine implements DocumentEngine {
       final offset = ((x - _marginLeft) / _charWidth).round().clamp(0, _footerText.length);
       return HitTestResult(runId: footerRunId, charOffset: offset);
     }
-    final line = _lineIndexFromY(y);
-    final col = ((x - _marginLeft) / _charWidth).round();
-    final offset = _offsetForLineColumn(_text, line, col).clamp(0, _text.length);
-    return HitTestResult(runId: defaultRunId, charOffset: offset);
+    if (page * _linesPerPage >= _lineCount(_text)) return null;
+    return _bodyHitOnPage(page, x, y);
   }
 
   @override
@@ -875,24 +996,33 @@ class MockDocumentEngine implements DocumentEngine {
       HitTestResult(runId: defaultRunId, charOffset: _text.length);
 
   @override
+  HitTestResult? fetchLastSplitCaret() => lastSplitCaret;
+
+  @override
   CaretGeometry? caretGeometryAt(int page, double x, double y) {
+    if (_stalePages.contains(page)) return null;
     if (_headerReady && y <= _marginTop) {
       final offset = ((x - _marginLeft) / _charWidth).round().clamp(0, _headerText.length);
-      return _geomForOffset(headerRunId, offset);
+      return _geomForOffset(headerRunId, offset, page: page);
     }
     if (_footerReady && y >= _pageHeight() - _marginBottom) {
       final offset = ((x - _marginLeft) / _charWidth).round().clamp(0, _footerText.length);
-      return _geomForOffset(footerRunId, offset);
+      return _geomForOffset(footerRunId, offset, page: page);
     }
-    final line = _lineIndexFromY(y);
-    final col = ((x - _marginLeft) / _charWidth).round();
-    final offset = _offsetForLineColumn(_text, line, col).clamp(0, _text.length);
-    return _geomForOffset(defaultRunId, offset);
+    final hit = _bodyHitOnPage(page, x, y);
+    if (hit == null) return null;
+    return _geomForOffset(defaultRunId, hit.charOffset, page: page);
   }
 
   @override
-  CaretGeometry? caretAtPosition(int page, String runId, int charOffset) =>
-      _geomForOffset(runId, charOffset.clamp(0, _bufferForRun(runId).length));
+  CaretGeometry? caretAtPosition(int page, String runId, int charOffset) {
+    if (!_offsetOnPage(page, runId, charOffset)) return null;
+    return _geomForOffset(
+      runId,
+      charOffset.clamp(0, _bufferForRun(runId).length),
+      page: page,
+    );
+  }
 
   @override
   List<GlyphSelectionRect> selectionRectsOnPage(
@@ -1052,11 +1182,15 @@ class MockDocumentEngine implements DocumentEngine {
     final buffer = _bufferForRun(runId);
     final off = offset.clamp(0, buffer.length);
     _insert(runId, off, '\n');
+    // Same-run mock buffer: land after the newline, except a split at 0 which
+    // stays at the start of the (now empty) first paragraph — matching how
+    // overlapping Enter on a blank document is tested.
     final caretOffset = off == 0 ? 0 : off + 1;
-    return HitTestResult(
+    lastSplitCaret = HitTestResult(
       runId: runId,
       charOffset: caretOffset.clamp(0, _bufferForRun(runId).length),
     );
+    return lastSplitCaret;
   }
 
   void _mergeCharFormatPatch(Map<String, dynamic> patch) {
@@ -1970,6 +2104,9 @@ class MockDocumentEngine implements DocumentEngine {
   }
 
   @override
+  Uint8List? fetchImageAssetBytes(String assetId) => null;
+
+  @override
   String? latestOfficeMathRunId() => _mockOfficeMathRunId;
 
   /// Last OMML applied via equation insert/edit (tests).
@@ -2230,16 +2367,17 @@ class MockDocumentEngine implements DocumentEngine {
   Future<bool> insertImageBlockAsync(double width, double height) async => true;
 
   @override
-  Future<bool> insertShapeBlockAsync(int shapeType) async => true;
+  Future<bool> insertShapeBlockAsync(int shapeType, {String? caretRunId}) async =>
+      true;
 
   @override
-  Future<bool> insertTextBoxAsync() async => true;
+  Future<bool> insertTextBoxAsync({String? caretRunId}) async => true;
 
   @override
-  Future<bool> insertWordArtAsync(String text) async => true;
+  Future<bool> insertWordArtAsync(String text, {String? caretRunId}) async => true;
 
   @override
-  Future<bool> insertDiagramAsync({int diagramType = 0}) async {
+  Future<bool> insertDiagramAsync({int diagramType = 0, String? caretRunId}) async {
     _pushUndo();
     _lastDiagramType = diagramType;
     _version++;
@@ -2247,7 +2385,7 @@ class MockDocumentEngine implements DocumentEngine {
   }
 
   @override
-  Future<bool> insertChartAsync({int chartType = 0}) async {
+  Future<bool> insertChartAsync({int chartType = 0, String? caretRunId}) async {
     _pushUndo();
     _mockChartId = '00000000-0000-0000-0000-00000000c001';
     final kind = switch (chartType) {
@@ -2279,6 +2417,14 @@ class MockDocumentEngine implements DocumentEngine {
     if (_mockChartId == null || shapeId != _mockChartId) return false;
     _pushUndo();
     _chartData = Map<String, dynamic>.from(chartData);
+    _version++;
+    return true;
+  }
+
+  @override
+  Future<bool> ensureShapeTextAsync(String shapeId) async {
+    // Mock shapes are text-capable by default for editor UX tests.
+    if (shapeId.isEmpty) return false;
     _version++;
     return true;
   }
@@ -2330,7 +2476,11 @@ class MockDocumentEngine implements DocumentEngine {
   }
 
   @override
-  Future<bool> insertImageBytesAsync(Uint8List bytes, String mimeType) async {
+  Future<bool> insertImageBytesAsync(
+    Uint8List bytes,
+    String mimeType, {
+    String? caretRunId,
+  }) async {
     _pushUndo();
     _insertedImageBytes = Uint8List.fromList(bytes);
     _insertedImageMime = mimeType;
@@ -2394,6 +2544,24 @@ class MockDocumentEngine implements DocumentEngine {
     if (_imageWrap == 'inline') {
       _imageWrap = 'square';
     }
+    _version++;
+    return true;
+  }
+
+  @override
+  Future<bool> setShapeAnchorAsync(
+    String shapeId,
+    double x,
+    double y, {
+    int originX = 0,
+    int originY = 0,
+  }) async {
+    _pushUndo();
+    _shapeAnchorId = shapeId;
+    _shapeAnchorX = x;
+    _shapeAnchorY = y;
+    _shapeAnchorOriginX = originX;
+    _shapeAnchorOriginY = originY;
     _version++;
     return true;
   }
@@ -2738,27 +2906,29 @@ class MockDocumentEngine implements DocumentEngine {
 
   @override
   bool acceptRevisionAtCaret({String? caretRunId}) {
-    final idx = _revisionIndexAt(caretRunId);
-    if (idx == null) return false;
-    _trackedRevisions.removeAt(idx);
-    return true;
+    if (caretRunId == null) return false;
+    final before = _trackedRevisions.length;
+    _trackedRevisions.removeWhere((rev) => rev.runId == caretRunId);
+    return _trackedRevisions.length < before;
   }
 
   @override
   bool rejectRevisionAtCaret({String? caretRunId}) {
-    final idx = _revisionIndexAt(caretRunId);
-    if (idx == null) return false;
-    final rev = _trackedRevisions.removeAt(idx);
-    final buffer = _bufferForRun(rev.runId);
-    final lo = rev.offset.clamp(0, buffer.length);
-    final hi = (rev.offset + rev.text.length).clamp(0, buffer.length);
-    if (lo < hi) {
-      _setBufferForRun(
-        rev.runId,
-        buffer.substring(0, lo) + buffer.substring(hi),
-      );
-      _version++;
+    if (caretRunId == null) return false;
+    final toReject = _trackedRevisions.where((rev) => rev.runId == caretRunId).toList();
+    if (toReject.isEmpty) return false;
+    _trackedRevisions.removeWhere((rev) => rev.runId == caretRunId);
+    final buffer = _bufferForRun(caretRunId);
+    var text = buffer;
+    for (final rev in toReject.reversed) {
+      final lo = rev.offset.clamp(0, text.length);
+      final hi = (rev.offset + rev.text.length).clamp(0, text.length);
+      if (lo < hi) {
+        text = text.substring(0, lo) + text.substring(hi);
+      }
     }
+    _setBufferForRun(caretRunId, text);
+    _version++;
     return true;
   }
 

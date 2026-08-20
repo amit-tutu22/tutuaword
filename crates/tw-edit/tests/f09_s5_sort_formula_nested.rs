@@ -122,6 +122,20 @@ fn u_f09_s5_insert_table_sum_field() {
 }
 
 #[test]
+fn u_f09_s5_ensure_shape_text_accepts_table() {
+    let mut session = EditSession::new();
+    let (table_id, _) = table_with_data(&mut session);
+
+    let result = session
+        .apply(Command::EnsureShapeText {
+            shape_id: table_id,
+        })
+        .expect("tables must accept EnsureShapeText so cell edit can start");
+    assert_eq!(result.affected_nodes, vec![table_id]);
+    assert!(result.seed_run_id.is_some());
+}
+
+#[test]
 fn u_f09_s5_insert_nested_table() {
     let mut session = EditSession::new();
     let (table_id, _) = table_with_data(&mut session);

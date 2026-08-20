@@ -41,6 +41,12 @@ abstract class DocumentEngine {
   String? fetchSemanticTree();
   /// JSON accessibility checker issues (F21.S4).
   String? fetchAccessibilityIssues();
+  /// JSON tracked-change list (F17.S2 Changes pane).
+  String? fetchRevisions();
+  /// JSON installed plugin list (F26.S3).
+  String? fetchPluginList();
+  /// Install built-in sample WASM plugin via native host.
+  bool installSamplePluginNative({required bool grantEdit});
   /// JSON Document Inspector findings (F22.S3).
   String? fetchDocumentInspect();
   /// Remove selected Document Inspector categories (F22.S3).
@@ -80,6 +86,9 @@ abstract class DocumentEngine {
   /// Empty string means the image has no alt text set.
   String? fetchImageAltText(String imageId);
 
+  /// Encoded image bytes for a stable [assetId] (wire v9 image-by-id FFI).
+  Uint8List? fetchImageAssetBytes(String assetId);
+
   /// True while [page] awaits background reflow, so [hitTestPage] on it returns
   /// null for "not laid out yet" rather than "nothing here".
   bool isPageStale(int page);
@@ -87,7 +96,16 @@ abstract class DocumentEngine {
 
   bool newDocument();
   int openDocumentBytes(Uint8List bytes, {String? path, String? password});
+  Future<int> openDocumentBytesAsync(
+    Uint8List bytes, {
+    String? path,
+    String? password,
+    Duration timeout = const Duration(seconds: 120),
+  });
   Uint8List? saveDocumentBytes();
+  Future<Uint8List?> saveDocumentBytesAsync({
+    Duration timeout = const Duration(seconds: 120),
+  });
   Uint8List? saveDocumentAsBytes(String formatExtension);
   Uint8List? exportPdfBytes();
 
@@ -101,6 +119,8 @@ abstract class DocumentEngine {
 
   HitTestResult? hitTestPage(int page, double x, double y);
   HitTestResult? fetchDocumentTailHit(int page);
+  /// Caret after a paragraph split, or the seed run from EnsureShapeText.
+  HitTestResult? fetchLastSplitCaret();
   CaretGeometry? caretGeometryAt(int page, double x, double y);
   CaretGeometry? caretAtPosition(int page, String runId, int charOffset);
   List<GlyphSelectionRect> selectionRectsOnPage(
@@ -323,13 +343,19 @@ abstract class DocumentEngine {
   });
   Future<bool> insertTableSumFieldAsync({String? caretRunId});
   Future<bool> insertImageBlockAsync(double width, double height);
-  Future<bool> insertImageBytesAsync(Uint8List bytes, String mimeType);
-  Future<bool> insertShapeBlockAsync(int shapeType);
-  Future<bool> insertTextBoxAsync();
-  Future<bool> insertWordArtAsync(String text);
-  Future<bool> insertDiagramAsync({int diagramType = 0});
-  Future<bool> insertChartAsync({int chartType = 0});
+  Future<bool> insertImageBytesAsync(
+    Uint8List bytes,
+    String mimeType, {
+    String? caretRunId,
+  });
+  Future<bool> insertShapeBlockAsync(int shapeType, {String? caretRunId});
+  Future<bool> insertTextBoxAsync({String? caretRunId});
+  Future<bool> insertWordArtAsync(String text, {String? caretRunId});
+  Future<bool> insertDiagramAsync({int diagramType = 0, String? caretRunId});
+  Future<bool> insertChartAsync({int chartType = 0, String? caretRunId});
   Future<bool> setChartDataAsync(String shapeId, Map<String, dynamic> chartData);
+  /// Ensure a text-capable shape has an editable body paragraph (Add Text).
+  Future<bool> ensureShapeTextAsync(String shapeId);
   Future<bool> insertOfficeMathAsync({
     required String runId,
     required int offset,
@@ -350,6 +376,13 @@ abstract class DocumentEngine {
   Future<bool> setImageWrapAsync(String imageId, int wrap);
   Future<bool> setImageAnchorAsync(
     String imageId,
+    double x,
+    double y, {
+    int originX = 0,
+    int originY = 0,
+  });
+  Future<bool> setShapeAnchorAsync(
+    String shapeId,
     double x,
     double y, {
     int originX = 0,

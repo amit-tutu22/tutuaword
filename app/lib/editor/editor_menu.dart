@@ -26,6 +26,7 @@ class EditorMenuBar extends StatelessWidget {
     required this.onInspectDocument,
     required this.onDigitalSignatures,
     required this.onShowAbout,
+    required this.onShowKeyboardHelp,
     required this.onShowSettings,
     required this.child,
   });
@@ -47,6 +48,7 @@ class EditorMenuBar extends StatelessWidget {
   final VoidCallback onInspectDocument;
   final VoidCallback onDigitalSignatures;
   final VoidCallback onShowAbout;
+  final VoidCallback onShowKeyboardHelp;
   final VoidCallback onShowSettings;
   final Widget child;
 
@@ -328,6 +330,11 @@ class EditorMenuBar extends StatelessWidget {
     return PlatformMenu(
       label: 'Help',
       menus: [
+        PlatformMenuItem(
+          label: 'Keyboard Shortcuts',
+          shortcut: const SingleActivator(LogicalKeyboardKey.f1),
+          onSelected: onShowKeyboardHelp,
+        ),
         PlatformMenuItem(
           label: 'About Tutuaword',
           onSelected: onShowAbout,

@@ -62,6 +62,10 @@ class FfiDocumentEngine implements DocumentEngine {
   String? fetchImageAltText(String imageId) => _inner.fetchImageAltText(imageId);
 
   @override
+  Uint8List? fetchImageAssetBytes(String assetId) =>
+      _inner.fetchImageAssetBytes(assetId);
+
+  @override
   String? fetchDocumentOutline() => _inner.fetchDocumentOutline();
 
   @override
@@ -79,6 +83,15 @@ class FfiDocumentEngine implements DocumentEngine {
 
   @override
   String? fetchAccessibilityIssues() => _inner.fetchAccessibilityIssues();
+  @override
+  String? fetchRevisions() => _inner.fetchRevisions();
+
+  @override
+  String? fetchPluginList() => _inner.fetchPluginList();
+
+  @override
+  bool installSamplePluginNative({required bool grantEdit}) =>
+      _inner.installSamplePluginNative(grantEdit: grantEdit);
 
   @override
   String? fetchDocumentInspect() => _inner.fetchDocumentInspect();
@@ -140,7 +153,27 @@ class FfiDocumentEngine implements DocumentEngine {
       _inner.openDocumentBytes(bytes, path: path, password: password);
 
   @override
+  Future<int> openDocumentBytesAsync(
+    Uint8List bytes, {
+    String? path,
+    String? password,
+    Duration timeout = const Duration(seconds: 120),
+  }) =>
+      _inner.openDocumentBytesAsync(
+        bytes,
+        path: path,
+        password: password,
+        timeout: timeout,
+      );
+
+  @override
   Uint8List? saveDocumentBytes() => _inner.saveDocumentBytes();
+
+  @override
+  Future<Uint8List?> saveDocumentBytesAsync({
+    Duration timeout = const Duration(seconds: 120),
+  }) =>
+      _inner.saveDocumentBytesAsync(timeout: timeout);
 
   @override
   Uint8List? saveDocumentAsBytes(String formatExtension) =>
@@ -163,6 +196,9 @@ class FfiDocumentEngine implements DocumentEngine {
   @override
   HitTestResult? fetchDocumentTailHit(int page) =>
       _inner.fetchDocumentTailHit(page);
+
+  @override
+  HitTestResult? fetchLastSplitCaret() => _inner.fetchLastSplitCaret();
 
   @override
   CaretGeometry? caretGeometryAt(int page, double x, double y) =>
@@ -668,26 +704,32 @@ class FfiDocumentEngine implements DocumentEngine {
       _inner.insertImageBlockAsync(width, height);
 
   @override
-  Future<bool> insertShapeBlockAsync(int shapeType) =>
-      _inner.insertShapeBlockAsync(shapeType);
+  Future<bool> insertShapeBlockAsync(int shapeType, {String? caretRunId}) =>
+      _inner.insertShapeBlockAsync(shapeType, caretRunId: caretRunId);
 
   @override
-  Future<bool> insertTextBoxAsync() => _inner.insertTextBoxAsync();
+  Future<bool> insertTextBoxAsync({String? caretRunId}) =>
+      _inner.insertTextBoxAsync(caretRunId: caretRunId);
 
   @override
-  Future<bool> insertWordArtAsync(String text) => _inner.insertWordArtAsync(text);
+  Future<bool> insertWordArtAsync(String text, {String? caretRunId}) =>
+      _inner.insertWordArtAsync(text, caretRunId: caretRunId);
 
   @override
-  Future<bool> insertDiagramAsync({int diagramType = 0}) =>
-      _inner.insertDiagramAsync(diagramType: diagramType);
+  Future<bool> insertDiagramAsync({int diagramType = 0, String? caretRunId}) =>
+      _inner.insertDiagramAsync(diagramType: diagramType, caretRunId: caretRunId);
 
   @override
-  Future<bool> insertChartAsync({int chartType = 0}) =>
-      _inner.insertChartAsync(chartType: chartType);
+  Future<bool> insertChartAsync({int chartType = 0, String? caretRunId}) =>
+      _inner.insertChartAsync(chartType: chartType, caretRunId: caretRunId);
 
   @override
   Future<bool> setChartDataAsync(String shapeId, Map<String, dynamic> chartData) =>
       _inner.setChartDataAsync(shapeId, chartData);
+
+  @override
+  Future<bool> ensureShapeTextAsync(String shapeId) =>
+      _inner.ensureShapeTextAsync(shapeId);
 
   @override
   Future<bool> insertOfficeMathAsync({
@@ -713,8 +755,12 @@ class FfiDocumentEngine implements DocumentEngine {
       _inner.deleteBlockAsync(blockId);
 
   @override
-  Future<bool> insertImageBytesAsync(Uint8List bytes, String mimeType) =>
-      _inner.insertImageBytesAsync(bytes, mimeType);
+  Future<bool> insertImageBytesAsync(
+    Uint8List bytes,
+    String mimeType, {
+    String? caretRunId,
+  }) =>
+      _inner.insertImageBytesAsync(bytes, mimeType, caretRunId: caretRunId);
 
   @override
   Future<bool> setImageSizeAsync(String imageId, double width, double height) =>
@@ -742,6 +788,22 @@ class FfiDocumentEngine implements DocumentEngine {
   }) =>
       _inner.setImageAnchorAsync(
         imageId,
+        x,
+        y,
+        originX: originX,
+        originY: originY,
+      );
+
+  @override
+  Future<bool> setShapeAnchorAsync(
+    String shapeId,
+    double x,
+    double y, {
+    int originX = 0,
+    int originY = 0,
+  }) =>
+      _inner.setShapeAnchorAsync(
+        shapeId,
         x,
         y,
         originX: originX,

@@ -37,8 +37,20 @@ void main() {
       await typeTextDirect(controller, 'No selection yet');
       await controller.readAloudSelection();
 
+      // No selection → read the whole document rather than refusing.
+      expect(tts.spoken, ['No selection yet']);
+      expect(controller.sessionController.statusText, contains('Finished'));
+    });
+
+    testWidgets('I-F21-S5-read-aloud-empty-document', (tester) async {
+      final tts = RecordingTextToSpeech();
+      final controller = createTestEditorController(textToSpeech: tts);
+      addTearDown(controller.dispose);
+
+      await controller.readAloudSelection();
+
       expect(tts.spoken, isEmpty);
-      expect(controller.sessionController.statusText, contains('Select text'));
+      expect(controller.sessionController.statusText, contains('Nothing to read'));
     });
 
     testWidgets('I-F21-S5-read-aloud-stop', (tester) async {

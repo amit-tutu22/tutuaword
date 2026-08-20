@@ -34,6 +34,11 @@ fn u_f11_s2_insert_rectangle_shape() {
     assert_eq!(shape.shape.height, 60.0);
     assert_eq!(shape.style.fill, Some(0xFFD0E8FF));
     assert_eq!(shape.style.stroke, Some(0xFF000000));
+    assert_eq!(
+        shape.paragraphs.len(),
+        1,
+        "rectangle must host a body paragraph for typing"
+    );
 
     session.undo().unwrap();
     assert_eq!(session.document.sections[0].blocks.len(), 1);
@@ -69,4 +74,13 @@ fn u_f11_s2_insert_line_and_ellipse() {
     assert!(matches!(blocks[2], Block::ShapeBlock(_)));
     assert_eq!(blocks[1].shape().unwrap().shape.shape_type, ShapeKind::Line);
     assert_eq!(blocks[2].shape().unwrap().shape.shape_type, ShapeKind::Ellipse);
+    assert!(
+        blocks[1].shape().unwrap().paragraphs.is_empty(),
+        "lines are not text hosts"
+    );
+    assert_eq!(
+        blocks[2].shape().unwrap().paragraphs.len(),
+        1,
+        "ellipse must host a body paragraph for typing"
+    );
 }

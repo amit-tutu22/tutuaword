@@ -12,6 +12,15 @@ use tw_layout::FontFaceSpec;
 use tw_model::{CharFormat, FieldType, NodeId, ParaFormat, SectionFormat};
 use uuid::Uuid;
 
+#[cfg(not(target_os = "ios"))]
+mod plugin_host;
+#[cfg(target_os = "ios")]
+#[path = "plugin_host_stub.rs"]
+mod plugin_host;
+mod transfer_stats;
+
+use transfer_stats::{record_arc_clone, record_arc_move, record_atlas_transfer, record_page_dl_transfer};
+
 static SESSION: Mutex<Option<Session>> = Mutex::new(None);
 static LAST_ERROR: StdMutex<Option<String>> = StdMutex::new(None);
 
@@ -284,6 +293,9 @@ fn take_async_result(
 
 /// Transfer buffer ownership to the Dart caller. Must be released with `tw_free_buffer`.
 fn transfer_bytes_to_caller(bytes: Vec<u8>, out_ptr: *mut *const u8, out_len: *mut usize) {
+    if out_ptr.is_null() || out_len.is_null() {
+        return;
+    }
     let len = bytes.len();
     let boxed = bytes.into_boxed_slice();
     let ptr = Box::into_raw(boxed) as *mut u8;
@@ -291,6 +303,51 @@ fn transfer_bytes_to_caller(bytes: Vec<u8>, out_ptr: *mut *const u8, out_len: *m
         *out_ptr = ptr;
         *out_len = len;
     }
+}
+
+/// Move an [`Arc<Vec<u8>>`] into caller ownership when uniquely held; clone once
+/// when the snapshot is still shared (unchanged multipage pages).
+fn transfer_arc_bytes_to_caller(
+    bytes: Arc<Vec<u8>>,
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+    page_wire: Option<&[u8]>,
+) {
+    let cloned_len = match Arc::try_unwrap(bytes) {
+        Ok(vec) => {
+            record_arc_move();
+            let len = vec.len();
+            transfer_bytes_to_caller(vec, out_ptr, out_len);
+            len
+        }
+        Err(arc) => {
+            record_arc_clone();
+            let len = arc.len();
+            transfer_bytes_to_caller(arc.as_ref().clone(), out_ptr, out_len);
+            len
+        }
+    };
+    if let Some(wire) = page_wire {
+        record_page_dl_transfer(cloned_len, wire);
+    }
+}
+
+fn transfer_arc_atlas_to_caller(bytes: Arc<Vec<u8>>, out_ptr: *mut *const u8, out_len: *mut usize) {
+    let cloned_len = match Arc::try_unwrap(bytes) {
+        Ok(vec) => {
+            record_arc_move();
+            let len = vec.len();
+            transfer_bytes_to_caller(vec, out_ptr, out_len);
+            len
+        }
+        Err(arc) => {
+            record_arc_clone();
+            let len = arc.len();
+            transfer_bytes_to_caller(arc.as_ref().clone(), out_ptr, out_len);
+            len
+        }
+    };
+    record_atlas_transfer(cloned_len);
 }
 
 fn with_session<F: FnOnce(&Session) -> i32>(f: F) -> i32 {
@@ -639,7 +696,12 @@ pub extern "C" fn tw_get_page_display_list(
             return -2;
         };
 
-        transfer_bytes_to_caller(snapshot.bytes.as_ref().clone(), out_ptr, out_len);
+        transfer_arc_bytes_to_caller(
+            Arc::clone(&snapshot.bytes),
+            out_ptr,
+            out_len,
+            Some(snapshot.bytes.as_ref()),
+        );
         unsafe {
             if !out_version.is_null() {
                 *out_version = snapshot.version;
@@ -686,12 +748,94 @@ pub extern "C" fn tw_get_atlas(
         };
 
         let (generation, width, height, bytes) = session.atlas_resource();
-        transfer_bytes_to_caller(bytes.as_ref().clone(), out_ptr, out_len);
+        transfer_arc_atlas_to_caller(bytes, out_ptr, out_len);
         unsafe {
             *out_generation = generation;
             *out_width = width;
             *out_height = height;
         }
+        0
+    })
+}
+
+/// Reset FFI transfer-size counters (B0 measurement hook).
+#[no_mangle]
+pub extern "C" fn tw_reset_transfer_stats() {
+    transfer_stats::reset();
+}
+
+/// Read FFI transfer-size counters written by page/atlas getters.
+///
+/// Any null out pointer is skipped. Returns 0 on success, -1 when no session.
+#[no_mangle]
+pub extern "C" fn tw_get_transfer_stats(
+    out_page_dl_bytes: *mut u64,
+    out_atlas_bytes: *mut u64,
+    out_image_payload_bytes: *mut u64,
+    out_page_dl_transfers: *mut u64,
+    out_atlas_transfers: *mut u64,
+    out_arc_moves: *mut u64,
+    out_arc_clones: *mut u64,
+) -> i32 {
+    guard_ffi(|| {
+        let (
+            page_dl_bytes,
+            atlas_bytes,
+            image_payload_bytes,
+            page_dl_transfers,
+            atlas_transfers,
+            arc_moves,
+            arc_clones,
+        ) = transfer_stats::snapshot();
+        unsafe {
+            if !out_page_dl_bytes.is_null() {
+                *out_page_dl_bytes = page_dl_bytes;
+            }
+            if !out_atlas_bytes.is_null() {
+                *out_atlas_bytes = atlas_bytes;
+            }
+            if !out_image_payload_bytes.is_null() {
+                *out_image_payload_bytes = image_payload_bytes;
+            }
+            if !out_page_dl_transfers.is_null() {
+                *out_page_dl_transfers = page_dl_transfers;
+            }
+            if !out_atlas_transfers.is_null() {
+                *out_atlas_transfers = atlas_transfers;
+            }
+            if !out_arc_moves.is_null() {
+                *out_arc_moves = arc_moves;
+            }
+            if !out_arc_clones.is_null() {
+                *out_arc_clones = arc_clones;
+            }
+        }
+        0
+    })
+}
+
+/// Fetch encoded image bytes for [asset_id] (B3 image-by-id FFI).
+///
+/// 0 = ready, -1 = no session, -2 = null pointer, -3 = unknown asset id.
+#[no_mangle]
+pub extern "C" fn tw_get_image_asset(
+    asset_id_ptr: *const c_char,
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    guard_ffi(|| {
+        if asset_id_ptr.is_null() || out_ptr.is_null() || out_len.is_null() {
+            return -2;
+        }
+        let asset_id = unsafe { CStr::from_ptr(asset_id_ptr) }.to_string_lossy();
+        let guard = SESSION.lock();
+        let Some(session) = guard.as_ref() else {
+            return -1;
+        };
+        let Some(bytes) = session.image_asset_bytes(&asset_id) else {
+            return -3;
+        };
+        transfer_arc_bytes_to_caller(bytes, out_ptr, out_len, None);
         0
     })
 }
@@ -2164,6 +2308,25 @@ pub extern "C" fn tw_get_accessibility_issues(
     })
 }
 
+/// JSON tracked-change list for the Changes pane (F17.S2).
+#[no_mangle]
+pub extern "C" fn tw_get_revisions(
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    guard_ffi(|| {
+        let guard = SESSION.lock();
+        let Some(session) = guard.as_ref() else {
+            return -1;
+        };
+        let Some(json) = session.revisions_json() else {
+            return -3;
+        };
+        transfer_bytes_to_caller(json.into_bytes(), out_ptr, out_len);
+        0
+    })
+}
+
 /// JSON Document Inspector findings (F22.S3).
 #[no_mangle]
 pub extern "C" fn tw_get_document_inspect(
@@ -2695,7 +2858,10 @@ pub extern "C" fn tw_insert_image(width: f32, height: f32) -> i32 {
 }
 
 #[no_mangle]
-pub extern "C" fn tw_insert_shape(shape_type: i32) -> i32 {
+pub extern "C" fn tw_insert_shape(
+    shape_type: i32,
+    caret_run_id: *const std::os::raw::c_char,
+) -> i32 {
     guard_ffi(|| {
         with_session(|session| {
             let kind = match shape_type {
@@ -2706,7 +2872,8 @@ pub extern "C" fn tw_insert_shape(shape_type: i32) -> i32 {
                 4 => tw_model::ShapeKind::WordArt,
                 _ => tw_model::ShapeKind::Other,
             };
-            let Some(request_id) = session.insert_shape(kind) else {
+            let caret = parse_node_id(caret_run_id);
+            let Some(request_id) = session.insert_shape_at(caret, kind) else {
                 return -4;
             };
             finish_edit_enqueue(request_id)
@@ -2715,10 +2882,11 @@ pub extern "C" fn tw_insert_shape(shape_type: i32) -> i32 {
 }
 
 #[no_mangle]
-pub extern "C" fn tw_insert_text_box() -> i32 {
+pub extern "C" fn tw_insert_text_box(caret_run_id: *const std::os::raw::c_char) -> i32 {
     guard_ffi(|| {
         with_session(|session| {
-            let Some(request_id) = session.insert_text_box() else {
+            let caret = parse_node_id(caret_run_id);
+            let Some(request_id) = session.insert_text_box_at(caret) else {
                 return -4;
             };
             finish_edit_enqueue(request_id)
@@ -2727,7 +2895,10 @@ pub extern "C" fn tw_insert_text_box() -> i32 {
 }
 
 #[no_mangle]
-pub extern "C" fn tw_insert_word_art(text_ptr: *const c_char) -> i32 {
+pub extern "C" fn tw_insert_word_art(
+    text_ptr: *const c_char,
+    caret_run_id: *const std::os::raw::c_char,
+) -> i32 {
     guard_ffi(|| {
         with_session(|session| {
             if text_ptr.is_null() {
@@ -2736,7 +2907,8 @@ pub extern "C" fn tw_insert_word_art(text_ptr: *const c_char) -> i32 {
             let text = unsafe { CStr::from_ptr(text_ptr) }
                 .to_string_lossy()
                 .into_owned();
-            let Some(request_id) = session.insert_word_art(text) else {
+            let caret = parse_node_id(caret_run_id);
+            let Some(request_id) = session.insert_word_art_at(caret, text) else {
                 return -4;
             };
             finish_edit_enqueue(request_id)
@@ -2745,11 +2917,15 @@ pub extern "C" fn tw_insert_word_art(text_ptr: *const c_char) -> i32 {
 }
 
 #[no_mangle]
-pub extern "C" fn tw_insert_diagram(diagram_type: i32) -> i32 {
+pub extern "C" fn tw_insert_diagram(
+    diagram_type: i32,
+    caret_run_id: *const std::os::raw::c_char,
+) -> i32 {
     guard_ffi(|| {
         with_session(|session| {
             let kind = tw_model::DiagramKind::from_i32(diagram_type);
-            let Some(request_id) = session.insert_diagram_with_kind(kind) else {
+            let caret = parse_node_id(caret_run_id);
+            let Some(request_id) = session.insert_diagram_with_kind_at(caret, kind) else {
                 return -4;
             };
             finish_edit_enqueue(request_id)
@@ -2758,11 +2934,15 @@ pub extern "C" fn tw_insert_diagram(diagram_type: i32) -> i32 {
 }
 
 #[no_mangle]
-pub extern "C" fn tw_insert_chart(chart_type: i32) -> i32 {
+pub extern "C" fn tw_insert_chart(
+    chart_type: i32,
+    caret_run_id: *const std::os::raw::c_char,
+) -> i32 {
     guard_ffi(|| {
         with_session(|session| {
             let kind = tw_model::ChartKind::from_i32(chart_type);
-            let Some(request_id) = session.insert_chart_with_kind(kind) else {
+            let caret = parse_node_id(caret_run_id);
+            let Some(request_id) = session.insert_chart_with_kind_at(caret, kind) else {
                 return -4;
             };
             finish_edit_enqueue(request_id)
@@ -3015,6 +3195,7 @@ pub extern "C" fn tw_insert_image_bytes(
     data: *const u8,
     len: usize,
     mime_ptr: *const c_char,
+    caret_run_id: *const std::os::raw::c_char,
 ) -> i32 {
     guard_ffi(|| {
         with_session(|session| {
@@ -3029,7 +3210,8 @@ pub extern "C" fn tw_insert_image_bytes(
                     .to_string_lossy()
                     .into_owned()
             };
-            let Some(request_id) = session.insert_image_bytes(bytes, mime) else {
+            let caret = parse_node_id(caret_run_id);
+            let Some(request_id) = session.insert_image_bytes_at(bytes, mime, caret) else {
                 return -4;
             };
             finish_edit_enqueue(request_id)
@@ -3184,6 +3366,41 @@ pub extern "C" fn tw_set_image_anchor(
             };
             let Some(request_id) = session.set_image_anchor(
                 image_id,
+                tw_model::ImageAnchor {
+                    x,
+                    y,
+                    origin_x,
+                    origin_y,
+                },
+            ) else {
+                return -4;
+            };
+            finish_edit_enqueue(request_id)
+        })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn tw_set_shape_anchor(
+    shape_id_ptr: *const c_char,
+    x: f32,
+    y: f32,
+    origin_x: u8,
+    origin_y: u8,
+) -> i32 {
+    guard_ffi(|| {
+        with_session(|session| {
+            let Some(shape_id) = parse_node_id(shape_id_ptr) else {
+                return -2;
+            };
+            let Some(origin_x) = anchor_origin_from_u8(origin_x) else {
+                return -3;
+            };
+            let Some(origin_y) = anchor_origin_from_u8(origin_y) else {
+                return -3;
+            };
+            let Some(request_id) = session.set_shape_anchor(
+                shape_id,
                 tw_model::ImageAnchor {
                     x,
                     y,
@@ -3820,35 +4037,23 @@ pub extern "C" fn tw_caret_geometry(
         let Some(session) = guard.as_ref() else {
             return -1;
         };
-        let Some(result) = session.hit_test(page, x, y) else {
+        if session.is_page_stale(page) {
+            return HIT_PAGE_STALE;
+        }
+        let Some((cx, cy, height)) = session.caret_geometry(page, x, y) else {
             return -2;
         };
-        if let Some((cx, cy, height)) = session.caret_geometry(page, x, y) {
-            unsafe {
-                if !out_x.is_null() {
-                    *out_x = cx;
-                }
-                if !out_y.is_null() {
-                    *out_y = cy;
-                }
-                if !out_height.is_null() {
-                    *out_height = height;
-                }
+        unsafe {
+            if !out_x.is_null() {
+                *out_x = cx;
             }
-        } else {
-            unsafe {
-                if !out_x.is_null() {
-                    *out_x = x;
-                }
-                if !out_y.is_null() {
-                    *out_y = y;
-                }
-                if !out_height.is_null() {
-                    *out_height = 16.0;
-                }
+            if !out_y.is_null() {
+                *out_y = cy;
+            }
+            if !out_height.is_null() {
+                *out_height = height;
             }
         }
-        let _ = result;
         0
     })
 }
@@ -3867,6 +4072,9 @@ pub extern "C" fn tw_caret_at_position(
         let Some(session) = guard.as_ref() else {
             return -1;
         };
+        if session.is_page_stale(page) {
+            return HIT_PAGE_STALE;
+        }
         if run_id_ptr.is_null() {
             return -2;
         }
@@ -4013,6 +4221,36 @@ pub extern "C" fn tw_wait_for_layout() -> i32 {
                 _ => 0,
             }
         })
+    })
+}
+
+/// JSON list of installed plugins (F26.S3).
+#[no_mangle]
+pub extern "C" fn tw_plugin_list_json(
+    out_ptr: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    guard_ffi(|| match plugin_host::plugin_list_json() {
+        Ok(json) => {
+            transfer_bytes_to_caller(json.into_bytes(), out_ptr, out_len);
+            0
+        }
+        Err(e) => {
+            record_last_error(e.to_string());
+            -2
+        }
+    })
+}
+
+/// Install the built-in sample edit plugin (`grant_edit`: 0 = read-only).
+#[no_mangle]
+pub extern "C" fn tw_plugin_install_sample(grant_edit: i32) -> i32 {
+    guard_ffi(|| match plugin_host::plugin_install_sample(grant_edit != 0) {
+        Ok(()) => 0,
+        Err(e) => {
+            record_last_error(e.to_string());
+            -2
+        }
     })
 }
 

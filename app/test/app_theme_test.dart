@@ -98,7 +98,7 @@ void main() {
     expect(ribbon.color?.toARGB32(), chrome.ribbonSurface.toARGB32());
   });
 
-  testWidgets('View tab opens settings', (tester) async {
+  testWidgets('title bar settings menu opens App Settings', (tester) async {
     final controller = createTestEditorController();
     addTearDown(controller.dispose);
     final root = Directory.systemTemp.createTempSync('tutuaword_view_settings_');
@@ -112,18 +112,26 @@ void main() {
         theme: buildTutuawordTheme(theme.accent),
         home: MediaQuery(
           data: const MediaQueryData(size: Size(1400, 900)),
-          child: Scaffold(body: WordRibbon(controller: controller)),
+          child: Scaffold(
+            body: Column(
+              children: [
+                WordTitleBar(controller: controller),
+                Expanded(child: WordRibbon(controller: controller)),
+              ],
+            ),
+          ),
         ),
       ),
     );
 
-    await tester.tap(find.byKey(const Key('ribbon_tab_view')));
+    expect(find.byKey(const Key('view_settings')), findsNothing);
+    await tester.tap(find.byKey(const Key('title_bar_settings')));
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('view_settings')), findsOneWidget);
+    expect(find.byKey(const Key('title_bar_app_settings')), findsOneWidget);
+    expect(find.byKey(const Key('title_bar_keyboard_help')), findsOneWidget);
+    expect(find.byKey(const Key('title_bar_about')), findsOneWidget);
 
-    await tester.ensureVisible(find.byKey(const Key('view_settings')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('view_settings')));
+    await tester.tap(find.byKey(const Key('title_bar_app_settings')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('app_settings_dialog')), findsOneWidget);
   });

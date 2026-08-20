@@ -16,12 +16,14 @@ class SelectionController extends ChangeNotifier {
   SelectionController({
     required EngineHost host,
     required this.onSelectionChanged,
+    this.onCaretPageChanged,
     this.lineHeightFactor = 1.4,
     this.avgCharWidthFactor = 0.52,
   }) : _host = host;
 
   final EngineHost _host;
   final SelectionChangedCallback onSelectionChanged;
+  final void Function(int page)? onCaretPageChanged;
   final double lineHeightFactor;
   final double avgCharWidthFactor;
 
@@ -31,6 +33,7 @@ class SelectionController extends ChangeNotifier {
   DocRange? _selection;
   List<GlyphSelectionRect> _selectionRects = const [];
   bool _glyphDragActive = false;
+  double? _preferredCaretX;
 
   String? get caretRunId => _caretRunId;
   int get caretOffset => _caretOffset;
@@ -59,18 +62,80 @@ class SelectionController extends ChangeNotifier {
     _selection = null;
     _selectionRects = const [];
     _glyphDragActive = false;
+    _preferredCaretX = null;
+  }
+
+  void _rememberPreferredX([double? x]) {
+    final value = x ?? _caretGeometry?.x;
+    if (value != null) _preferredCaretX = value;
+  }
+
+  double _horizontalProbeX() => _preferredCaretX ?? _caretGeometry?.x ?? _marginLeft;
+
+  bool _sameCaretLineY(double y, double anchorY) => (y - anchorY).abs() < 0.5;
+
+  double _xForVisualLineEdge({required bool toEnd, required double y}) {
+    final anchorY = _caretGeometry?.y ?? y;
+    final lo = _marginLeft;
+    final hi = _host.pageWidth - _marginRight;
+
+    bool sameLine(double x) {
+      final geom = _engine?.caretGeometryAt(caretPage, x, y);
+      return geom != null && _sameCaretLineY(geom.y, anchorY);
+    }
+
+    if (toEnd) {
+      if (!sameLine(hi)) return hi;
+      var left = _caretGeometry?.x ?? lo;
+      var right = hi;
+      var best = hi;
+      while (right - left > 1) {
+        final mid = (left + right) / 2;
+        if (sameLine(mid)) {
+          left = mid;
+          best = mid;
+        } else {
+          right = mid;
+        }
+      }
+      return best;
+    }
+
+    if (!sameLine(lo)) return lo;
+    var left = lo;
+    var right = _caretGeometry?.x ?? hi;
+    var best = lo;
+    while (right - left > 1) {
+      final mid = (left + right) / 2;
+      if (sameLine(mid)) {
+        right = mid;
+        best = mid;
+      } else {
+        left = mid;
+      }
+    }
+    return best;
   }
 
   void setCaret(String runId, int offset, {CaretGeometry? geometry, int? page}) {
     _caretRunId = runId;
     _caretOffset = offset;
-    if (geometry != null) _caretGeometry = geometry;
+    _caretGeometry = geometry;
     _selection = DocRange(
       anchor: DocPosition(runId: runId, offset: offset),
       focus: DocPosition(runId: runId, offset: offset),
       page: page ?? caretPage,
     );
     _selectionRects = const [];
+    if (geometry == null && _engine != null) {
+      final targetPage = page ?? caretPage;
+      final geom = _engine!.caretAtPosition(targetPage, runId, offset);
+      if (geom != null) {
+        _caretGeometry = geom;
+      } else if (page == null) {
+        syncCaretGeometry();
+      }
+    }
   }
 
   void collapseToCaret() {
@@ -82,6 +147,13 @@ class SelectionController extends ChangeNotifier {
       page: caretPage,
     );
     _selectionRects = const [];
+  }
+
+  /// Hide the painted caret without forgetting the logical run/offset (object
+  /// selection). Call [syncCaretGeometry] or [beginGlyphSelection] to show it
+  /// again.
+  void clearCaretVisual() {
+    _caretGeometry = null;
   }
 
   void selectDocRange(DocRange range) {
@@ -147,16 +219,17 @@ class SelectionController extends ChangeNotifier {
 
   void hitTestAt(int pageIndex, double x, double y) {
     if (_engine == null) return;
-    _activateGlyphPage(pageIndex);
     final result = _engine!.hitTestPage(pageIndex, x, y);
     if (result == null) {
       if (_engine!.isPageStale(pageIndex)) return;
       _placeCaretOnEmptyPage(pageIndex, x, y);
       return;
     }
+    _engine!.setCurrentPageIndex(pageIndex);
     _caretRunId = result.runId;
     _caretOffset = result.charOffset;
     _caretGeometry = _engine!.caretGeometryAt(pageIndex, x, y);
+    _rememberPreferredX(x);
     _selection = DocRange(
       anchor: DocPosition(runId: result.runId, offset: result.charOffset),
       focus: DocPosition(runId: result.runId, offset: result.charOffset),
@@ -168,6 +241,7 @@ class SelectionController extends ChangeNotifier {
   }
 
   void _activateGlyphPage(int pageIndex) {
+    // Drag/selection helpers may update focus page without a fresh hit-test.
     _selection = _selection?.copyWith(page: pageIndex) ??
         DocRange(
           anchor: DocPosition(runId: _caretRunId ?? '', offset: _caretOffset),
@@ -183,33 +257,35 @@ class SelectionController extends ChangeNotifier {
       // A page awaiting reflow reports no hit; treating it as empty would
       // anchor the caret to whatever page happens to be laid out already.
       if (_engine!.isPageStale(p)) continue;
-      tail ??= _engine!.hitTestPage(
+      final hit = _engine!.hitTestPage(
         p,
         _host.pageWidth - _marginRight,
         _host.pageHeight - _marginBottom,
       );
+      if (hit != null) {
+        tail = hit;
+        break;
+      }
     }
-    tail ??= _engine!.hitTestPage(0, _marginLeft, _marginTop + _fontSize);
+    if (tail == null) return;
 
-    if (tail != null) {
-      _caretRunId = tail.runId;
-      _caretOffset = tail.charOffset;
-      _selection = DocRange(
-        anchor: DocPosition(runId: tail.runId, offset: tail.charOffset),
-        focus: DocPosition(runId: tail.runId, offset: tail.charOffset),
-        page: pageIndex,
-      );
-    }
+    final located = _engine!.caretPageAndGeometry(
+      tail.runId,
+      tail.charOffset,
+      hintPage: pageIndex,
+    );
+    if (located == null) return;
+    final (realPage, geom) = located;
 
-    final geom = tail != null
-        ? _engine!.caretAtPosition(pageIndex, tail.runId, tail.charOffset)
-        : null;
-    _caretGeometry = geom ??
-        CaretGeometry(
-          x: x.clamp(_marginLeft, _host.pageWidth - _marginRight),
-          y: (y - _fontSize).clamp(_marginTop, _host.pageHeight - _marginBottom),
-          height: _fontSize * lineHeightFactor,
-        );
+    _engine!.setCurrentPageIndex(realPage);
+    _caretRunId = tail.runId;
+    _caretOffset = tail.charOffset;
+    _selection = DocRange(
+      anchor: DocPosition(runId: tail.runId, offset: tail.charOffset),
+      focus: DocPosition(runId: tail.runId, offset: tail.charOffset),
+      page: realPage,
+    );
+    _caretGeometry = geom;
     _selectionRects = const [];
     onSelectionChanged();
     notifyListeners();
@@ -237,6 +313,29 @@ class SelectionController extends ChangeNotifier {
   void moveGlyphCaretByArrow(LogicalKeyboardKey key, {bool? extend}) {
     if (_engine == null || _caretRunId == null) return;
     final extending = extend ?? HardwareKeyboard.instance.isShiftPressed;
+    if (!extending && hasGlyphSelection && _selection != null) {
+      final (start, end) = _selection!.normalized();
+      switch (key) {
+        case LogicalKeyboardKey.arrowLeft:
+          _caretRunId = start.runId;
+          _caretOffset = start.offset;
+          collapseToCaret();
+          syncCaretGeometry();
+          onSelectionChanged();
+          notifyListeners();
+          return;
+        case LogicalKeyboardKey.arrowRight:
+          _caretRunId = end.runId;
+          _caretOffset = end.offset;
+          collapseToCaret();
+          syncCaretGeometry();
+          onSelectionChanged();
+          notifyListeners();
+          return;
+        default:
+          break;
+      }
+    }
     if (extending) _ensureSelectionAnchorForExtend();
 
     switch (key) {
@@ -253,13 +352,13 @@ class SelectionController extends ChangeNotifier {
     }
   }
 
-  /// Home / End — the visual line edge, found by probing the caret's own
-  /// baseline at the text-column margins.
+  /// Home / End — the visual line edge on the caret's own baseline.
   void moveGlyphCaretToLineEdge({required bool toEnd, required bool extend}) {
     if (_engine == null || _caretGeometry == null) return;
     if (extend) _ensureSelectionAnchorForExtend();
     final y = _caretGeometry!.y;
-    final x = toEnd ? _host.pageWidth - _marginRight : _marginLeft;
+    final x = _xForVisualLineEdge(toEnd: toEnd, y: y);
+    _rememberPreferredX(x);
     if (extend) {
       _moveGlyphCaretToHit(caretPage, x, y, extendSelection: true);
     } else {
@@ -457,20 +556,41 @@ class SelectionController extends ChangeNotifier {
 
   void _moveGlyphCaretOffset(int delta, {bool extendSelection = false}) {
     final runId = _caretRunId;
-    if (runId == null) return;
-    final before = _engine!.caretAtPosition(caretPage, runId, _caretOffset);
-    final candidate = (_caretOffset + delta).clamp(0, 1 << 30);
-    if (candidate != _caretOffset) {
-      final after = _engine!.caretAtPosition(caretPage, runId, candidate);
+    if (runId == null || _engine == null) return;
+    var before = _engine!.caretAtPosition(caretPage, runId, _caretOffset);
+    if (before == null) {
+      syncCaretGeometry();
+      before = _caretGeometry;
+      if (before == null) return;
+    }
+    final runLen = _runCharLength(runId);
+    final canAdvanceInRun = delta < 0
+        ? _caretOffset > 0
+        : _caretOffset < runLen;
+    if (canAdvanceInRun) {
+      final candidate = (_caretOffset + delta).clamp(0, runLen);
+      if (candidate != _caretOffset) {
+        final after = _engine!.caretAtPosition(caretPage, runId, candidate);
       if (after != null && !_sameCaretGeometry(before, after)) {
         _applyGlyphCaretMove(runId, candidate, after, extendSelection: extendSelection);
+        _rememberPreferredX(after.x);
         return;
       }
+      }
     }
-    if (before == null) return;
-    // Empty table cells share a baseline and have zero advance; a 2px nudge stays
-    // inside the same cell. Probe farther so left/right can cross into neighbors.
-    const distances = <double>[2.0, 24.0, 60.0, 110.0, 180.0];
+    // Empty table cells share a baseline and have zero glyph advance; a 2px
+    // nudge stays inside the same cell. Probe across typical cell widths so
+    // Left/Right can enter the neighbor column.
+    const distances = <double>[
+      2.0,
+      24.0,
+      60.0,
+      110.0,
+      180.0,
+      260.0,
+      360.0,
+      480.0,
+    ];
     var reachedHorizontalEdge = false;
     for (final distance in distances) {
       final probeX = (before.x + delta.sign * distance)
@@ -507,12 +627,56 @@ class SelectionController extends ChangeNotifier {
     final y = direction > 0
         ? (_marginTop + _fontSize)
         : (_host.pageHeight - _marginBottom - _fontSize);
-    if (extendSelection) {
-      _ensureSelectionAnchorForExtend();
-      _moveGlyphCaretToHit(nextPage, x, y, extendSelection: true);
-    } else {
-      hitTestAt(nextPage, x, y);
+
+    final result = _engine!.hitTestPage(nextPage, x, y);
+    if (result != null) {
+      if (extendSelection) {
+        _ensureSelectionAnchorForExtend();
+        _moveGlyphCaretToHit(nextPage, x, y, extendSelection: true);
+      } else {
+        hitTestAt(nextPage, x, y);
+      }
+      return;
     }
+
+    // Deliberate cross-page jump onto an empty page: keep document tail but
+    // commit the navigated page for focus/scrolling.
+    HitTestResult? tail;
+    for (var p = nextPage; p >= 0; p--) {
+      if (_engine!.isPageStale(p)) continue;
+      tail = _engine!.hitTestPage(
+        p,
+        _host.pageWidth - _marginRight,
+        _host.pageHeight - _marginBottom,
+      );
+      if (tail != null) break;
+    }
+    if (tail == null) return;
+
+    _engine!.setCurrentPageIndex(nextPage);
+    _caretRunId = tail.runId;
+    _caretOffset = tail.charOffset;
+    _caretGeometry = CaretGeometry(
+      x: x,
+      y: y,
+      height: _fontSize * lineHeightFactor,
+    );
+    if (extendSelection && _selection != null) {
+      _selection = _selection!.copyWith(
+        page: nextPage,
+        focus: DocPosition(runId: tail.runId, offset: tail.charOffset),
+      );
+      _refreshSelectionRects();
+    } else {
+      _selection = DocRange(
+        anchor: DocPosition(runId: tail.runId, offset: tail.charOffset),
+        focus: DocPosition(runId: tail.runId, offset: tail.charOffset),
+        page: nextPage,
+      );
+      _selectionRects = const [];
+    }
+    onSelectionChanged();
+    notifyListeners();
   }
 
   bool _sameCaretGeometry(CaretGeometry? a, CaretGeometry b) {
@@ -530,6 +694,7 @@ class SelectionController extends ChangeNotifier {
     _caretRunId = runId;
     _caretOffset = offset;
     _caretGeometry = geometry;
+    _rememberPreferredX(geometry.x);
     if (extendSelection && _selection != null) {
       _selection = _selection!.copyWith(
         focus: DocPosition(runId: runId, offset: offset),
@@ -556,6 +721,7 @@ class SelectionController extends ChangeNotifier {
     if (_engine == null) return;
     final result = _engine!.hitTestPage(pageIndex, x, y);
     if (result == null) return;
+    _engine!.setCurrentPageIndex(pageIndex);
     _caretRunId = result.runId;
     _caretOffset = result.charOffset;
     _caretGeometry = _engine!.caretGeometryAt(pageIndex, x, y);
@@ -579,41 +745,90 @@ class SelectionController extends ChangeNotifier {
 
   void _moveGlyphCaretUpDown(int direction, {bool extendSelection = false}) {
     if (_caretGeometry == null) return;
-    final stepY = _fontSize * lineHeightFactor;
-    final x = _caretGeometry!.x;
-    final newY = _caretGeometry!.y + stepY * direction;
+    final baseStep = _caretGeometry!.height > 0
+        ? _caretGeometry!.height
+        : _fontSize * lineHeightFactor;
+    // Table rows / line_height are often taller than ascent+descent; try a few
+    // step sizes before giving up so Down leaves the current cell band.
+    final steps = <double>[
+      baseStep,
+      baseStep * 1.5,
+      _fontSize * lineHeightFactor * 1.6,
+      baseStep * 2.2,
+      baseStep * 3.0,
+    ];
+    final x = _horizontalProbeX();
     final contentTop = _marginTop;
     final contentBottom = _host.pageHeight - _marginBottom;
-
-    if (newY > contentBottom + 0.5 && direction > 0) {
-      _moveGlyphCaretAcrossPage(1, extendSelection: extendSelection);
-      return;
-    }
-    if (newY < contentTop - 0.5 && direction < 0) {
-      _moveGlyphCaretAcrossPage(-1, extendSelection: extendSelection);
-      return;
-    }
-
     final beforeRun = _caretRunId;
     final beforeOff = _caretOffset;
     final beforeY = _caretGeometry!.y;
-    final clampedY = newY.clamp(contentTop, contentBottom);
-    final probingPageEdge = (direction > 0 && newY >= contentBottom - stepY) ||
-        (direction < 0 && newY <= contentTop + stepY);
-    if (extendSelection) {
-      _ensureSelectionAnchorForExtend();
-      _moveGlyphCaretToHit(caretPage, x, clampedY, extendSelection: true);
-    } else {
-      hitTestAt(caretPage, x, clampedY);
+
+    for (final stepY in steps) {
+      final newY = beforeY + stepY * direction;
+      if (newY > contentBottom + 0.5 && direction > 0) {
+        _moveGlyphCaretAcrossPage(1, extendSelection: extendSelection);
+        return;
+      }
+      if (newY < contentTop - 0.5 && direction < 0) {
+        _moveGlyphCaretAcrossPage(-1, extendSelection: extendSelection);
+        return;
+      }
+      final clampedY = newY.clamp(contentTop, contentBottom);
+      if (extendSelection) {
+        _ensureSelectionAnchorForExtend();
+        _moveGlyphCaretToHit(caretPage, x, clampedY, extendSelection: true);
+      } else {
+        hitTestAt(caretPage, x, clampedY);
+      }
+      final moved = _caretRunId != beforeRun ||
+          _caretOffset != beforeOff ||
+          ((_caretGeometry?.y ?? beforeY) - beforeY).abs() >= 0.5;
+      if (moved) return;
     }
-    // Stuck on the last/first line — only then advance across the page break.
-    // (Engines that ignore probe Y must not treat every Down as a page jump.)
+
+    final probingPageEdge =
+        (direction > 0 && beforeY >= contentBottom - baseStep * 2) ||
+            (direction < 0 && beforeY <= contentTop + baseStep * 2);
     final stuck = _caretRunId == beforeRun &&
         _caretOffset == beforeOff &&
         ((_caretGeometry?.y ?? beforeY) - beforeY).abs() < 0.5;
     if (stuck && probingPageEdge) {
       _moveGlyphCaretAcrossPage(direction, extendSelection: extendSelection);
     }
+  }
+
+  void extendGlyphSelectionTo(int pageIndex, double x, double y) {
+    _moveGlyphCaretToHit(pageIndex, x, y, extendSelection: true);
+  }
+
+  /// Move into a neighboring shape/SmartArt/table text run on the same
+  /// baseline (Tab / Shift+Tab). Returns true when the caret run changed.
+  bool tryMoveGlyphCaretToAdjacentBlock({required int direction}) {
+    if (_engine == null || _caretRunId == null || _caretGeometry == null) {
+      return false;
+    }
+    if (direction == 0) return false;
+    final beforeRun = _caretRunId!;
+    final before = _caretGeometry!;
+    const distances = <double>[
+      24.0,
+      60.0,
+      110.0,
+      180.0,
+      260.0,
+      360.0,
+      480.0,
+    ];
+    for (final distance in distances) {
+      final probeX = (before.x + direction * distance)
+          .clamp(_marginLeft, _host.pageWidth - _marginRight);
+      final hit = _engine!.hitTestPage(caretPage, probeX, before.y);
+      if (hit == null || hit.runId == beforeRun) continue;
+      hitTestAt(caretPage, probeX, before.y);
+      if (_caretRunId != null && _caretRunId != beforeRun) return true;
+    }
+    return false;
   }
 
   void beginGlyphSelection(int pageIndex, double x, double y) =>
@@ -658,13 +873,13 @@ class SelectionController extends ChangeNotifier {
 
   void updateGlyphDragDropCaret(int pageIndex, double x, double y) {
     if (!_glyphDragActive || _engine == null) return;
-    _activateGlyphPage(pageIndex);
     final result = _engine!.hitTestPage(pageIndex, x, y);
     if (result == null) {
       if (_engine!.isPageStale(pageIndex)) return;
       _placeCaretOnEmptyPage(pageIndex, x, y);
       return;
     }
+    _engine!.setCurrentPageIndex(pageIndex);
     _caretRunId = result.runId;
     _caretOffset = result.charOffset;
     _caretGeometry = _engine!.caretGeometryAt(pageIndex, x, y);
@@ -694,12 +909,20 @@ class SelectionController extends ChangeNotifier {
     }
     _caretRunId = end.runId;
     _caretOffset = focusOffset;
+    final located = _engine!.caretPageAndGeometry(
+      end.runId,
+      focusOffset,
+      hintPage: _host.pageCount > 0 ? _host.pageCount - 1 : 0,
+    );
+    final focusPage = located?.$1 ?? 0;
+    _engine!.setCurrentPageIndex(focusPage);
     _selection = DocRange(
       anchor: DocPosition(runId: start.runId, offset: start.charOffset),
       focus: DocPosition(runId: end.runId, offset: focusOffset),
-      page: 0,
+      page: focusPage,
     );
-    _caretGeometry = _engine!.caretAtPosition(0, end.runId, focusOffset) ??
+    _caretGeometry = located?.$2 ??
+        _engine!.caretAtPosition(focusPage, end.runId, focusOffset) ??
         CaretGeometry(
           x: _host.pageWidth - _marginRight,
           y: _host.pageHeight - _marginBottom,
@@ -731,6 +954,33 @@ class SelectionController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Expand a collapsed caret to the word under it (Word Thesaurus / Translate).
+  /// Returns true when a non-empty word range was selected.
+  bool selectWordAtCaret() {
+    if (_engine == null) return false;
+    final runId = defaultRunId();
+    if (runId == null) return false;
+    if (hasGlyphSelection) {
+      final text = selectedText();
+      return text.trim().isNotEmpty;
+    }
+    final bounds = _wordBoundsInRun(runId, _caretOffset);
+    if (bounds.$1 >= bounds.$2) return false;
+    _caretRunId = runId;
+    _caretOffset = bounds.$2;
+    _selection = DocRange(
+      anchor: DocPosition(runId: runId, offset: bounds.$1),
+      focus: DocPosition(runId: runId, offset: bounds.$2),
+      page: caretPage,
+    );
+    _caretGeometry =
+        _engine!.caretAtPosition(caretPage, runId, bounds.$2) ?? _caretGeometry;
+    _refreshSelectionRects();
+    onSelectionChanged();
+    notifyListeners();
+    return true;
+  }
+
   static final _wordCharPattern = RegExp(r'[\p{L}\p{N}_]', unicode: true);
 
   /// Longest run offset the scanners will probe, so a missing run cannot spin.
@@ -742,6 +992,9 @@ class SelectionController extends ChangeNotifier {
     if (ch == null || ch.isEmpty) return null;
     return ch;
   }
+
+  int _runCharLength(String runId) =>
+      _engine!.fetchTextRange(runId, 0, runId, 1 << 20)?.length ?? 0;
 
   bool _isWordCharAt(String runId, int index) {
     final ch = _charAt(runId, index);
@@ -840,24 +1093,45 @@ class SelectionController extends ChangeNotifier {
 
   void syncCaretGeometry() {
     if (_engine == null || _caretRunId == null) return;
+    final previousPage = caretPage;
     final geom = _engine!.caretAtPosition(caretPage, _caretRunId!, _caretOffset);
     if (geom != null) {
       _caretGeometry = geom;
       return;
     }
-    for (var page = 0; page < _host.pageCount; page++) {
+    final pagesToTry = <int>[
+      caretPage,
+      if (caretPage > 0) caretPage - 1,
+      if (caretPage + 1 < _host.pageCount) caretPage + 1,
+    ];
+    for (final page in pagesToTry) {
+      if (page == caretPage) continue;
       final cross = _engine!.caretAtPosition(page, _caretRunId!, _caretOffset);
       if (cross != null) {
         _selection = _selection?.copyWith(page: page);
         _caretGeometry = cross;
+        if (page != previousPage) {
+          _engine!.setCurrentPageIndex(page);
+          onCaretPageChanged?.call(page);
+        }
         return;
       }
     }
-    if (_caretGeometry != null) {
-      hitTestAt(caretPage, _caretGeometry!.x, _caretGeometry!.y);
-    } else {
-      _ensureGlyphCaret();
+    for (var page = 0; page < _host.pageCount; page++) {
+      if (pagesToTry.contains(page)) continue;
+      final cross = _engine!.caretAtPosition(page, _caretRunId!, _caretOffset);
+      if (cross != null) {
+        _selection = _selection?.copyWith(page: page);
+        _caretGeometry = cross;
+        if (page != previousPage) {
+          _engine!.setCurrentPageIndex(page);
+          onCaretPageChanged?.call(page);
+        }
+        return;
+      }
     }
+    // Do not hit-test here: that rewrites caretOffset from stale geometry and
+    // makes the next Enter split at offset 0 (line appears to "copy").
   }
 
   void afterInsert(String runId, int newOffset, {CaretGeometry? geometry}) {

@@ -100,18 +100,23 @@ class NativeEventRouter {
 
     final existing = _pending[requestId];
     if (existing != null && !existing.isCompleted) {
-      return _withTimeout(existing.future, timeout);
+      return _withTimeout(existing.future, timeout, requestId);
     }
     final completer = Completer<int>();
     _pending[requestId] = completer;
     _tunePump();
-    return _withTimeout(completer.future, timeout);
+    return _withTimeout(completer.future, timeout, requestId);
   }
 
-  Future<int> _withTimeout(Future<int> future, Duration? timeout) {
+  Future<int> _withTimeout(Future<int> future, Duration? timeout, int requestId) {
     if (timeout == null) return future;
     return future.timeout(timeout, onTimeout: () {
-      _pending.removeWhere((_, c) => c.isCompleted);
+      final completer = _pending.remove(requestId);
+      if (completer != null && !completer.isCompleted) {
+        completer.completeError(
+          TimeoutException('event wait timed out', timeout),
+        );
+      }
       _tunePump();
       throw TimeoutException('event wait timed out', timeout);
     });

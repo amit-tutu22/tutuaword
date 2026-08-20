@@ -11,6 +11,8 @@ class DocumentPainter extends CustomPainter {
     required this.snapshot,
     this.atlasImage,
     this.images = const {},
+    this.dragSourceRect,
+    this.dragOffset = Offset.zero,
   });
 
   final DisplayListSnapshot snapshot;
@@ -18,6 +20,22 @@ class DocumentPainter extends CustomPainter {
 
   /// Decoded document images keyed by asset id.
   final Map<String, ui.Image> images;
+
+  /// While dragging an object, geometry whose center lies in this rect is
+  /// painted at [dragOffset] so content follows the selection chrome.
+  final Rect? dragSourceRect;
+  final Offset dragOffset;
+
+  Offset _dragAware(double x, double y, double w, double h) {
+    final source = dragSourceRect;
+    if (source == null || dragOffset == Offset.zero) {
+      return Offset(x, y);
+    }
+    if (source.contains(Offset(x + w / 2, y + h / 2))) {
+      return Offset(x + dragOffset.dx, y + dragOffset.dy);
+    }
+    return Offset(x, y);
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -40,10 +58,13 @@ class DocumentPainter extends CustomPainter {
       ..strokeWidth = 1;
 
     for (var i = 0; i < count; i++) {
-      final x = snapshot.imageTransforms[i * 2];
-      final y = snapshot.imageTransforms[i * 2 + 1];
+      final x0 = snapshot.imageTransforms[i * 2];
+      final y0 = snapshot.imageTransforms[i * 2 + 1];
       final w = snapshot.imageSizes[i * 2];
       final h = snapshot.imageSizes[i * 2 + 1];
+      final pos = _dragAware(x0, y0, w, h);
+      final x = pos.dx;
+      final y = pos.dy;
       final rotationDeg = i < snapshot.imageRotations.length
           ? snapshot.imageRotations[i]
           : 0.0;
@@ -92,12 +113,16 @@ class DocumentPainter extends CustomPainter {
     for (var i = 0; i < snapshot.rectColors.length; i++) {
       final base = i * 4;
       if (base + 3 >= snapshot.rectBatch.length) break;
-      final x = snapshot.rectBatch[base];
-      final y = snapshot.rectBatch[base + 1];
+      final x0 = snapshot.rectBatch[base];
+      final y0 = snapshot.rectBatch[base + 1];
       final w = snapshot.rectBatch[base + 2];
       final h = snapshot.rectBatch[base + 3];
+      final pos = _dragAware(x0, y0, w, h);
       final color = Color(snapshot.rectColors[i]);
-      canvas.drawRect(Rect.fromLTWH(x, y, w, h), Paint()..color = color);
+      canvas.drawRect(
+        Rect.fromLTWH(pos.dx, pos.dy, w, h),
+        Paint()..color = color,
+      );
     }
   }
 
@@ -109,9 +134,23 @@ class DocumentPainter extends CustomPainter {
       final base = i * 4;
       if (base + 3 >= snapshot.pathPoints.length) break;
       paint.color = Color(snapshot.pathColors[i]);
+      final x1 = snapshot.pathPoints[base];
+      final y1 = snapshot.pathPoints[base + 1];
+      final x2 = snapshot.pathPoints[base + 2];
+      final y2 = snapshot.pathPoints[base + 3];
+      final mid = Offset((x1 + x2) / 2, (y1 + y2) / 2);
+      var dx = 0.0;
+      var dy = 0.0;
+      final source = dragSourceRect;
+      if (source != null &&
+          dragOffset != Offset.zero &&
+          source.contains(mid)) {
+        dx = dragOffset.dx;
+        dy = dragOffset.dy;
+      }
       canvas.drawLine(
-        Offset(snapshot.pathPoints[base], snapshot.pathPoints[base + 1]),
-        Offset(snapshot.pathPoints[base + 2], snapshot.pathPoints[base + 3]),
+        Offset(x1 + dx, y1 + dy),
+        Offset(x2 + dx, y2 + dy),
         paint,
       );
     }
@@ -127,12 +166,14 @@ class DocumentPainter extends CustomPainter {
     final srcRects = Float32List(count * 4);
 
     for (var i = 0; i < count; i++) {
-      final x = snapshot.glyphOffsets[i * 2];
-      final y = snapshot.glyphOffsets[i * 2 + 1];
+      final x0 = snapshot.glyphOffsets[i * 2];
+      final y0 = snapshot.glyphOffsets[i * 2 + 1];
+      // Glyphs are point samples; treat as a tiny box for drag hit.
+      final pos = _dragAware(x0, y0, 1, 1);
       rstTransforms[i * 4] = 1.0;
       rstTransforms[i * 4 + 1] = 0.0;
-      rstTransforms[i * 4 + 2] = x;
-      rstTransforms[i * 4 + 3] = y;
+      rstTransforms[i * 4 + 2] = pos.dx;
+      rstTransforms[i * 4 + 3] = pos.dy;
 
       final atlasX = snapshot.glyphSrcRects[i * 4];
       final atlasY = snapshot.glyphSrcRects[i * 4 + 1];
@@ -161,6 +202,8 @@ class DocumentPainter extends CustomPainter {
   bool shouldRepaint(covariant DocumentPainter oldDelegate) {
     return oldDelegate.snapshot.version != snapshot.version ||
         oldDelegate.atlasImage != atlasImage ||
-        oldDelegate.images.length != images.length;
+        oldDelegate.images.length != images.length ||
+        oldDelegate.dragSourceRect != dragSourceRect ||
+        oldDelegate.dragOffset != dragOffset;
   }
 }

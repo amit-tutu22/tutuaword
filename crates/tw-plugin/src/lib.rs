@@ -11,8 +11,8 @@ use tw_edit::{Command, DocRange};
 
 pub use capability::{grant_capabilities, Capability};
 pub use host::SandboxHostState;
-pub use manager::{PluginInfo, PluginManager};
-pub use sandbox::{WasmSandbox, SAMPLE_EDIT_PLUGIN_WAT, SAMPLE_READ_PLUGIN_WAT};
+pub use manager::{PluginInfo, PluginManager, PreparedInvoke};
+pub use sandbox::{invoke_with_engine, WasmSandbox, SAMPLE_EDIT_PLUGIN_WAT, SAMPLE_READ_PLUGIN_WAT};
 
 #[derive(Debug, Error)]
 pub enum PluginError {

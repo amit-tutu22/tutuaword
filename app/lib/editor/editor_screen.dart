@@ -196,6 +196,8 @@ class _EditorScreenState extends State<EditorScreen> {
         unawaited(_controller.spellCheckDocument());
       case WordChord.printPreview:
         _controller.togglePrintPreview();
+      case WordChord.keyboardHelp:
+        unawaited(_controller.openKeyboardHelpDialog(context));
       case WordChord.nonbreakingSpace:
         unawaited(_controller.insertSymbolCharacter('\u00A0'));
       case WordChord.nonbreakingHyphen:
@@ -252,6 +254,8 @@ class _EditorScreenState extends State<EditorScreen> {
       onDigitalSignatures: () =>
           unawaited(_controller.manageDigitalSignatures(context)),
       onShowAbout: () => unawaited(_controller.openAboutDialog(context)),
+      onShowKeyboardHelp: () =>
+          unawaited(_controller.openKeyboardHelpDialog(context)),
       onShowSettings: () => unawaited(_controller.openSettingsDialog(context)),
       child: Material(
         color: WordTheme.chrome(context).tabStrip,

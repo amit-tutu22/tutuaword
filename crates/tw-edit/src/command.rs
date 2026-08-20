@@ -126,6 +126,17 @@ pub enum Command {
         wrap: tw_model::TextWrap,
         anchor: Option<tw_model::ImageAnchor>,
     },
+    /// Position a floating shape / SmartArt / chart (drag move).
+    SetShapeAnchor {
+        shape_id: NodeId,
+        anchor: tw_model::ImageAnchor,
+    },
+    /// Undo helper restoring shape wrap and anchor together.
+    RestoreShapeLayout {
+        shape_id: NodeId,
+        wrap: tw_model::TextWrap,
+        anchor: Option<tw_model::ImageAnchor>,
+    },
     /// Crop/rotate/opacity transform (F10.S4).
     SetImageTransform {
         image_id: NodeId,
@@ -194,6 +205,10 @@ pub enum Command {
     SetChartData {
         shape_id: NodeId,
         chart_data: Option<tw_model::ChartData>,
+    },
+    /// Ensure a text-capable shape has an editable body paragraph (Add Text).
+    EnsureShapeText {
+        shape_id: NodeId,
     },
     ApplyParagraphStyle {
         paragraph_id: NodeId,
@@ -972,6 +987,28 @@ impl Command {
                     anchor,
                 })
             }
+            Command::SetShapeAnchor { shape_id, .. } => {
+                let wrap = result.old_shape_wrap.ok_or(EditError::InverseNotSupported {
+                    command: "SetShapeAnchor",
+                })?;
+                let anchor = result.old_shape_anchor.ok_or(EditError::InverseNotSupported {
+                    command: "SetShapeAnchor",
+                })?;
+                Ok(Command::RestoreShapeLayout {
+                    shape_id: *shape_id,
+                    wrap,
+                    anchor,
+                })
+            }
+            Command::RestoreShapeLayout { shape_id, wrap, anchor } => {
+                Ok(Command::RestoreShapeLayout {
+                    shape_id: *shape_id,
+                    wrap: result.old_shape_wrap.ok_or(EditError::InverseNotSupported {
+                        command: "RestoreShapeLayout",
+                    })?,
+                    anchor: result.old_shape_anchor.flatten(),
+                })
+            }
             Command::RestoreImageLayout { image_id, wrap, anchor } => {
                 Ok(Command::RestoreImageLayout {
                     image_id: *image_id,
@@ -1328,6 +1365,9 @@ impl Command {
             Command::EnsureHeaderFooter { .. } => Err(EditError::InverseNotSupported {
                 command: "EnsureHeaderFooter",
             }),
+            Command::EnsureShapeText { .. } => Err(EditError::InverseNotSupported {
+                command: "EnsureShapeText",
+            }),
             Command::SetHeaderFooterLink {
                 section_index,
                 is_header,
@@ -1448,6 +1488,8 @@ pub struct EditResult {
     pub old_image_data: Option<tw_model::ImageData>,
     pub old_image_wrap: Option<tw_model::TextWrap>,
     pub old_image_anchor: Option<Option<tw_model::ImageAnchor>>,
+    pub old_shape_wrap: Option<tw_model::TextWrap>,
+    pub old_shape_anchor: Option<Option<tw_model::ImageAnchor>>,
     pub old_image_transform: Option<tw_model::ImageTransform>,
     pub old_image_caption_id: Option<Option<NodeId>>,
     /// Previous alt text for undo of [`Command::SetImageAltText`] (F21.S3).

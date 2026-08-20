@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:tutuaword/editor/editor_controller.dart';
 import 'package:tutuaword/ui/ribbon_widgets.dart';
@@ -40,7 +42,7 @@ class ReviewTab extends StatelessWidget {
                   label: controller.isReadingAloud ? 'Stop\nReading' : 'Read\nAloud',
                   tooltip: controller.isReadingAloud
                       ? 'Stop reading aloud'
-                      : 'Read selection aloud',
+                      : 'Read selection or document aloud',
                   onPressed: () => controller.toggleReadAloud(),
                 ),
                 Builder(
@@ -105,6 +107,13 @@ class ReviewTab extends StatelessWidget {
                   label: 'Track\nChanges',
                   selected: controller.trackChanges,
                   onPressed: controller.toggleTrackChanges,
+                ),
+                RibbonIconButton(
+                  key: const Key('changes_pane'),
+                  icon: Icons.difference_outlined,
+                  label: 'Changes\nPane',
+                  tooltip: 'List tracked changes',
+                  onPressed: () => unawaited(controller.showChangesPanePanel()),
                 ),
                 RibbonIconButton(
                   key: const Key('accept_revision'),

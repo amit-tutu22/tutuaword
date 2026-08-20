@@ -232,6 +232,11 @@ class EditorInputEvent {
   }
 
   /// Same mapping, reading the live modifier state from [HardwareKeyboard].
+  ///
+  /// Defaults [character] from [KeyEvent.character] so Enter/Tab payloads
+  /// (`\r`/`\n`/`\t`) still resolve when callers omit the argument. Editing
+  /// logical keys are matched before the character fallback, so Delete's
+  /// U+007F never becomes insertable text.
   static EditorInputEvent? fromKeyEvent(KeyEvent event, {String? character}) {
     final keyboard = HardwareKeyboard.instance;
     return fromLogicalKey(
@@ -240,7 +245,7 @@ class EditorInputEvent {
       control: keyboard.isControlPressed,
       alt: keyboard.isAltPressed,
       meta: keyboard.isMetaPressed,
-      character: character,
+      character: character ?? event.character,
     );
   }
 }

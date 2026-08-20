@@ -228,41 +228,11 @@ impl LayoutCache {
     }
 
     pub fn caret_geometry(&self, page: u32, x: f32, y: f32) -> Option<(f32, f32, f32)> {
-        let map = self.line_maps.get(&page)?;
-        // Mirror LineMap::hit_test: consider every Y-matching line before falling
-        // back, so table cells that share a baseline resolve to the right column.
-        let y_matches: Vec<_> = map
-            .lines
-            .iter()
-            .filter(|line| y >= line.y - line.ascent && y <= line.y + line.descent)
-            .collect();
-        for line in &y_matches {
-            for &(x_start, x_end, _, _) in &line.run_map {
-                let end = if x_end <= x_start {
-                    x_start + 4.0
-                } else {
-                    x_end
-                };
-                if x >= x_start && x <= end {
-                    return Some((x, line.y, line.ascent + line.descent));
-                }
-            }
-        }
-        if let Some(line) = pick_line_for_x_cache(&y_matches, x) {
-            return Some((line.x, line.y, line.ascent + line.descent));
-        }
-        // Mirror LineMap::hit_test edge fallback: below → last, above → first.
-        let edge = if let Some(first) = map.lines.first() {
-            let first_top = first.y - first.ascent;
-            if y < first_top {
-                first
-            } else {
-                map.lines.last().unwrap_or(first)
-            }
-        } else {
+        if self.is_page_stale(page) {
             return None;
-        };
-        Some((edge.x, edge.y, edge.ascent + edge.descent))
+        }
+        let hit = self.hit_test(page, x, y)?;
+        self.caret_at(page, hit.run_id, hit.char_offset)
     }
 
     /// Geometry for `(run_id, char_offset)` on [page] only.
@@ -272,6 +242,9 @@ impl LayoutCache {
     /// paginates. Callers that need cross-page lookup (e.g. syncCaretGeometry)
     /// iterate pages themselves.
     pub fn caret_at(&self, page: u32, run_id: tw_model::NodeId, char_offset: usize) -> Option<(f32, f32, f32)> {
+        if self.is_page_stale(page) {
+            return None;
+        }
         self.line_maps
             .get(&page)
             .and_then(|map| map.caret_at(run_id, char_offset))
@@ -339,38 +312,48 @@ impl Default for LayoutCache {
 
 fn last_text_run(doc: &Document) -> Option<NodeId> {
     for section in doc.sections.iter().rev() {
-        for block in section.blocks.iter().rev() {
-            let para = block.paragraph()?;
-            let run = para.runs.last()?;
-            return Some(run.id);
+        if let Some(run_id) = last_text_run_in_blocks(&section.blocks) {
+            return Some(run_id);
         }
     }
     None
 }
 
-/// Same ownership rule as `tw_layout::LineMap` blank-area hit testing.
-fn pick_line_for_x_cache<'a>(
-    lines: &[&'a tw_layout::TextLine],
-    x: f32,
-) -> Option<&'a tw_layout::TextLine> {
-    if lines.is_empty() {
-        return None;
-    }
-    if lines.len() == 1 {
-        return Some(lines[0]);
-    }
-    let mut best: Option<&tw_layout::TextLine> = None;
-    for line in lines {
-        if line.x <= x + 0.5 {
-            best = Some(*line);
+fn last_text_run_in_blocks(blocks: &[tw_model::Block]) -> Option<NodeId> {
+    for block in blocks.iter().rev() {
+        match block {
+            tw_model::Block::Paragraph(p) => {
+                if let Some(run) = p.runs.last() {
+                    return Some(run.id);
+                }
+            }
+            tw_model::Block::ShapeBlock(shape) => {
+                for para in shape.paragraphs.iter().rev() {
+                    if let Some(run) = para.runs.last() {
+                        return Some(run.id);
+                    }
+                }
+            }
+            tw_model::Block::Table(table) => {
+                if let Some(run_id) = last_text_run_in_table(table) {
+                    return Some(run_id);
+                }
+            }
+            _ => continue,
         }
     }
-    best.or_else(|| {
-        lines
-            .iter()
-            .min_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal))
-            .copied()
-    })
+    None
+}
+
+fn last_text_run_in_table(table: &tw_model::Table) -> Option<NodeId> {
+    for row in table.rows.iter().rev() {
+        for cell in row.cells.iter().rev() {
+            if let Some(run_id) = last_text_run_in_blocks(&cell.blocks) {
+                return Some(run_id);
+            }
+        }
+    }
+    None
 }
 
 pub type SharedLayoutCache = Arc<RwLock<LayoutCache>>;

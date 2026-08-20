@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:tutuaword/bridge/command_codec.dart';
+import 'package:tutuaword/bridge/ffi_buffer.dart';
 import 'package:tutuaword/bridge/document_properties.dart';
 import 'package:tutuaword/bridge/engine_types.dart';
 import 'package:tutuaword/bridge/find_format_filter.dart';
@@ -131,6 +132,36 @@ typedef TwOpenDocumentWithPasswordDart = int Function(
   int,
   Pointer<Utf8>,
   Pointer<Utf8>,
+);
+
+typedef TwOpenDocumentAsyncNative = Int32 Function(
+  Pointer<Uint8>,
+  IntPtr,
+  Pointer<Utf8>,
+  Pointer<Uint64>,
+);
+typedef TwOpenDocumentAsyncDart = int Function(
+  Pointer<Uint8>,
+  int,
+  Pointer<Utf8>,
+  Pointer<Uint64>,
+);
+
+typedef TwTakeOpenResultNative = Int32 Function(Uint64);
+typedef TwTakeOpenResultDart = int Function(int);
+
+typedef TwSaveDocumentAsyncNative = Int32 Function(Pointer<Uint64>);
+typedef TwSaveDocumentAsyncDart = int Function(Pointer<Uint64>);
+
+typedef TwTakeSavedDocumentNative = Int32 Function(
+  Uint64,
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwTakeSavedDocumentDart = int Function(
+  int,
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
 );
 
 typedef TwSaveDocumentNative = Int32 Function(Pointer<Pointer<Uint8>>, Pointer<IntPtr>);
@@ -339,6 +370,24 @@ typedef TwGetAccessibilityIssuesDart = int Function(
   Pointer<Pointer<Uint8>>,
   Pointer<IntPtr>,
 );
+typedef TwGetRevisionsNative = Int32 Function(
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwGetRevisionsDart = int Function(
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwPluginListJsonNative = Int32 Function(
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwPluginListJsonDart = int Function(
+  Pointer<Pointer<Uint8>>,
+  Pointer<IntPtr>,
+);
+typedef TwPluginInstallSampleNative = Int32 Function(Int32 grantEdit);
+typedef TwPluginInstallSampleDart = int Function(int grantEdit);
 typedef TwGetDocumentInspectNative = Int32 Function(
   Pointer<Pointer<Uint8>>,
   Pointer<IntPtr>,
@@ -445,16 +494,16 @@ typedef TwInsertTableSumFieldDart = int Function(Pointer<Utf8>);
 
 typedef TwInsertImageNative = Int32 Function(Float, Float);
 typedef TwInsertImageDart = int Function(double, double);
-typedef TwInsertShapeNative = Int32 Function(Int32);
-typedef TwInsertShapeDart = int Function(int);
-typedef TwInsertTextBoxNative = Int32 Function();
-typedef TwInsertTextBoxDart = int Function();
-typedef TwInsertWordArtNative = Int32 Function(Pointer<Utf8>);
-typedef TwInsertWordArtDart = int Function(Pointer<Utf8>);
-typedef TwInsertDiagramNative = Int32 Function(Int32);
-typedef TwInsertDiagramDart = int Function(int);
-typedef TwInsertChartNative = Int32 Function(Int32);
-typedef TwInsertChartDart = int Function(int);
+typedef TwInsertShapeNative = Int32 Function(Int32, Pointer<Utf8>);
+typedef TwInsertShapeDart = int Function(int, Pointer<Utf8>);
+typedef TwInsertTextBoxNative = Int32 Function(Pointer<Utf8>);
+typedef TwInsertTextBoxDart = int Function(Pointer<Utf8>);
+typedef TwInsertWordArtNative = Int32 Function(Pointer<Utf8>, Pointer<Utf8>);
+typedef TwInsertWordArtDart = int Function(Pointer<Utf8>, Pointer<Utf8>);
+typedef TwInsertDiagramNative = Int32 Function(Int32, Pointer<Utf8>);
+typedef TwInsertDiagramDart = int Function(int, Pointer<Utf8>);
+typedef TwInsertChartNative = Int32 Function(Int32, Pointer<Utf8>);
+typedef TwInsertChartDart = int Function(int, Pointer<Utf8>);
 typedef TwGetChartDataJsonNative = Int32 Function(
   Pointer<Utf8>,
   Pointer<Pointer<Uint8>>,
@@ -536,9 +585,9 @@ typedef TwLatestOfficeMathRunIdDart = int Function(
 typedef TwDeleteBlockNative = Int32 Function(Pointer<Utf8>);
 typedef TwDeleteBlockDart = int Function(Pointer<Utf8>);
 typedef TwInsertImageBytesNative = Int32 Function(
-    Pointer<Uint8>, IntPtr, Pointer<Utf8>);
+    Pointer<Uint8>, IntPtr, Pointer<Utf8>, Pointer<Utf8>);
 typedef TwInsertImageBytesDart = int Function(
-    Pointer<Uint8>, int, Pointer<Utf8>);
+    Pointer<Uint8>, int, Pointer<Utf8>, Pointer<Utf8>);
 typedef TwReplaceImageBytesNative = Int32 Function(
     Pointer<Utf8>, Pointer<Uint8>, IntPtr, Pointer<Utf8>);
 typedef TwReplaceImageBytesDart = int Function(
@@ -551,6 +600,10 @@ typedef TwSetImageAnchorNative = Int32 Function(
     Pointer<Utf8>, Float, Float, Uint8, Uint8);
 typedef TwSetImageAnchorDart = int Function(
     Pointer<Utf8>, double, double, int, int);
+typedef TwSetShapeAnchorNative = Int32 Function(
+    Pointer<Utf8>, Float, Float, Uint8, Uint8);
+typedef TwSetShapeAnchorDart = int Function(
+    Pointer<Utf8>, double, double, int, int);
 typedef TwSetImageTransformNative = Int32 Function(
     Pointer<Utf8>, Float, Float, Float, Float, Float, Float);
 typedef TwSetImageTransformDart = int Function(
@@ -562,6 +615,10 @@ typedef TwSetImageAltTextDart = int Function(Pointer<Utf8>, Pointer<Utf8>);
 typedef TwGetImageAltTextNative = Int32 Function(
     Pointer<Utf8>, Pointer<Pointer<Uint8>>, Pointer<IntPtr>);
 typedef TwGetImageAltTextDart = int Function(
+    Pointer<Utf8>, Pointer<Pointer<Uint8>>, Pointer<IntPtr>);
+typedef TwGetImageAssetNative = Int32 Function(
+    Pointer<Utf8>, Pointer<Pointer<Uint8>>, Pointer<IntPtr>);
+typedef TwGetImageAssetDart = int Function(
     Pointer<Utf8>, Pointer<Pointer<Uint8>>, Pointer<IntPtr>);
 typedef TwCompressImageNative = Int32 Function(Pointer<Utf8>, Uint8);
 typedef TwCompressImageDart = int Function(Pointer<Utf8>, int);
@@ -802,6 +859,9 @@ class NativeEngine {
   TwMoveBlockDart? moveBlock;
   late final TwGetSemanticTreeDart getSemanticTree;
   late final TwGetAccessibilityIssuesDart getAccessibilityIssues;
+  TwGetRevisionsDart? getRevisions;
+  TwPluginListJsonDart? pluginListJson;
+  TwPluginInstallSampleDart? pluginInstallSample;
   TwGetDocumentInspectDart? getDocumentInspect;
   TwRemoveInspectFindingsDart? removeInspectFindingsNative;
   TwGetDigitalSignaturesDart? getDigitalSignatures;
@@ -812,6 +872,10 @@ class NativeEngine {
   late final TwInsertPageBreakDart insertPageBreak;
   late final TwOpenDocumentWithPathDart openDocumentWithPath;
   TwOpenDocumentWithPasswordDart? openDocumentWithPassword;
+  TwOpenDocumentAsyncDart? openDocumentAsync;
+  TwTakeOpenResultDart? takeOpenResult;
+  TwSaveDocumentAsyncDart? saveDocumentAsync;
+  TwTakeSavedDocumentDart? takeSavedDocument;
   late final TwNewDocumentDart newDocumentNative;
   late final TwSaveDocumentDart saveDocument;
   late final TwSetCurrentPageDart setCurrentPage;
@@ -886,10 +950,12 @@ class NativeEngine {
   late final TwSetImageSizeDart setImageSize;
   late final TwSetImageWrapDart setImageWrap;
   late final TwSetImageAnchorDart setImageAnchor;
+  late final TwSetShapeAnchorDart setShapeAnchor;
   late final TwSetImageTransformDart setImageTransform;
   late final TwInsertImageCaptionDart insertImageCaption;
   late final TwSetImageAltTextDart setImageAltText;
   late final TwGetImageAltTextDart getImageAltText;
+  late final TwGetImageAssetDart getImageAsset;
   late final TwCompressImageDart compressImage;
   late final TwReplaceImageBytesDart replaceImageBytes;
   late final TwExportPdfDart exportPdf;
@@ -1018,6 +1084,22 @@ class NativeEngine {
           TwGetAccessibilityIssuesNative,
           TwGetAccessibilityIssuesDart>('tw_get_accessibility_issues');
       try {
+        engine.getRevisions = lib.lookupFunction<TwGetRevisionsNative, TwGetRevisionsDart>(
+            'tw_get_revisions');
+      } on ArgumentError {
+        engine.getRevisions = null;
+      }
+      try {
+        engine.pluginListJson = lib.lookupFunction<TwPluginListJsonNative,
+            TwPluginListJsonDart>('tw_plugin_list_json');
+        engine.pluginInstallSample = lib.lookupFunction<
+            TwPluginInstallSampleNative,
+            TwPluginInstallSampleDart>('tw_plugin_install_sample');
+      } catch (_) {
+        engine.pluginListJson = null;
+        engine.pluginInstallSample = null;
+      }
+      try {
         engine.getDocumentInspect = lib.lookupFunction<
             TwGetDocumentInspectNative,
             TwGetDocumentInspectDart>('tw_get_document_inspect');
@@ -1070,6 +1152,22 @@ class NativeEngine {
             TwOpenDocumentWithPasswordDart>('tw_open_document_with_password');
       } catch (_) {
         engine.openDocumentWithPassword = null;
+      }
+      try {
+        engine.openDocumentAsync = lib.lookupFunction<TwOpenDocumentAsyncNative,
+            TwOpenDocumentAsyncDart>('tw_open_document_async');
+        engine.takeOpenResult =
+            lib.lookupFunction<TwTakeOpenResultNative, TwTakeOpenResultDart>(
+                'tw_take_open_result');
+        engine.saveDocumentAsync = lib.lookupFunction<TwSaveDocumentAsyncNative,
+            TwSaveDocumentAsyncDart>('tw_save_document_async');
+        engine.takeSavedDocument = lib.lookupFunction<TwTakeSavedDocumentNative,
+            TwTakeSavedDocumentDart>('tw_take_saved_document');
+      } catch (_) {
+        engine.openDocumentAsync = null;
+        engine.takeOpenResult = null;
+        engine.saveDocumentAsync = null;
+        engine.takeSavedDocument = null;
       }
       engine.newDocumentNative =
           lib.lookupFunction<TwNewDocumentNative, TwNewDocumentDart>('tw_new_document');
@@ -1236,6 +1334,8 @@ class NativeEngine {
           'tw_set_image_wrap');
       engine.setImageAnchor = lib.lookupFunction<TwSetImageAnchorNative, TwSetImageAnchorDart>(
           'tw_set_image_anchor');
+      engine.setShapeAnchor = lib.lookupFunction<TwSetShapeAnchorNative, TwSetShapeAnchorDart>(
+          'tw_set_shape_anchor');
       engine.setImageTransform = lib.lookupFunction<TwSetImageTransformNative, TwSetImageTransformDart>(
           'tw_set_image_transform');
       engine.insertImageCaption = lib.lookupFunction<TwInsertImageCaptionNative, TwInsertImageCaptionDart>(
@@ -1244,6 +1344,8 @@ class NativeEngine {
           'tw_set_image_alt_text');
       engine.getImageAltText = lib.lookupFunction<TwGetImageAltTextNative, TwGetImageAltTextDart>(
           'tw_get_image_alt_text');
+      engine.getImageAsset = lib.lookupFunction<TwGetImageAssetNative, TwGetImageAssetDart>(
+          'tw_get_image_asset');
       engine.compressImage = lib.lookupFunction<TwCompressImageNative, TwCompressImageDart>(
           'tw_compress_image');
       engine.replaceImageBytes = lib.lookupFunction<TwReplaceImageBytesNative,
@@ -1313,6 +1415,7 @@ class NativeEngine {
       engine.selectionRects =
           lib.lookupFunction<TwSelectionRectsNative, TwSelectionRectsDart>('tw_selection_rects');
       engine.freeBuffer = lib.lookupFunction<TwFreeBufferNative, TwFreeBufferDart>('tw_free_buffer');
+      bindFfiBufferFinalizer(engine.freeBuffer);
       final pump = engine.pumpEventsNative;
       if (pump != null) {
         NativeEventRouter.instance.attachPump(pump);
@@ -1498,13 +1601,11 @@ extension NativeEngineOps on NativeEngine {
     } on TimeoutException {
       assert(() {
         debugPrint(
-          'awaitEditCompletion: timed out waiting for requestId=$requestId; '
-          'falling back to sync fetchDisplayList',
+          'awaitEditCompletion: timed out waiting for requestId=$requestId',
         );
         return true;
       }());
-      fetchDisplayList();
-      return true;
+      return false;
     }
   }
 
@@ -1590,8 +1691,7 @@ extension NativeEngineOps on NativeEngine {
           pageHeight: outHeight.value,
         );
       }
-      final bytes = ptr.asTypedList(len).sublist(0);
-      freeBuffer(ptr, len);
+      final bytes = adoptFfiBuffer(ptr, len);
       return PageDisplayListData(
         bytes: bytes,
         version: outVersion.value,
@@ -1625,8 +1725,7 @@ extension NativeEngineOps on NativeEngine {
       if (ptr == nullptr || len == 0) {
         bytes = Uint8List(0);
       } else {
-        bytes = ptr.asTypedList(len).sublist(0);
-        freeBuffer(ptr, len);
+        bytes = adoptFfiBuffer(ptr, len);
       }
 
       return AtlasData(
@@ -1833,6 +1932,54 @@ extension NativeEngineOps on NativeEngine {
     }
   }
 
+  String? fetchRevisions() {
+    final native = getRevisions;
+    if (native == null) return null;
+    final outPtr = calloc<Pointer<Uint8>>();
+    final outLen = calloc<IntPtr>();
+    try {
+      final result = native(outPtr, outLen);
+      if (result != 0) return null;
+      final len = outLen.value;
+      final ptr = outPtr.value;
+      if (ptr == nullptr || len == 0) return '[]';
+      final json = ptr.cast<Utf8>().toDartString(length: len);
+      freeBuffer(ptr, len);
+      return json;
+    } finally {
+      calloc.free(outPtr);
+      calloc.free(outLen);
+    }
+  }
+
+  @override
+  String? fetchPluginList() {
+    final native = pluginListJson;
+    if (native == null) return null;
+    final outPtr = calloc<Pointer<Uint8>>();
+    final outLen = calloc<IntPtr>();
+    try {
+      final result = native(outPtr, outLen);
+      if (result != 0) return null;
+      final len = outLen.value;
+      final ptr = outPtr.value;
+      if (ptr == nullptr || len == 0) return '[]';
+      final json = ptr.cast<Utf8>().toDartString(length: len);
+      freeBuffer(ptr, len);
+      return json;
+    } finally {
+      calloc.free(outPtr);
+      calloc.free(outLen);
+    }
+  }
+
+  @override
+  bool installSamplePluginNative({required bool grantEdit}) {
+    final native = pluginInstallSample;
+    if (native == null) return false;
+    return native(grantEdit ? 1 : 0) == 0;
+  }
+
   String? fetchDocumentInspect() {
     final native = getDocumentInspect;
     if (native == null) return '[]';
@@ -2028,6 +2175,25 @@ extension NativeEngineOps on NativeEngine {
     }
   }
 
+  Uint8List? fetchImageAssetBytes(String assetId) {
+    if (assetId.isEmpty) return null;
+    final idPtr = assetId.toNativeUtf8();
+    final outPtr = calloc<Pointer<Uint8>>();
+    final outLen = calloc<IntPtr>();
+    try {
+      final result = getImageAsset(idPtr, outPtr, outLen);
+      if (result != 0) return null;
+      final len = outLen.value;
+      final ptr = outPtr.value;
+      if (ptr == nullptr || len == 0) return Uint8List(0);
+      return adoptFfiBuffer(ptr, len);
+    } finally {
+      calloc.free(idPtr);
+      calloc.free(outPtr);
+      calloc.free(outLen);
+    }
+  }
+
   @override
   String? latestOfficeMathRunId() {
     final outPtr = calloc<Pointer<Uint8>>();
@@ -2083,11 +2249,6 @@ extension NativeEngineOps on NativeEngine {
 
   bool newDocument() => newDocumentNative() == 0;
 
-  /// Blocks the calling isolate: `tw_open_document_with_path` enqueues the open
-  /// and then parks on `wait_for_open` (30 s cap) before returning, so there is
-  /// no request id for Dart to correlate against the `DocumentOpened` event.
-  /// Making this awaitable needs the export split into an enqueue that returns
-  /// the request id plus a result getter (Rust-side change).
   int openDocumentBytes(Uint8List bytes, {String? path, String? password}) {
     final ptr = calloc<Uint8>(bytes.length);
     final pathPtr = path?.toNativeUtf8();
@@ -2111,6 +2272,50 @@ extension NativeEngineOps on NativeEngine {
     } finally {
       if (passwordPtr != null) calloc.free(passwordPtr);
       if (pathPtr != null) calloc.free(pathPtr);
+      calloc.free(ptr);
+    }
+  }
+
+  /// Non-blocking open: enqueues work and awaits the correlated `DocumentOpened`.
+  Future<int> openDocumentBytesAsync(
+    Uint8List bytes, {
+    String? path,
+    String? password,
+    Duration timeout = const Duration(seconds: 120),
+  }) async {
+    final enqueue = openDocumentAsync;
+    final take = takeOpenResult;
+    if (enqueue == null || take == null) {
+      return openDocumentBytes(bytes, path: path, password: password);
+    }
+    if (password != null && password.isNotEmpty) {
+      // Password path still uses blocking export until async variant exists.
+      return openDocumentBytes(bytes, path: path, password: password);
+    }
+    final ptr = calloc<Uint8>(bytes.length);
+    final pathPtr = path?.toNativeUtf8();
+    final requestIdOut = calloc<Uint64>();
+    try {
+      ptr.asTypedList(bytes.length).setAll(0, bytes);
+      final code = enqueue(
+        ptr,
+        bytes.length,
+        pathPtr ?? nullptr.cast<Utf8>(),
+        requestIdOut,
+      );
+      if (code != 0) return code;
+      final requestId = requestIdOut.value;
+      try {
+        final eventType =
+            await NativeEventRouter.instance.waitFor(requestId, timeout: timeout);
+        if (eventType == NativeEventTypes.error) return -2;
+      } on TimeoutException {
+        return -3;
+      }
+      return take(requestId);
+    } finally {
+      if (pathPtr != null) calloc.free(pathPtr);
+      calloc.free(requestIdOut);
       calloc.free(ptr);
     }
   }
@@ -2164,8 +2369,7 @@ extension NativeEngineOps on NativeEngine {
     }
   }
 
-  /// Blocks the calling isolate — see [openDocumentBytes]; `tw_save_document`
-  /// returns the serialized bytes only after `wait_for_document_saved`.
+  /// Blocking save — prefer [saveDocumentBytesAsync] on the UI isolate.
   Uint8List? saveDocumentBytes() {
     final outPtr = calloc<Pointer<Uint8>>();
     final outLen = calloc<IntPtr>();
@@ -2181,6 +2385,46 @@ extension NativeEngineOps on NativeEngine {
     } finally {
       calloc.free(outPtr);
       calloc.free(outLen);
+    }
+  }
+
+  Future<Uint8List?> saveDocumentBytesAsync({
+    Duration timeout = const Duration(seconds: 120),
+  }) async {
+    final enqueue = saveDocumentAsync;
+    final take = takeSavedDocument;
+    if (enqueue == null || take == null) {
+      return saveDocumentBytes();
+    }
+    final requestIdOut = calloc<Uint64>();
+    try {
+      final code = enqueue(requestIdOut);
+      if (code != 0) return null;
+      final requestId = requestIdOut.value;
+      try {
+        final eventType =
+            await NativeEventRouter.instance.waitFor(requestId, timeout: timeout);
+        if (eventType == NativeEventTypes.error) return null;
+      } on TimeoutException {
+        return null;
+      }
+      final outPtr = calloc<Pointer<Uint8>>();
+      final outLen = calloc<IntPtr>();
+      try {
+        final takeCode = take(requestId, outPtr, outLen);
+        if (takeCode != 0) return null;
+        final len = outLen.value;
+        final ptr = outPtr.value;
+        if (ptr == nullptr || len == 0) return Uint8List(0);
+        final bytes = ptr.asTypedList(len).sublist(0);
+        freeBuffer(ptr, len);
+        return bytes;
+      } finally {
+        calloc.free(outPtr);
+        calloc.free(outLen);
+      }
+    } finally {
+      calloc.free(requestIdOut);
     }
   }
 
@@ -3114,25 +3358,52 @@ extension NativeEngineOps on NativeEngine {
   Future<bool> insertImageBlockAsync(double width, double height) =>
       enqueueEdit(() => insertImage(width, height));
 
-  Future<bool> insertShapeBlockAsync(int shapeType) =>
-      enqueueEdit(() => insertShape(shapeType));
-
-  Future<bool> insertTextBoxAsync() => enqueueEdit(() => insertTextBox());
-
-  Future<bool> insertWordArtAsync(String text) async {
-    final ptr = text.toNativeUtf8();
+  Future<bool> insertShapeBlockAsync(int shapeType, {String? caretRunId}) async {
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
     try {
-      return enqueueEdit(() => insertWordArt(ptr));
+      return enqueueEdit(() => insertShape(shapeType, ptr));
     } finally {
-      calloc.free(ptr);
+      if (caretRunId != null) calloc.free(ptr);
     }
   }
 
-  Future<bool> insertDiagramAsync({int diagramType = 0}) =>
-      enqueueEdit(() => insertDiagram(diagramType));
+  Future<bool> insertTextBoxAsync({String? caretRunId}) async {
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return enqueueEdit(() => insertTextBox(ptr));
+    } finally {
+      if (caretRunId != null) calloc.free(ptr);
+    }
+  }
 
-  Future<bool> insertChartAsync({int chartType = 0}) =>
-      enqueueEdit(() => insertChart(chartType));
+  Future<bool> insertWordArtAsync(String text, {String? caretRunId}) async {
+    final textPtr = text.toNativeUtf8();
+    final caretPtr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return enqueueEdit(() => insertWordArt(textPtr, caretPtr));
+    } finally {
+      calloc.free(textPtr);
+      if (caretRunId != null) calloc.free(caretPtr);
+    }
+  }
+
+  Future<bool> insertDiagramAsync({int diagramType = 0, String? caretRunId}) async {
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return enqueueEdit(() => insertDiagram(diagramType, ptr));
+    } finally {
+      if (caretRunId != null) calloc.free(ptr);
+    }
+  }
+
+  Future<bool> insertChartAsync({int chartType = 0, String? caretRunId}) async {
+    final ptr = caretRunId?.toNativeUtf8() ?? nullptr;
+    try {
+      return enqueueEdit(() => insertChart(chartType, ptr));
+    } finally {
+      if (caretRunId != null) calloc.free(ptr);
+    }
+  }
 
   Future<bool> setChartDataAsync(String shapeId, Map<String, dynamic> chartData) async {
     final shapePtr = shapeId.toNativeUtf8();
@@ -3148,6 +3419,10 @@ extension NativeEngineOps on NativeEngine {
       calloc.free(jsonPtr);
     }
   }
+
+  Future<bool> ensureShapeTextAsync(String shapeId) => enqueueEdit(
+        () => dispatchCommand(CommandCodec.ensureShapeText(shapeId: shapeId)),
+      );
 
   @override
   Future<bool> insertOfficeMathAsync({
@@ -3213,17 +3488,23 @@ extension NativeEngineOps on NativeEngine {
     }
   }
 
-  Future<bool> insertImageBytesAsync(Uint8List bytes, String mimeType) async {
+  Future<bool> insertImageBytesAsync(
+    Uint8List bytes,
+    String mimeType, {
+    String? caretRunId,
+  }) async {
     final dataPtr = calloc<Uint8>(bytes.length);
     final mimePtr = mimeType.toNativeUtf8();
+    final caretPtr = caretRunId?.toNativeUtf8() ?? nullptr;
     try {
       dataPtr.asTypedList(bytes.length).setAll(0, bytes);
       return enqueueEdit(
-        () => insertImageBytes(dataPtr, bytes.length, mimePtr),
+        () => insertImageBytes(dataPtr, bytes.length, mimePtr, caretPtr),
       );
     } finally {
       calloc.free(dataPtr);
       calloc.free(mimePtr);
+      if (caretRunId != null) calloc.free(caretPtr);
     }
   }
 
@@ -3275,6 +3556,21 @@ extension NativeEngineOps on NativeEngine {
     final ptr = imageId.toNativeUtf8();
     try {
       return enqueueEdit(() => setImageAnchor(ptr, x, y, originX, originY));
+    } finally {
+      calloc.free(ptr);
+    }
+  }
+
+  Future<bool> setShapeAnchorAsync(
+    String shapeId,
+    double x,
+    double y, {
+    int originX = 0,
+    int originY = 0,
+  }) async {
+    final ptr = shapeId.toNativeUtf8();
+    try {
+      return enqueueEdit(() => setShapeAnchor(ptr, x, y, originX, originY));
     } finally {
       calloc.free(ptr);
     }

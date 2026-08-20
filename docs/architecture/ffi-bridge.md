@@ -308,37 +308,23 @@ cascade past the synchronous window mark nothing stale at all.
 
 ## Zero-Copy Data Transport
 
+### Native page DL + atlas (B1/B2)
+
+`tw_get_page_display_list` and `tw_get_atlas` transfer **ownership** of a Rust-allocated buffer to Dart. Dart adopts the pointer with `ExternalTypedData` and a `NativeFinalizer` that calls `tw_free_buffer` on GC — no `asTypedList().sublist(0)` copy on the hot path.
+
+At the FFI edge, `Arc::try_unwrap` moves uniquely held snapshot bytes; shared unchanged pages clone once (unavoidable while the worker retains the snapshot).
+
+Debug/test counters: `tw_reset_transfer_stats()` / `tw_get_transfer_stats()`.
+
+### Image-by-id (B3, wire v9)
+
+Page display lists (`DISPLAY_LIST_VERSION = 9`) omit embedded image payloads. Hosts fetch bytes once via `tw_get_image_asset(asset_id)`; Flutter wires this through `DocumentEngine.fetchImageAssetBytes` and `DisplayListSnapshot.decodeImages(resolveAsset: …)`.
+
 ### Display List Transfer
 
-The display list is a flat byte buffer. It crosses FFI as a pointer + length:
+The display list is a flat byte buffer. It crosses FFI as a pointer + length owned by the caller after `tw_get_page_display_list` returns.
 
-```rust
-#[no_mangle]
-pub extern "C" fn tw_get_display_list(
-    doc_id: u32,
-    page: u32,
-    out_ptr: *mut *const u8,
-    out_len: *mut usize,
-    out_version: *mut u64,
-) -> i32 {
-    let snapshot = session.get_display_list(doc_id, page);
-    unsafe {
-        *out_ptr = snapshot.display_list.as_ptr();
-        *out_len = snapshot.display_list.len();
-        *out_version = snapshot.version;
-    }
-    0
-}
-```
-
-Flutter reads the buffer directly:
-
-```dart
-final displayListBytes = _nativeGetDisplayList(docId, pageIndex);
-final snapshot = DisplayListSnapshot.fromBytes(displayListBytes);
-```
-
-The buffer is owned by Rust and valid until the next `publish()` for that page. Flutter must deserialize and copy any data it needs to retain before the next edit.
+Flutter reads the buffer via `adoptFfiBuffer` (native) or Transferable cache (web worker).
 
 ### Atlas Transfer
 
@@ -359,8 +345,7 @@ pub extern "C" fn tw_get_atlas(
 pub extern "C" fn tw_get_atlas_generation(out_generation: *mut u64) -> i32;
 ```
 
-`tw_get_atlas` clones the whole pixel buffer, so check `tw_get_atlas_generation`
-first and skip the fetch when the generation is unchanged.
+Check `tw_get_atlas_generation` first and skip `tw_get_atlas` when unchanged. When fetched, atlas pixels use the same owned-buffer contract as page DL.
 
 Flutter creates a `ui.Image` from the RGBA data:
 

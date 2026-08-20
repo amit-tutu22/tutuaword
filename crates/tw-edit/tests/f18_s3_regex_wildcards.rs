@@ -75,6 +75,16 @@ fn u_f18_s3_invalid_regex_returns_error() {
 }
 
 #[test]
+fn u_f18_s3_overlong_regex_is_rejected() {
+    let mut session = EditSession::new();
+    let range = seed_text(&mut session, "abc");
+    let long = "a".repeat(600);
+    let err = find_matches(&session.document, &range, &long, true, true, false, None)
+        .unwrap_err();
+    assert!(matches!(err, EditError::InvalidRegex(_)));
+}
+
+#[test]
 fn u_f18_s3_regex_replace_all_substitutes_matches() {
     let mut session = EditSession::new();
     let range = seed_text(&mut session, "item 1 and item 22");

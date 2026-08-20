@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tutuaword/editor/display_list.dart';
+import 'package:tutuaword/editor/formatting_marks.dart';
 
 void main() {
   group('DisplayListSnapshot', () {
@@ -110,6 +111,46 @@ void main() {
 
       final snap = DisplayListSnapshot.fromBytes(truncated);
       expect(snap.imagePayloads.single, isEmpty);
+    });
+
+    test('oversized glyphCount fails soft without RangeError', () {
+      final writer = _ByteWriter();
+      writer.writeU32(4);
+      writer.writeU64(1);
+      writer.writeF32(612);
+      writer.writeF32(792);
+      // Claim millions of glyphs but only supply a few bytes.
+      writer.writeU32(500001);
+      writer.writeF32(0);
+      writer.writeF32(0);
+      final snap = DisplayListSnapshot.fromBytes(writer.toBytes());
+      expect(snap.version, 0);
+      expect(snap.hasPaintableGlyphs, isFalse);
+    });
+
+    test('v8 page list carries formatting marks', () {
+      final writer = _ByteWriter();
+      writer.writeU32(8);
+      writer.writeU64(3);
+      writer.writeF32(612);
+      writer.writeF32(792);
+      _writeGlyphBatch(writer, 0);
+      _writeRectBatch(writer, 0);
+      _writePathBatch(writer, 0);
+      writer.writeU32(0); // images
+      writer.writeU32(0); // shapes
+      writer.writeU32(2); // two marks
+      writer.writeF32(10);
+      writer.writeF32(20);
+      writer.writeF32(12);
+      writer.writeF32(30);
+      writer.writeF32(20);
+      writer.writeF32(12);
+      writer.writeBytes([0, 2]); // space, paragraph
+      final snap = DisplayListSnapshot.fromBytes(writer.toBytes());
+      expect(snap.formattingMarks, hasLength(2));
+      expect(snap.formattingMarks.first.kind, FormattingMarkKind.space);
+      expect(snap.formattingMarks.last.kind, FormattingMarkKind.paragraph);
     });
 
     test('v7 page list parses shape selection after empty image batch', () {

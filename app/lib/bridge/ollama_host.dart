@@ -28,6 +28,10 @@ abstract class OllamaHost {
   Future<OllamaEnsureResult> ensureRunning(String endpoint);
 }
 
+/// True when `GET /api/tags` indicates a live Ollama server.
+bool isOllamaTagsHealthyStatus(int statusCode) =>
+    statusCode >= 200 && statusCode < 300;
+
 /// Test / web double that never starts a process.
 class FakeOllamaHost implements OllamaHost {
   FakeOllamaHost({

@@ -92,6 +92,76 @@ void main() {
       await tester.pumpAndSettle();
       expect(controller.hasSelectedImage, isTrue);
       expect(controller.selectedImageId, 'image-1');
+      expect(find.byKey(const Key('accessibility_alt_text_field')), findsOneWidget);
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('I-F21-S4-missing-alt-tap applies alt text and rechecks',
+        (tester) async {
+      final engine = MockDocumentEngine();
+      final controller = createTestEditorController(engine: engine);
+      addTearDown(controller.dispose);
+
+      await controller.insertImageBytes(_png1x1, 'image/png');
+      await settleEngineStyle(tester);
+      final imageId = engine.mockImageId!;
+      controller.selectImage(
+        0,
+        ImageBounds(
+          imageId: imageId,
+          index: 0,
+          rect: const Rect.fromLTWH(72, 72, 72, 72),
+        ),
+      );
+      controller.checkAccessibility();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: AccessibilityCheckerPane(controller: controller),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(Key('accessibility_issue_missing_alt_$imageId')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('accessibility_alt_text_field')),
+        'Company logo',
+      );
+      await tester.tap(find.byKey(const Key('accessibility_alt_text_apply')));
+      await tester.pumpAndSettle();
+
+      expect(engine.lastImageAltText, 'Company logo');
+      expect(
+        controller.accessibilityIssues.any((i) => i.rule == 'missing_alt'),
+        isFalse,
+      );
+    });
+
+    testWidgets('I-F21-S4-expanded pane hides duplicate header', (tester) async {
+      final engine = MockDocumentEngine();
+      final controller = createTestEditorController(engine: engine);
+      addTearDown(controller.dispose);
+      controller.checkAccessibility();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: AccessibilityCheckerPane(
+              controller: controller,
+              expanded: true,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Accessibility'), findsNothing);
+      expect(find.byTooltip('Close'), findsNothing);
+      expect(find.byKey(const Key('accessibility_checker_pane')), findsOneWidget);
     });
 
     testWidgets('I-F21-S4-status-bar reflects check result', (tester) async {

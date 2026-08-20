@@ -213,7 +213,7 @@ impl ProviderRouter {
     ) -> Result<crate::provider::CompletionResponse, AiError> {
         let provider_id = self.hybrid.route(task, ctx)?;
         if provider_id == RULES {
-            return Err(AiError::NotImplemented);
+            return complete_rules(request);
         }
         let provider = self
             .hybrid
@@ -221,6 +221,24 @@ impl ProviderRouter {
             .ok_or_else(|| AiError::ProviderUnavailable(provider_id.clone()))?;
         provider.complete(request)
     }
+}
+
+fn complete_rules(
+    request: &crate::provider::CompletionRequest,
+) -> Result<crate::provider::CompletionResponse, AiError> {
+    let checker = tw_spell::SpellChecker::english_us();
+    let mut text = request.prompt.clone();
+    for issue in checker.check_text_with_limit(&text, 1).into_iter().rev() {
+        if let Some(fix) = issue.suggestions.first() {
+            if issue.start <= text.len() && issue.end <= text.len() && issue.start < issue.end {
+                text.replace_range(issue.start..issue.end, fix);
+            }
+        }
+    }
+    Ok(crate::provider::CompletionResponse {
+        text,
+        tokens_used: 1,
+    })
 }
 
 #[cfg(test)]
@@ -336,6 +354,28 @@ mod tests {
         let router = test_router();
         let id = router.route(AiTask::SpellCheck, &small_ctx()).unwrap();
         assert_eq!(id, RULES);
+    }
+
+    #[test]
+    fn rules_complete_fixes_obvious_misspelling() {
+        let router = ProviderRouter::new(OPENAI, LLAMA_CPP);
+        let response = router
+            .complete(
+                AiTask::SpellCheck,
+                &small_ctx(),
+                &CompletionRequest {
+                    prompt: "Teh document".into(),
+                    system_prompt: None,
+                    max_tokens: 64,
+                    temperature: 0.0,
+                },
+            )
+            .unwrap();
+        assert!(
+            response.text.to_lowercase().contains("the"),
+            "got {}",
+            response.text
+        );
     }
 
     #[test]

@@ -26,6 +26,7 @@ class EngineHost extends ChangeNotifier {
   double _marginRight = 72;
   Uint8List _displayListBytes = Uint8List(0);
   int _pageCount = 1;
+  bool _pageCountPinnedForTest = false;
   int _nativeEditDepth = 0;
   Completer<void>? _editsIdle;
   bool _refreshScheduled = false;
@@ -75,6 +76,7 @@ class EngineHost extends ChangeNotifier {
   }
 
   void setPageCount(int count) {
+    _pageCountPinnedForTest = false;
     _pageCount = count.clamp(1, 9999);
   }
 
@@ -183,7 +185,9 @@ class EngineHost extends ChangeNotifier {
     _pageHeight = data.pageHeight;
     _syncSectionFormatFromEngine();
     _documentTextStale = true;
-    _pageCount = data.pageCount.clamp(1, 9999);
+    if (!_pageCountPinnedForTest) {
+      _pageCount = data.pageCount.clamp(1, 9999);
+    }
     if (full || versionChanged) _refreshAtlasFromEngine();
   }
 
@@ -267,6 +271,7 @@ class EngineHost extends ChangeNotifier {
     pageDisplayLists.clear();
     pageDisplayVersions.clear();
     _pageCount = pageCount;
+    _pageCountPinnedForTest = pageCount > 1;
     for (var page = 0; page < pageCount; page++) {
       pageDisplayLists[page] = bytes;
       pageDisplayVersions[page] = _displayVersion;
@@ -276,6 +281,7 @@ class EngineHost extends ChangeNotifier {
   void clearDisplayCaches() {
     _displayListBytes = Uint8List(0);
     _displayVersion = 0;
+    _pageCountPinnedForTest = false;
     pageDisplayLists.clear();
     pageDisplayVersions.clear();
   }

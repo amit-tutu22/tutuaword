@@ -21,6 +21,40 @@ impl WasmSandbox {
         Ok(Self { engine })
     }
 
+    pub fn compile(&self, wasm_bytes: &[u8]) -> Result<Module, PluginError> {
+        Module::new(&self.engine, wasm_bytes)
+            .map_err(|e| PluginError::Message(format!("compile plugin: {e}")))
+    }
+
+    /// Instantiate a precompiled module, call exported `export`, return its i32.
+    pub fn invoke_module(
+        &self,
+        module: &Module,
+        state: SandboxHostState,
+        export: &str,
+        fuel: u64,
+    ) -> Result<(i32, SandboxHostState), PluginError> {
+        let mut linker = Linker::new(&self.engine);
+        define_host_imports(&mut linker)?;
+
+        let mut store = Store::new(&self.engine, state);
+        store
+            .set_fuel(fuel)
+            .map_err(|e| PluginError::Message(e.to_string()))?;
+
+        let instance = linker
+            .instantiate(&mut store, module)
+            .map_err(|e| PluginError::Message(format!("instantiate plugin: {e}")))?;
+        let func = instance
+            .get_typed_func::<(), i32>(&mut store, export)
+            .map_err(|e| PluginError::Message(format!("missing export `{export}`: {e}")))?;
+        let result = func
+            .call(&mut store, ())
+            .map_err(|e| PluginError::Message(format!("plugin trap: {e}")))?;
+        let state = store.into_data();
+        Ok((result, state))
+    }
+
     /// Instantiate `wasm_bytes` (binary or WAT), call exported `export`, return its i32.
     ///
     /// Takes ownership of `state` for the call and returns it afterward so the
@@ -32,29 +66,43 @@ impl WasmSandbox {
         export: &str,
         fuel: u64,
     ) -> Result<(i32, SandboxHostState), PluginError> {
-        let module = Module::new(&self.engine, wasm_bytes)
-            .map_err(|e| PluginError::Message(format!("compile plugin: {e}")))?;
-
-        let mut linker = Linker::new(&self.engine);
-        define_host_imports(&mut linker)?;
-
-        let mut store = Store::new(&self.engine, state);
-        store
-            .set_fuel(fuel)
-            .map_err(|e| PluginError::Message(e.to_string()))?;
-
-        let instance = linker
-            .instantiate(&mut store, &module)
-            .map_err(|e| PluginError::Message(format!("instantiate plugin: {e}")))?;
-        let func = instance
-            .get_typed_func::<(), i32>(&mut store, export)
-            .map_err(|e| PluginError::Message(format!("missing export `{export}`: {e}")))?;
-        let result = func
-            .call(&mut store, ())
-            .map_err(|e| PluginError::Message(format!("plugin trap: {e}")))?;
-        let state = store.into_data();
-        Ok((result, state))
+        let module = self.compile(wasm_bytes)?;
+        self.invoke_module(&module, state, export, fuel)
     }
+
+    /// Cloneable engine handle for invoke outside a host mutex.
+    pub fn engine(&self) -> Engine {
+        self.engine.clone()
+    }
+}
+
+/// Run a precompiled module with a cloned engine (no sandbox struct required).
+pub fn invoke_with_engine(
+    engine: &Engine,
+    module: &Module,
+    state: SandboxHostState,
+    export: &str,
+    fuel: u64,
+) -> Result<(i32, SandboxHostState), PluginError> {
+    let mut linker = Linker::new(engine);
+    define_host_imports(&mut linker)?;
+
+    let mut store = Store::new(engine, state);
+    store
+        .set_fuel(fuel)
+        .map_err(|e| PluginError::Message(e.to_string()))?;
+
+    let instance = linker
+        .instantiate(&mut store, module)
+        .map_err(|e| PluginError::Message(format!("instantiate plugin: {e}")))?;
+    let func = instance
+        .get_typed_func::<(), i32>(&mut store, export)
+        .map_err(|e| PluginError::Message(format!("missing export `{export}`: {e}")))?;
+    let result = func
+        .call(&mut store, ())
+        .map_err(|e| PluginError::Message(format!("plugin trap: {e}")))?;
+    let state = store.into_data();
+    Ok((result, state))
 }
 
 fn define_host_imports(linker: &mut Linker<SandboxHostState>) -> Result<(), PluginError> {

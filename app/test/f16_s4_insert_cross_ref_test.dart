@@ -12,7 +12,19 @@ void main() {
       final controller = createTestEditorController(engine: engine);
       addTearDown(controller.dispose);
 
-      await pumpRibbonTab(tester, ReferencesTab(controller: controller));
+      await tester.binding.setSurfaceSize(const Size(1600, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      await pumpRibbonTab(
+        tester,
+        ReferencesTab(controller: controller),
+        size: const Size(1600, 120),
+      );
+      await tester.scrollUntilVisible(
+        find.byKey(const Key('insert_bookmark')),
+        120,
+        scrollable: find.byType(Scrollable).first,
+      );
       await tester.tap(find.byKey(const Key('insert_bookmark')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('bookmark_insert_button')));
@@ -21,7 +33,7 @@ void main() {
       await tester.scrollUntilVisible(
         find.byKey(const Key('insert_cross_reference')),
         120,
-        scrollable: find.byType(Scrollable),
+        scrollable: find.byType(Scrollable).first,
       );
       await tester.tap(find.byKey(const Key('insert_cross_reference')));
       await tester.pumpAndSettle();
@@ -36,7 +48,19 @@ void main() {
       final controller = createTestEditorController(engine: engine);
       addTearDown(controller.dispose);
 
-      await pumpRibbonTab(tester, ReferencesTab(controller: controller));
+      await tester.binding.setSurfaceSize(const Size(1600, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      await pumpRibbonTab(
+        tester,
+        ReferencesTab(controller: controller),
+        size: const Size(1600, 120),
+      );
+      await tester.scrollUntilVisible(
+        find.byKey(const Key('insert_bookmark')),
+        120,
+        scrollable: find.byType(Scrollable).first,
+      );
       await tester.tap(find.byKey(const Key('insert_bookmark')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('bookmark_insert_button')));
@@ -45,7 +69,7 @@ void main() {
       await tester.scrollUntilVisible(
         find.byKey(const Key('insert_index')),
         120,
-        scrollable: find.byType(Scrollable),
+        scrollable: find.byType(Scrollable).first,
       );
       await tester.tap(find.byKey(const Key('insert_index')));
       await tester.pumpAndSettle();
@@ -92,6 +116,35 @@ void main() {
       await settleEngineStyle(tester);
 
       expect(engine.text, contains('Introduction'));
+      expect(controller.sessionController.statusText, contains('Cross-reference inserted'));
+    });
+
+    testWidgets('I-F16-S4-cross-ref-creates-bookmark-when-missing', (tester) async {
+      final engine = MockDocumentEngine(initialText: 'Introduction');
+      final controller = createTestEditorController(engine: engine);
+      addTearDown(controller.dispose);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) {
+              return TextButton(
+                onPressed: () => controller.insertCrossReference(context),
+                child: const Text('CrossRef'),
+              );
+            },
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('CrossRef'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('bookmark_name_dialog')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('bookmark_insert_button')));
+      await tester.pumpAndSettle();
+      await settleEngineStyle(tester);
+
+      expect(controller.sessionController.statusText, contains('Cross-reference inserted'));
     });
   });
 

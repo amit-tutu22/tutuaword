@@ -140,6 +140,7 @@ class ViewTab extends StatelessWidget {
               ),
               RibbonGroup(
                 label: 'Window',
+                showDivider: false,
                 child: Row(
                   children: [
                     Builder(
@@ -166,32 +167,6 @@ class ViewTab extends StatelessWidget {
                           ? 'Close split view'
                           : 'Split the window',
                       onPressed: controller.toggleSplitView,
-                    ),
-                  ],
-                ),
-              ),
-              RibbonGroup(
-                label: 'Help',
-                showDivider: false,
-                child: Row(
-                  children: [
-                    Builder(
-                      builder: (context) => RibbonLargeButton(
-                        key: const Key('view_about'),
-                        icon: Icons.info_outline,
-                        label: 'About\nTutuaword',
-                        tooltip: 'Help, support, and feedback',
-                        onPressed: () => controller.openAboutDialog(context),
-                      ),
-                    ),
-                    Builder(
-                      builder: (context) => RibbonLargeButton(
-                        key: const Key('view_settings'),
-                        icon: Icons.settings_outlined,
-                        label: 'App\nSettings',
-                        tooltip: 'Ribbon and tab colors',
-                        onPressed: () => controller.openSettingsDialog(context),
-                      ),
                     ),
                   ],
                 ),

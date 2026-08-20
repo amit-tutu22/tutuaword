@@ -11,8 +11,10 @@ import 'package:tutuaword/editor/editor_controller.dart';
 import 'package:tutuaword/editor/glyph_editor_surface.dart';
 import 'package:tutuaword/editor/navigation_pane.dart';
 import 'package:tutuaword/editor/accessibility_checker_pane.dart';
+import 'package:tutuaword/ui/changes_pane.dart';
 import 'package:tutuaword/editor/picture_inspector_pane.dart';
 import 'package:tutuaword/editor/style_inspector_pane.dart';
+import 'package:tutuaword/editor/page_snapshot_lru.dart';
 import 'package:tutuaword/editor/rulers.dart';
 import 'package:tutuaword/editor/web_glyph_text_input.dart';
 import 'package:tutuaword/ui/word_theme.dart';
@@ -69,12 +71,14 @@ class _DocumentViewState extends State<DocumentView> {
   bool _phoneNavSheetOpen = false;
   bool _phoneStyleSheetOpen = false;
   bool _phoneAccessibilitySheetOpen = false;
+  bool _phoneChangesSheetOpen = false;
   bool _phonePictureSheetOpen = false;
   String? _dismissedPictureId;
 
   /// On phone/tablet, 100% zoom means the page fills the canvas width so the
-  /// full line of text is on-screen. User zoom then scales that fit; going
-  /// above 100% can pan horizontally. Desktop keeps 1:1 page points.
+  /// full line of text is on-screen and unused side/bottom canvas is minimized.
+  /// User zoom then scales that fit; going above 100% can pan horizontally.
+  /// Desktop keeps 1:1 page points.
   double _effectiveScale(EditorController controller) {
     var scale = controller.zoom;
     if (mounted && WordTheme.mobileChrome(context)) {
@@ -83,13 +87,13 @@ class _DocumentViewState extends State<DocumentView> {
     return scale;
   }
 
+  /// Scale that makes one page row span the canvas width — shrink on phones,
+  /// grow on tablets where the page is narrower than the viewport.
   double _mobileWidthFit(EditorController controller) {
     final columns = controller.pageColumns.clamp(1, 3);
     final rowWidth = columns * (controller.pageWidth + _pageGapEffective);
     if (_viewportWidth <= 1 || rowWidth <= 0) return 1.0;
-    final fit = _viewportWidth / rowWidth;
-    // Never upscale past 1:1 page points — only shrink so the page fits.
-    return fit < 1.0 ? fit : 1.0;
+    return _viewportWidth / rowWidth;
   }
 
   double _pageExtentFor(EditorController controller) {
@@ -188,19 +192,19 @@ class _DocumentViewState extends State<DocumentView> {
   }
 
   void _onScroll() {
+    if (!_scrollController.hasClients) return;
+    _syncVisiblePageFromOffset(_scrollController.offset);
+  }
+
+  void _syncVisiblePageFromOffset(double offset) {
     final extent = _pageExtent;
-    if (extent <= 0 || !_scrollController.hasClients) return;
-    final row = (_scrollController.offset / extent).floor();
+    if (extent <= 0) return;
+    // ListView padding sits above item 0; count it so a small drag onto page 1
+    // is not reported as still being on page 0.
+    final y = (offset - _listPaddingTop).clamp(0.0, double.infinity);
+    final row = (y / extent).floor();
     final columns = widget.controller.pageColumns.clamp(1, 3);
     final visiblePage = row * columns;
-    // A caret-follow jump may leave a sliver of the previous page in view;
-    // don't let that reset currentPage away from the caret's page. Manual
-    // scrolling must still update it.
-    if (_caretFollowScrollInFlight &&
-        widget.controller.caretRunId != null &&
-        visiblePage != widget.controller.caretPage) {
-      return;
-    }
     widget.controller.setVisiblePage(visiblePage);
   }
 
@@ -242,7 +246,10 @@ class _DocumentViewState extends State<DocumentView> {
     final snapshot = DisplayListSnapshot.fromBytes(bytes);
     await _ensureAtlasTexture(version);
 
-    final decodedImages = await snapshot.decodeImages(skip: _images.keys.toSet());
+    final decodedImages = await snapshot.decodeImages(
+      skip: _images.keys.toSet(),
+      resolveAsset: (id) async => widget.controller.fetchImageAssetBytes(id),
+    );
 
     if (!mounted || version != widget.controller.displayVersion) {
       for (final image in decodedImages.values) {
@@ -265,6 +272,19 @@ class _DocumentViewState extends State<DocumentView> {
       });
       _pending.remove(index);
     });
+    _evictDistantSnapshots(index);
+  }
+
+  void _evictDistantSnapshots(int anchorPage) {
+    final victims = pagesToEvictForLru(
+      cachedPages: _snapshots.keys,
+      anchorPage: anchorPage,
+    );
+    for (final page in victims) {
+      _snapshots.remove(page);
+      _loadedPageVersions.remove(page);
+      _pending.remove(page);
+    }
   }
 
   Future<void> _ensureAtlasTexture(int layoutVersion) async {
@@ -397,6 +417,13 @@ class _DocumentViewState extends State<DocumentView> {
 
   void _scrollToKeepCaretVisible(CaretScrollRequest request) {
     if (!_scrollController.hasClients) return;
+    // The user scrolled to another page — don't yank the canvas back to the
+    // caret until the caret itself moves (ensureCaretVisible updates currentPage
+    // first).
+    if (widget.controller.currentPage != request.page &&
+        widget.controller.caretPage != widget.controller.currentPage) {
+      return;
+    }
     final scale = _caretYScale;
     final pageTop = _pageTopInScrollSpace(request.page);
     final caretTop = pageTop + (request.y - request.height) * scale;
@@ -494,6 +521,8 @@ class _DocumentViewState extends State<DocumentView> {
           PictureInspectorPane(controller: controller),
         if (!phone && controller.showAccessibilityChecker && !controller.isReadMode)
           AccessibilityCheckerPane(controller: controller),
+        if (!phone && controller.showChangesPane && !controller.isReadMode)
+          ChangesPane(controller: controller),
         if (!phone && controller.showStyleInspector && !controller.isReadMode)
           StyleInspectorPane(controller: controller),
       ],
@@ -549,6 +578,17 @@ class _DocumentViewState extends State<DocumentView> {
         child: AccessibilityCheckerPane(controller: controller, expanded: true),
       );
       _phoneAccessibilitySheetOpen = false;
+    }
+
+    if (controller.showChangesPane && !_phoneChangesSheetOpen) {
+      _phoneChangesSheetOpen = true;
+      await _showPhonePaneSheet(
+        context,
+        title: 'Changes',
+        onDismiss: controller.hideChangesPane,
+        child: ChangesPane(controller: controller, expanded: true),
+      );
+      _phoneChangesSheetOpen = false;
     }
 
     if (!controller.hasSelectedImage) {
@@ -705,7 +745,13 @@ class _DocumentViewState extends State<DocumentView> {
     final gap = _pageGapEffective;
     return Stack(
       children: [
-        ListView.builder(
+        NotificationListener<ScrollNotification>(
+          onNotification: (notification) {
+            if (!trackVisiblePage) return false;
+            _syncVisiblePageFromOffset(notification.metrics.pixels);
+            return false;
+          },
+          child: ListView.builder(
           key: trackVisiblePage
               ? const ValueKey('document-page-list')
               : const ValueKey('document-page-list-split'),
@@ -773,6 +819,7 @@ class _DocumentViewState extends State<DocumentView> {
               },
             );
           },
+        ),
         ),
         if (EditorController.usesSoftKeyboardGlyphInput)
           WebGlyphTextInput(controller: controller),

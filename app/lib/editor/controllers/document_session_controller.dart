@@ -86,6 +86,9 @@ class DocumentSessionController extends ChangeNotifier {
   int _editGeneration = 0;
   int _lastAutosavedGeneration = 0;
   bool _autosaveInFlight = false;
+  int _openPaintGeneration = 0;
+  Timer? _openPaintTimer;
+  Completer<void>? _openPaintCompleter;
 
   String get statusText => _statusText;
   String? get currentPath => _currentPath;
@@ -165,16 +168,14 @@ class DocumentSessionController extends ChangeNotifier {
 
   Future<void> performAutosave() async {
     if (_editGeneration == _lastAutosavedGeneration) return;
-    while (_host.nativeEditDepth > 0) {
-      await Future<void>.delayed(const Duration(milliseconds: 2));
-    }
+    try {
+      await _host.ensureLayoutReady().timeout(const Duration(seconds: 5));
+    } catch (_) {}
     if (_editGeneration == _lastAutosavedGeneration) return;
     if (_autosaveInFlight) return;
     _autosaveInFlight = true;
     try {
-      while (_host.nativeEditDepth > 0) {
-        await Future<void>.delayed(const Duration(milliseconds: 2));
-      }
+      await _host.ensureLayoutReady().timeout(const Duration(seconds: 5));
       if (_editGeneration == _lastAutosavedGeneration) return;
       final bytes = await _serializeDocument(formatExtension: 'twdoc');
       if (bytes.isEmpty) return;
@@ -386,7 +387,7 @@ class DocumentSessionController extends ChangeNotifier {
           password = prompted.password;
         }
 
-        final code = _host.engine!.openDocumentBytes(
+        final code = await _host.engine!.openDocumentBytesAsync(
           bytes,
           path: path,
           password: password,
@@ -463,24 +464,55 @@ class DocumentSessionController extends ChangeNotifier {
 
   Future<void> _forceOpenPaint() async {
     final binding = WidgetsBinding.instance;
-    // Prefer timed yields over endOfFrame alone: Chrome can leave rAF suspended
-    // after the native file dialog, so awaiting endOfFrame would hang forever.
+    final generation = ++_openPaintGeneration;
+    binding.ensureVisualUpdate();
+    binding.scheduleFrame();
+    _host.refreshFromEngine(full: true);
+    notifyListeners();
+    onSessionChanged();
+    // Widget tests treat leftover Timers as failures, and awaiting endOfFrame
+    // can hang in Chrome after the native file dialog. Extra delayed retries
+    // are web-only; desktop/tests get one synchronous refresh.
+    if (!kIsWeb) return;
     for (var i = 0; i < 3; i++) {
+      if (generation != _openPaintGeneration) return;
       binding.ensureVisualUpdate();
       binding.scheduleFrame();
-      await Future<void>.delayed(Duration(milliseconds: 16 * (i + 1)));
+      await _openPaintDelay(Duration(milliseconds: 16 * (i + 1)));
+      if (generation != _openPaintGeneration) return;
       _host.refreshFromEngine(full: true);
       notifyListeners();
       onSessionChanged();
       if (_host.engineHasPaintableDisplayList() && _host.atlasPixels.isNotEmpty) {
         binding.ensureVisualUpdate();
         binding.scheduleFrame();
-        // One more frame so DocumentView can finish atlas upload + page load.
-        await Future<void>.delayed(const Duration(milliseconds: 32));
+        await _openPaintDelay(const Duration(milliseconds: 32));
+        if (generation != _openPaintGeneration) return;
         binding.scheduleFrame();
         break;
       }
     }
+  }
+
+  Future<void> _openPaintDelay(Duration duration) {
+    final done = Completer<void>();
+    _openPaintTimer?.cancel();
+    final previous = _openPaintCompleter;
+    _openPaintCompleter = done;
+    if (previous != null && !previous.isCompleted) previous.complete();
+    _openPaintTimer = Timer(duration, () {
+      if (!done.isCompleted) done.complete();
+    });
+    return done.future;
+  }
+
+  void _cancelOpenPaint() {
+    _openPaintGeneration++;
+    _openPaintTimer?.cancel();
+    _openPaintTimer = null;
+    final pending = _openPaintCompleter;
+    _openPaintCompleter = null;
+    if (pending != null && !pending.isCompleted) pending.complete();
   }
 
   Future<_PasswordPromptOutcome> _promptForPassword({
@@ -607,7 +639,7 @@ class DocumentSessionController extends ChangeNotifier {
         final bytes = _host.engine!.saveDocumentAsBytes(formatExtension) ?? Uint8List(0);
         if (bytes.isNotEmpty) return bytes;
       } else {
-        final bytes = _host.engine!.saveDocumentBytes();
+        final bytes = await _host.engine!.saveDocumentBytesAsync();
         if (bytes != null && bytes.isNotEmpty) return bytes;
       }
     }
@@ -920,6 +952,10 @@ class DocumentSessionController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setCompareSummary(String summary) {
+    _compareSummary = summary;
+  }
+
   void toggleRestrictEditing() {
     if (_host.engine != null) {
       final next = !_documentReadOnly;
@@ -1073,12 +1109,12 @@ class DocumentSessionController extends ChangeNotifier {
     return ok;
   }
 
-  Future<void> applyEngineStyle(
+  Future<bool> applyEngineStyle(
     Future<bool> Function() action,
     String status, {
     bool full = false,
   }) async {
-    if (_host.engine == null) return;
+    if (_host.engine == null) return false;
     final edit = _host.performNativeEdit(
       action,
       dirtyPage: full ? null : _selection.caretPage,
@@ -1090,15 +1126,18 @@ class DocumentSessionController extends ChangeNotifier {
       _formatting.syncFromCaret();
       notifyListeners();
       onSessionChanged();
+      return true;
     } else {
       final err = _host.engine?.getLastError();
       _statusText = (err != null && err.isNotEmpty) ? err : 'Edit failed';
       notifyListeners();
       onSessionChanged();
+      return false;
     }
   }
 
   void disposeSession() {
+    _cancelOpenPaint();
     _autosaveScheduler?.stop();
     unawaited(_releaseScopedAccess());
     if (Platform.isMacOS) unawaited(MacOSFileAccess.stopAllAccess());

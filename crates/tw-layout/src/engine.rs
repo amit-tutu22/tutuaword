@@ -1046,6 +1046,45 @@ impl LayoutEngine {
                         }
                     }
                     Block::Table(table) => {
+                        // Floating tables are placed absolutely and take no
+                        // room in the text flow (same as floating shapes).
+                        if let Some(anchor) = table.anchor {
+                            let (ax, ay) =
+                                anchor_position(&format, anchor, column_flow.x, y);
+                            let available = (content_bottom - ay).max(
+                                crate::tables::MIN_ROW_HEIGHT * table.rows.len() as f32,
+                            );
+                            let slice = layout_table_slice(
+                                &mut self.shaper,
+                                &mut self.atlas,
+                                table,
+                                0,
+                                ax,
+                                ay,
+                                column_flow.width,
+                                available.max(10_000.0),
+                                tw_model::Color::BLACK.to_argb(),
+                                tab_interval,
+                                0,
+                            );
+                            if slice.rows_placed > 0 {
+                                for cell in &slice.layout.cells {
+                                    for line in &cell.lines {
+                                        current_lines.push(line.clone());
+                                    }
+                                }
+                                wrap_obstacles.push(WrapObstacle {
+                                    x: ax,
+                                    y: ay,
+                                    width: slice.layout.width,
+                                    height: slice.layout.height,
+                                    kind: WrapKind::Square,
+                                });
+                                current_boxes.push(LayoutBox::Table(slice.layout));
+                            }
+                            continue;
+                        }
+
                         // Tables taller than the page are split row by row so
                         // they continue onto following pages instead of
                         // spilling past the bottom margin.
@@ -1089,6 +1128,7 @@ impl LayoutEngine {
                                 available,
                                 tw_model::Color::BLACK.to_argb(),
                                 tab_interval,
+                                0,
                             );
 
                             if slice.rows_placed == 0 {
@@ -1240,6 +1280,55 @@ impl LayoutEngine {
                     }
                     Block::ShapeBlock(shape) => {
                         let height = shape.shape.height;
+                        let shape_width = if shape.shape.width > 0.0 {
+                            shape.shape.width
+                        } else {
+                            column_flow.width
+                        };
+
+                        // Floating shapes are placed absolutely and take no
+                        // room in the text flow (same as floating images).
+                        if let Some(anchor) = shape.anchor {
+                            let (ax, ay) =
+                                anchor_position(&format, anchor, column_flow.x, y);
+                            push_shape_content(
+                                &mut current_boxes,
+                                doc,
+                                shape,
+                                ax,
+                                ay,
+                                shape_width,
+                                column_flow.width,
+                                tab_interval,
+                                &mut self.shaper,
+                                &mut self.atlas,
+                            );
+                            match shape.wrap {
+                                TextWrap::Square
+                                | TextWrap::Tight
+                                | TextWrap::Through
+                                | TextWrap::TopBottom
+                                | TextWrap::InFront => {
+                                    wrap_obstacles.push(WrapObstacle {
+                                        x: ax,
+                                        y: ay,
+                                        width: shape_width,
+                                        height,
+                                        kind: if matches!(
+                                            shape.wrap,
+                                            TextWrap::TopBottom | TextWrap::InFront
+                                        ) {
+                                            WrapKind::TopBottom
+                                        } else {
+                                            WrapKind::Square
+                                        },
+                                    });
+                                }
+                                _ => {}
+                            }
+                            continue;
+                        }
+
                         if y + height > content_bottom && !current_boxes.is_empty() {
                             flush_page(
                                 &mut pages,
@@ -1259,53 +1348,18 @@ impl LayoutEngine {
                             y = format.margin_top;
                             wrap_obstacles.clear();
                         }
-                        if let Some(preview) = shape
-                            .preview_image
-                            .as_ref()
-                            .filter(|img| !img.bytes.is_empty())
-                        {
-                            let encoded = std::sync::Arc::new(preview.bytes.clone());
-                            current_boxes.push(LayoutBox::Image(layout_shape_preview(
-                                shape,
-                                preview,
-                                format.margin_left,
-                                y,
-                                encoded,
-                            )));
-                        } else {
-                            let mut laid_out = layout_shape(shape, format.margin_left, y);
-                            if shape.shape.width <= 0.0 {
-                                laid_out.width = column_flow.width;
-                            }
-                            current_boxes.push(LayoutBox::Shape(laid_out));
-                        }
-                        let padding = 6.0;
-                        let shape_width = if shape.shape.width > 0.0 {
-                            shape.shape.width
-                        } else {
-                            column_flow.width
-                        };
-                        let inner_width = (shape_width - padding * 2.0).max(12.0);
-                        let inner = layout_shape_paragraphs(
+                        push_shape_content(
+                            &mut current_boxes,
                             doc,
                             shape,
-                            &mut self.shaper,
-                            &mut self.atlas,
-                            format.margin_left + padding,
-                            y + padding,
-                            inner_width,
-                            tab_interval,
-                        );
-                        current_boxes.extend(inner);
-                        if let Some(label) = layout_diagram_label(
-                            shape,
-                            &mut self.shaper,
-                            &mut self.atlas,
                             format.margin_left,
                             y,
-                        ) {
-                            current_boxes.push(label);
-                        }
+                            shape_width,
+                            column_flow.width,
+                            tab_interval,
+                            &mut self.shaper,
+                            &mut self.atlas,
+                        );
                         y += height + 8.0;
                     }
                     _ => {}
@@ -2316,7 +2370,16 @@ fn layout_header_footer_band(
                     .with_field_context(field_ctx),
                 margin_color,
             );
-            return Some(lines.into_iter().map(LayoutBox::TextLine).collect());
+            return Some(
+                lines
+                    .into_iter()
+                    .map(|line| {
+                        let mut line = line;
+                        expand_empty_shape_line_hit_target(&mut line, x, content_width);
+                        LayoutBox::TextLine(line)
+                    })
+                    .collect(),
+            );
         }
     }
 
@@ -2346,7 +2409,16 @@ fn layout_header_footer_band(
                     .with_field_context(field_ctx),
                 margin_color,
             );
-            return Some(lines.into_iter().map(LayoutBox::TextLine).collect());
+            return Some(
+                lines
+                    .into_iter()
+                    .map(|line| {
+                        let mut line = line;
+                        expand_empty_shape_line_hit_target(&mut line, x, content_width);
+                        LayoutBox::TextLine(line)
+                    })
+                    .collect(),
+            );
         }
     } else if !format.footer_blocks.is_empty() {
         return Some(layout_margin_blocks(
@@ -2372,7 +2444,16 @@ fn layout_header_footer_band(
                 .with_field_context(field_ctx),
             margin_color,
         );
-        return Some(lines.into_iter().map(LayoutBox::TextLine).collect());
+        return Some(
+            lines
+                .into_iter()
+                .map(|line| {
+                    let mut line = line;
+                    expand_empty_shape_line_hit_target(&mut line, x, content_width);
+                    LayoutBox::TextLine(line)
+                })
+                .collect(),
+        );
     }
 
     None
@@ -2586,6 +2667,10 @@ fn layout_margin_blocks(
                     color,
                 );
                 for line in lines {
+                    let mut line = line;
+                    // Empty header/footer bands must be clickable across the
+                    // margin width (same issue as empty shape text).
+                    expand_empty_shape_line_hit_target(&mut line, x, content_width);
                     out.push(LayoutBox::TextLine(line));
                 }
                 y += height;
@@ -2613,19 +2698,32 @@ fn layout_margin_blocks(
                 }
                 let padding = 6.0;
                 let inner_width = (shape.shape.width - padding * 2.0).max(12.0);
-                out.extend(layout_shape_paragraphs(
-                    doc,
-                    shape,
-                    shaper,
-                    atlas,
-                    x + padding,
-                    y + padding,
-                    inner_width,
-                    tab_interval,
-                ));
+                if shape.shape.shape_type == tw_model::ShapeKind::Diagram {
+                    out.extend(layout_diagram_node_paragraphs(
+                        doc,
+                        shape,
+                        shaper,
+                        atlas,
+                        x,
+                        y,
+                        tab_interval,
+                    ));
+                } else {
+                    out.extend(layout_shape_paragraphs(
+                        doc,
+                        shape,
+                        shaper,
+                        atlas,
+                        x + padding,
+                        y + padding,
+                        inner_width,
+                        tab_interval,
+                    ));
+                }
                 if let Some(label) = layout_diagram_label(shape, shaper, atlas, x, y) {
                     out.push(label);
                 }
+                out.extend(layout_chart_legend_labels(shape, shaper, atlas, x, y));
                 y += shape.shape.height + 8.0;
             }
             _ => {}
@@ -2674,6 +2772,65 @@ fn layout_shape(shape: &tw_model::ShapeBlock, x: f32, y: f32) -> ShapeLayout {
         chart_data: shape.chart_data.clone(),
         diagram_kind: shape.diagram_kind,
     }
+}
+
+/// Push a shape (and its text / labels) at an absolute page position.
+fn push_shape_content(
+    current_boxes: &mut Vec<LayoutBox>,
+    doc: &Document,
+    shape: &tw_model::ShapeBlock,
+    x: f32,
+    y: f32,
+    shape_width: f32,
+    column_width: f32,
+    tab_interval: f32,
+    shaper: &mut TextShaper,
+    atlas: &mut GlyphAtlas,
+) {
+    if let Some(preview) = shape
+        .preview_image
+        .as_ref()
+        .filter(|img| !img.bytes.is_empty())
+    {
+        let encoded = std::sync::Arc::new(preview.bytes.clone());
+        current_boxes.push(LayoutBox::Image(layout_shape_preview(
+            shape, preview, x, y, encoded,
+        )));
+    } else {
+        let mut laid_out = layout_shape(shape, x, y);
+        if shape.shape.width <= 0.0 {
+            laid_out.width = column_width;
+        }
+        current_boxes.push(LayoutBox::Shape(laid_out));
+    }
+    let padding = 6.0;
+    let inner_width = (shape_width - padding * 2.0).max(12.0);
+    if shape.shape.shape_type == tw_model::ShapeKind::Diagram {
+        current_boxes.extend(layout_diagram_node_paragraphs(
+            doc,
+            shape,
+            shaper,
+            atlas,
+            x,
+            y,
+            tab_interval,
+        ));
+    } else {
+        current_boxes.extend(layout_shape_paragraphs(
+            doc,
+            shape,
+            shaper,
+            atlas,
+            x + padding,
+            y + padding,
+            inner_width,
+            tab_interval,
+        ));
+    }
+    if let Some(label) = layout_diagram_label(shape, shaper, atlas, x, y) {
+        current_boxes.push(label);
+    }
+    current_boxes.extend(layout_chart_legend_labels(shape, shaper, atlas, x, y));
 }
 
 fn layout_shape_preview(
@@ -2756,6 +2913,168 @@ fn layout_diagram_label(
     })
 }
 
+/// Editable SmartArt node labels laid out inside each preview node frame.
+fn layout_diagram_node_paragraphs(
+    doc: &Document,
+    shape: &tw_model::ShapeBlock,
+    shaper: &mut TextShaper,
+    atlas: &mut GlyphAtlas,
+    x: f32,
+    y: f32,
+    tab_interval: f32,
+) -> Vec<LayoutBox> {
+    use tw_model::{Alignment, ShapeKind};
+
+    if shape.shape.shape_type != ShapeKind::Diagram {
+        return Vec::new();
+    }
+    if shape
+        .preview_image
+        .as_ref()
+        .is_some_and(|img| !img.bytes.is_empty())
+    {
+        return Vec::new();
+    }
+
+    let rects = crate::diagram::diagram_node_rects(
+        shape.diagram_kind,
+        x,
+        y,
+        shape.shape.width,
+        shape.shape.height,
+    );
+    let mut out = Vec::new();
+    for (para, rect) in shape.paragraphs.iter().zip(rects.iter()) {
+        let [nx, ny, nw, nh] = *rect;
+        let pad = 4.0;
+        let text_x = nx + pad;
+        let text_w = (nw - pad * 2.0).max(8.0);
+        // Vertically center a single line inside the node.
+        let text_y = ny + (nh * 0.5 - 7.0).max(pad);
+
+        let resolved_para = doc
+            .styles
+            .resolve_para_format(para.style_id, &para.format);
+        let mut effective = para.clone();
+        effective.format = resolved_para.clone();
+        effective.format.alignment = Some(Alignment::Center);
+        if effective.runs.is_empty() {
+            effective.runs.push(Run::new_text(""));
+        }
+        for run in &mut effective.runs {
+            run.format = doc
+                .styles
+                .resolve_char_format(para.style_id, &run.format);
+            if run.format.font_size.is_none() {
+                run.format.font_size = Some(11.0);
+            }
+            // Blue SmartArt nodes need light glyphs.
+            if run.format.color.is_none() {
+                run.format.color = Some(tw_model::Color {
+                    r: 255,
+                    g: 255,
+                    b: 255,
+                    a: 255,
+                });
+            }
+        }
+        let color = effective
+            .runs
+            .first()
+            .and_then(|r| r.format.color)
+            .map(|c| c.to_argb())
+            .unwrap_or(0xFFFFFFFF);
+        let (lines, _) = layout_paragraph(
+            shaper,
+            atlas,
+            &effective,
+            ParagraphFrame::new(text_x, text_y, text_w)
+                .with_tab_interval(tab_interval)
+                .with_tab_stops(resolved_para.tab_stops.clone().unwrap_or_default()),
+            color,
+        );
+        for line in lines {
+            let mut line = line;
+            // Claim the full node frame so clicks/arrows in the blue box (not
+            // only on glyphs) stay in that SmartArt node.
+            claim_shape_line_frame(&mut line, text_x, text_w);
+            out.push(LayoutBox::TextLine(line));
+        }
+    }
+    out
+}
+
+fn layout_chart_legend_labels(
+    shape: &tw_model::ShapeBlock,
+    shaper: &mut TextShaper,
+    atlas: &mut GlyphAtlas,
+    x: f32,
+    y: f32,
+) -> Vec<LayoutBox> {
+    use tw_model::ShapeKind;
+
+    if shape.shape.shape_type != ShapeKind::Chart {
+        return Vec::new();
+    }
+    if shape
+        .preview_image
+        .as_ref()
+        .is_some_and(|img| !img.bytes.is_empty())
+    {
+        return Vec::new();
+    }
+    let Some(data) = shape.chart_data.as_ref() else {
+        return Vec::new();
+    };
+
+    let labels: Vec<&str> = match data.kind {
+        tw_model::ChartKind::Pie => data
+            .categories
+            .iter()
+            .take(4)
+            .map(String::as_str)
+            .collect(),
+        _ => data.series.iter().take(4).map(|s| s.name.as_str()).collect(),
+    };
+    if labels.is_empty() {
+        return Vec::new();
+    }
+
+    let swatch_x = x + shape.shape.width * 0.72;
+    let text_x = swatch_x + 14.0;
+    let text_w = (x + shape.shape.width - text_x - 4.0).max(24.0);
+    let mut key_y = y + shape.shape.height * 0.30;
+    let mut out = Vec::with_capacity(labels.len());
+
+    for label in labels {
+        let text = if label.trim().is_empty() {
+            "Series"
+        } else {
+            label
+        };
+        let mut para = tw_model::Paragraph::with_text(text);
+        para.format.alignment = Some(tw_model::Alignment::Left);
+        // Match the 8px swatch row; keep type small so four keys fit.
+        if let Some(run) = para.runs.first_mut() {
+            run.format.font_size = Some(9.0);
+        }
+        let (lines, _) = crate::line::layout_paragraph(
+            shaper,
+            atlas,
+            &para,
+            ParagraphFrame::new(text_x, key_y - 2.0, text_w),
+            0xFF404040,
+        );
+        if let Some(mut line) = lines.into_iter().next() {
+            line.decorative = true;
+            line.run_map.clear();
+            out.push(LayoutBox::TextLine(line));
+        }
+        key_y += 16.0;
+    }
+    out
+}
+
 fn layout_shape_paragraphs(
     doc: &Document,
     shape: &tw_model::ShapeBlock,
@@ -2796,12 +3115,40 @@ fn layout_shape_paragraphs(
                 .with_tab_stops(resolved_para.tab_stops.clone().unwrap_or_default()),
             color,
         );
-        for line in lines {
+        for mut line in lines {
+            // Empty shape body text has a zero-width run_map; expand it across the
+            // content box so clicks / typing land inside the oval/rectangle.
+            expand_empty_shape_line_hit_target(&mut line, x, content_width);
             out.push(LayoutBox::TextLine(line));
         }
         y += height;
     }
     out
+}
+
+/// Make blank shape/SmartArt/header/footer lines receive clicks across their frame.
+fn expand_empty_shape_line_hit_target(line: &mut TextLine, content_x: f32, content_width: f32) {
+    if line.glyphs.iter().any(|g| !g.codepoint.is_whitespace()) {
+        return;
+    }
+    if line.run_map.is_empty() {
+        return;
+    }
+    let end = content_x + content_width.max(4.0);
+    if let Some(entry) = line.run_map.first_mut() {
+        entry.0 = content_x;
+        entry.1 = end;
+    }
+    claim_shape_line_frame(line, content_x, content_width);
+}
+
+/// Expand a shape/SmartArt line's hit band to its content frame without moving glyphs.
+///
+/// `pick_line_for_x` uses `line.x`/`line.width` for blank-area ownership between
+/// sibling nodes; glyph `run_map` stays accurate for caret placement in typed text.
+fn claim_shape_line_frame(line: &mut TextLine, content_x: f32, content_width: f32) {
+    line.x = content_x;
+    line.width = content_width.max(line.width);
 }
 
 fn layout_image(

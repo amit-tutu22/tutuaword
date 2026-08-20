@@ -2,7 +2,7 @@
 
 This document is the single source of truth for **Flutter ribbon, menu, and status-bar wiring** — what actually works today, what is partially wired, and what is an intentional placeholder. Use it to catch controls that *look* enabled but do nothing (the font/size dropdown bug class).
 
-**Last reviewed:** 2026-08-10  
+**Last reviewed:** 2026-08-19  
 **Scope:** `app/lib/ui/**`, `app/lib/editor/editor_controller.dart`, `app/lib/editor/controllers/**`, `app/lib/editor/editor_menu.dart`
 
 Related: [Long-Tail Gaps](long-tail-gaps.md) covers deferred **Rust/backend** work; this doc covers **UI ↔ engine** wiring.
@@ -15,7 +15,7 @@ Related: [Long-Tail Gaps](long-tail-gaps.md) covers deferred **Rust/backend** wo
 |----------|---------------|------|
 | **P0 — Broken / misleading** (looks enabled, fails silently) | 0 | — |
 | **P1 — Partial** (write OK, read/sync missing; or engine exists, UI not wired) | ~1 | Low |
-| **P2 — Intentional placeholders** (disabled / grayed) | ~5 | Low |
+| **P2 — Intentional placeholders** (disabled / grayed) | ~3 | Low |
 | **Working end-to-end** | ~90 controls | — |
 
 P0 remains **0**: `rg 'onPressed: \(\) \{\}' app/lib` and `rg 'onSelected: \(\) \{\}' app/lib` both return no matches. Primary ribbon tabs have **no hard-coded `onPressed: null` stubs**; remaining disabled controls are **contextual** (e.g. image tools without selection, Finish Mail Merge without data).
@@ -56,8 +56,8 @@ Controls that appear enabled but call an empty handler. Same class of bug as the
 | Location | Control | Code | Status |
 |----------|---------|------|--------|
 | Home → Styles | **Normal** | `home_tab.dart` — `onPressed: controller.applyNormalStyle`, `selected:` reads `activeParagraphStyle` | Fixed |
-| Ribbon | **Share** | `ribbon.dart` — `onPressed: null` + `kComingSoonTooltip` | Disabled (P2) |
-| Title bar | **Home (QAT)** | `title_bar.dart` — `onPressed: null` | Disabled (P2) |
+| Ribbon | **Share** | `ribbon.dart` — `onShare: shareWithApps()` via `share_plus` | Working |
+| Title bar | **Home (QAT)** | `editor_screen.dart` — `selectTab(RibbonTab.home)` | Working |
 | Edit menu | **Undo** | `editor_menu.dart:195` — `onSelected: controller.undo` | Fixed |
 | Edit menu | **Redo** | `editor_menu.dart:204` — `onSelected: controller.redo` | Fixed |
 
@@ -171,7 +171,7 @@ It is invoked from:
 | Export PDF | Working | `controller.exportPdf` |
 | Translate / Thesaurus / Language | Working | AI translate + thesaurus + proofing language dialog |
 | New Comment | Working | Dialog → `insertComment` |
-| Compare | Working | File picker → `compareWithDocumentPicker` |
+| Compare | Working | File picker → line-diff dialog (insertions/deletions) |
 | Restrict Editing | Working | `toggleRestrictEditing` |
 
 ### View (`view_tab.dart`) + Status bar (`status_bar.dart`)

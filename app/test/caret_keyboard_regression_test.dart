@@ -81,6 +81,39 @@ void main() {
       expect(controller.caretPage, 0);
     });
 
+    test('left/right resync page when caretAtPosition misses current page', () async {
+      final engine = _PageScopedCaretEngine();
+      final controller = EditorController.forTest(engine: engine);
+      addTearDown(controller.dispose);
+
+      await typeTextDirect(controller, 'abcd');
+      controller.selectionController.setCaret(
+        controller.caretRunId!,
+        2,
+        page: 1,
+      );
+
+      controller.moveGlyphCaretByArrow(LogicalKeyboardKey.arrowRight);
+
+      expect(controller.caretOffset, 3);
+      expect(controller.caretPage, 0,
+          reason: 'arrow move must resync to the page that owns the offset');
+    });
+
+    test('empty-page click stamps the run\'s real page, not the clicked page', () {
+      final engine = MockDocumentEngine(initialText: 'tail');
+      final controller = EditorController.forTest(engine: engine);
+      addTearDown(controller.dispose);
+      controller.setDisplayListForTest(fakeGlyphDisplayList(), pageCount: 4);
+      controller.ensureGlyphCaret();
+
+      controller.hitTestAt(3, 100, 100);
+
+      expect(controller.caretRunId, isNotNull);
+      expect(controller.caretPage, 0,
+          reason: 'short text lives on page 0 even when page 3 was clicked');
+    });
+
     test('arrows left/right move caret within typed text', () async {
       final controller = createTestEditorController();
       addTearDown(controller.dispose);
@@ -94,6 +127,67 @@ void main() {
 
       controller.moveGlyphCaretByArrow(LogicalKeyboardKey.arrowRight);
       expect(controller.caretOffset, 3);
+    });
+
+    test('KeyRepeatEvent moves caret twice when ribbon holds focus', () async {
+      final controller = createTestEditorController();
+      addTearDown(controller.dispose);
+
+      await typeTextDirect(controller, 'abcd');
+      expect(controller.caretOffset, 4);
+      FocusManager.instance.primaryFocus?.unfocus();
+
+      for (var i = 0; i < 2; i++) {
+        HardwareKeyboard.instance.handleKeyEvent(
+          KeyRepeatEvent(
+            physicalKey: PhysicalKeyboardKey.arrowLeft,
+            logicalKey: LogicalKeyboardKey.arrowLeft,
+            timeStamp: Duration(milliseconds: i),
+          ),
+        );
+      }
+
+      expect(controller.caretOffset, 2);
+    });
+
+    test('ArrowLeft with non-glyph focus moves caret via hardware handler', () async {
+      final controller = createTestEditorController();
+      addTearDown(controller.dispose);
+
+      await typeTextDirect(controller, 'abcd');
+      FocusManager.instance.primaryFocus?.unfocus();
+
+      HardwareKeyboard.instance.handleKeyEvent(
+        KeyDownEvent(
+          physicalKey: PhysicalKeyboardKey.arrowLeft,
+          logicalKey: LogicalKeyboardKey.arrowLeft,
+          timeStamp: Duration.zero,
+        ),
+      );
+
+      expect(controller.caretOffset, 3);
+    });
+
+    test('Enter with non-glyph focus inserts paragraph break via hardware handler',
+        () async {
+      final controller = createTestEditorController();
+      addTearDown(controller.dispose);
+      controller.ensureGlyphCaret();
+
+      await typeTextDirect(controller, 'line');
+      FocusManager.instance.primaryFocus?.unfocus();
+
+      HardwareKeyboard.instance.handleKeyEvent(
+        KeyDownEvent(
+          physicalKey: PhysicalKeyboardKey.enter,
+          logicalKey: LogicalKeyboardKey.enter,
+          timeStamp: Duration.zero,
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      await controller.ensureLayoutReady();
+
+      expect(controller.documentText, 'line\n');
     });
 
     test('arrow down near page bottom advances to next page', () async {
@@ -293,6 +387,103 @@ void main() {
 
       expect(controller.documentText, 'hi there');
       expect(controller.caretOffset, 8);
+    });
+
+    testWidgets('Space with null character still inserts a space', (tester) async {
+      final controller = await pumpEditor(tester);
+
+      await typeText(tester, controller, 'a');
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.space);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.space);
+      await typeText(tester, controller, 'b');
+      await controller.ensureLayoutReady();
+      await tester.pumpAndSettle();
+
+      expect(controller.documentText, 'a b');
+    });
+
+    testWidgets('Enter after typed line does not copy the line', (tester) async {
+      final controller = await pumpEditor(tester);
+
+      await typeText(tester, controller, 'fffjfgkgjjk');
+      expect(controller.caretOffset, 11);
+
+      for (var i = 0; i < 5; i++) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      }
+      await controller.ensureLayoutReady();
+      await tester.pumpAndSettle();
+
+      final lines = controller.documentText.split('\n');
+      expect(
+        lines.where((l) => l == 'fffjfgkgjjk').length,
+        1,
+        reason: 'Return must insert blank paragraphs, not copy the line: '
+            '${controller.documentText}',
+      );
+      expect(controller.documentText.startsWith('fffjfgkgjjk\n'), isTrue);
+    });
+
+    testWidgets('Enter with CR character inserts a paragraph break', (tester) async {
+      final controller = await pumpEditor(tester);
+
+      await typeText(tester, controller, 'ab');
+      await tester.sendKeyDownEvent(
+        LogicalKeyboardKey.enter,
+        character: '\r',
+      );
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.enter);
+      await controller.ensureLayoutReady();
+      await tester.pumpAndSettle();
+
+      expect(controller.documentText, 'ab\n');
+      expect(controller.documentText, isNot(contains('\r')));
+    });
+
+    testWidgets('Shift+Enter via Focus inserts a line break', (tester) async {
+      final controller = await pumpEditor(tester);
+
+      await typeText(tester, controller, 'first');
+      final runBefore = controller.caretRunId;
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      await controller.ensureLayoutReady();
+      await tester.pumpAndSettle();
+
+      expect(controller.caretRunId, runBefore);
+      expect(controller.documentText, contains('\n'));
+    });
+
+    testWidgets('NumpadEnter inserts a paragraph break', (tester) async {
+      final controller = await pumpEditor(tester);
+
+      await typeText(tester, controller, 'x');
+      await tester.sendKeyEvent(LogicalKeyboardKey.numpadEnter);
+      await controller.ensureLayoutReady();
+      await tester.pumpAndSettle();
+
+      expect(controller.documentText, 'x\n');
+    });
+
+    testWidgets('Delete with DEL character still removes next character',
+        (tester) async {
+      final controller = await pumpEditor(tester);
+
+      await typeText(tester, controller, 'ab');
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      // Platforms often attach U+007F to Delete — must not insert as text.
+      await tester.sendKeyDownEvent(
+        LogicalKeyboardKey.delete,
+        character: '\u007f',
+      );
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.delete);
+      await controller.ensureLayoutReady();
+      await tester.pumpAndSettle();
+
+      expect(controller.documentText, 'a');
+      expect(controller.documentText, isNot(contains('\u007f')));
+      expect(controller.caretOffset, 1);
     });
 
     testWidgets('Tab key inserts tab', (tester) async {
@@ -571,4 +762,13 @@ void main() {
       expect(target, 40 - 16);
     });
   });
+}
+
+/// Returns null from [caretAtPosition] on page 1 so Left/Right must resync.
+class _PageScopedCaretEngine extends MockDocumentEngine {
+  @override
+  CaretGeometry? caretAtPosition(int page, String runId, int charOffset) {
+    if (page == 1) return null;
+    return super.caretAtPosition(page, runId, charOffset);
+  }
 }

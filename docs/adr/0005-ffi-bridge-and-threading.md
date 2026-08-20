@@ -21,7 +21,7 @@ Communication:
 - UI → Rust: Command queue (`crossbeam-channel`), fire-and-forget
 - Rust → UI: Snapshot notification callback, double-buffered display lists
 
-Data transfer: flat byte buffers (zero-copy on native, copy on WASM).
+Data transfer: flat byte buffers. Native page display lists and atlases use **owned handoff** (`ExternalTypedData` + `NativeFinalizer` → `tw_free_buffer`); WASM uses **Transferable `ArrayBuffer`s** via the Web Worker bridge.
 
 Invalidation: page-granular — a keystroke re-layouts only the affected page.
 
@@ -30,7 +30,7 @@ Invalidation: page-granular — a keystroke re-layouts only the affected page.
 **Positive:**
 - UI thread never blocks — scrolling and cursor blink remain at 60 FPS during layout
 - Typing latency bounded by single-page layout (~8 ms) not full-document layout
-- Zero-copy display list transfer on native platforms
+- Zero-copy display list transfer on native platforms (page DL + atlas via owned FFI handoff; image payloads via `tw_get_image_asset` + wire v9)
 - Clean separation of concerns — UI code never touches the document model
 
 **Negative:**
@@ -60,6 +60,16 @@ Invalidation: page-granular — a keystroke re-layouts only the affected page.
 
 ## WASM Exception
 
-Web platform (Phase 1): no `SharedArrayBuffer` requirement. Layout runs synchronously after each command. Acceptable because web is not the primary target and WASM threading is available in Phase 2.
+Web platform (Phase 1): **no `SharedArrayBuffer` requirement.** The engine runs in a dedicated **Web Worker** with a main-thread bridge. Open/save use enqueue + event (`open_document_async`, `take_open_result`, …) instead of blocking `*_and_wait`. Page display lists and atlases cross as **Transferable `ArrayBuffer`s** on each worker pump.
 
-Implemented in R3.1 as `EngineExecutor`: `Session::new()` selects `ThreadedExecutor` (a worker thread, the model above) on native targets and `InlineExecutor` on `wasm32`. The inline engine owns no thread and executes queued commands on the caller's thread when the host drives it, normally via `Session::pump_events` on a timer or frame callback. `ThreadedExecutor` is compiled out on `wasm32`, so no `std::thread::spawn` or `std::thread::sleep` is reachable in a web build. See [architecture-remediation.md](../architecture-remediation.md) R3.1 for the drive contract and how background forward relayout is scheduled without an idle thread.
+Implemented in R3.1 as `EngineExecutor`: native uses `ThreadedExecutor`; `wasm32` uses `InlineExecutor` driven by the JS worker's ~8 ms pump. COOP/COEP + in-wasm threads remain deferred.
+
+### Worker + zero-copy follow-ons (2026-08)
+
+| Item | Status |
+|------|--------|
+| B0 `tw_get_transfer_stats` / `tw_reset_transfer_stats` | Implemented |
+| B1/B2 native `ExternalTypedData` for page DL + atlas | Implemented |
+| B3 `tw_get_image_asset` + wire v9 (empty image payloads) | Implemented |
+| A1–A4 Web Worker + Transferables + async open/save | Implemented |
+| A5 SAB / wasm threads | Deferred |

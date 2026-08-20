@@ -21,29 +21,31 @@ class StyleInspectorPane extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 10, 8, 6),
-            child: Row(
-              children: [
-                const Expanded(
-                  child: Text(
-                    'Style Inspector',
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+          if (!expanded) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 8, 6),
+              child: Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      'Style Inspector',
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                    ),
                   ),
-                ),
-                Tooltip(
-                  message: 'Close',
-                  child: IconButton(
-                    icon: const Icon(Icons.close, size: 18),
-                    onPressed: controller.toggleStyleInspector,
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                  Tooltip(
+                    message: 'Close',
+                    child: IconButton(
+                      icon: const Icon(Icons.close, size: 18),
+                      onPressed: controller.toggleStyleInspector,
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-          const Divider(height: 1),
+            const Divider(height: 1),
+          ],
           Expanded(
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(12),

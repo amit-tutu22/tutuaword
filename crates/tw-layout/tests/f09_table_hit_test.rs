@@ -97,3 +97,47 @@ fn u_f09_table_caret_at_non_left_cell() {
         "middle cell caret x ({cx}) should be right of left cell ({lx})"
     );
 }
+
+#[test]
+fn u_f09_table_arrow_probe_crosses_empty_cells() {
+    let mut doc = Document::new();
+    doc.sections[0]
+        .blocks
+        .push(Block::Table(Table::new(2, 3)));
+
+    let mut engine = LayoutEngine::new();
+    engine.layout_document(&doc);
+    let map = engine.line_map(0).expect("line map");
+
+    let left = cell_run_id(&doc, 0, 0);
+    let mid = cell_run_id(&doc, 0, 1);
+    let (x0, y0, height) = map.caret_at(left, 0).expect("caret cell 0");
+
+    // Mid-cell probe (well inside the neighbor column) must leave cell 0.
+    let (cx, _) = cell_center(&engine, 3, 0, 1);
+    let hit = map
+        .hit_test(cx, y0)
+        .expect("center of cell 1 must hit");
+    assert_eq!(hit.run_id, mid, "cell center hit must be the mid column");
+
+    // Small Right-arrow-style probes must also cross once past cell 0's width.
+    let mut found_mid = false;
+    for d in [2.0f32, 24.0, 60.0, 110.0, 180.0] {
+        let hx = x0 + d;
+        if let Some(h) = map.hit_test(hx, y0) {
+            if h.run_id == mid {
+                found_mid = true;
+                break;
+            }
+        }
+    }
+    assert!(found_mid, "Right-arrow probes from cell 0 must reach cell 1");
+
+    let below = cell_run_id(&doc, 1, 0);
+    let step = height.max(15.4) * 1.5;
+    let hit_down = map.hit_test(x0, y0 + step).expect("down hit");
+    assert_eq!(
+        hit_down.run_id, below,
+        "Down from row0 col0 should land row1 col0"
+    );
+}

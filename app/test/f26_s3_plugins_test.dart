@@ -27,6 +27,23 @@ void main() {
       expect(registry.lastError, isNull);
     });
 
+    test('U-F26-S3-empty-native-list-does-not-wipe', () {
+      final registry = PluginRegistry();
+      registry.installSampleEditPlugin(grantEdit: true);
+      registry.syncFromEngine('[]');
+      expect(registry.pluginCount, 1);
+      registry.syncFromEngine(
+        '[{"id":"com.tutuaword.sample.edit","name":"Sample Edit Plugin",'
+        '"version":"1.0.0","enabled":true,"capabilities":["document_read"],'
+        '"granted":["document_read"]}]',
+      );
+      expect(registry.pluginCount, 1);
+      expect(
+        registry.list().first.hasCapability(PluginCapability.documentEdit),
+        isFalse,
+      );
+    });
+
     test('U-F26-S3-lifecycle-disable', () {
       final registry = PluginRegistry();
       registry.installSampleEditPlugin(grantEdit: true);

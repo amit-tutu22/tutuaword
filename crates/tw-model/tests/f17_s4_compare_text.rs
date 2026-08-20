@@ -42,3 +42,15 @@ fn u_f17_s4_multiline_reorder_counts_changes() {
     assert!(summary.insertion_count >= 1);
     assert!(summary.deletion_count >= 1);
 }
+
+#[test]
+fn u_f17_s4_large_line_count_uses_bounded_diff() {
+    // Product of line counts exceeds the LCS table budget (250_000).
+    let left: Vec<String> = (0..600).map(|i| format!("L{i}")).collect();
+    let right: Vec<String> = (0..600).map(|i| format!("R{i}")).collect();
+    let left_joined = left.join("\n");
+    let right_joined = right.join("\n");
+    let summary = compare_text(&left_joined, &right_joined);
+    assert_eq!(summary.deletion_count, 600);
+    assert_eq!(summary.insertion_count, 600);
+}

@@ -7,15 +7,21 @@ class PluginsDialog extends StatefulWidget {
     super.key,
     required this.registry,
     this.onChanged,
+    this.onInstallSample,
+    this.onInvoke,
   });
 
   final PluginRegistry registry;
   final VoidCallback? onChanged;
+  final void Function(bool grantEdit)? onInstallSample;
+  final String Function(String id)? onInvoke;
 
   static Future<void> show(
     BuildContext context, {
     required PluginRegistry registry,
     VoidCallback? onChanged,
+    void Function(bool grantEdit)? onInstallSample,
+    String Function(String id)? onInvoke,
   }) {
     return showDialog<void>(
       context: context,
@@ -23,6 +29,8 @@ class PluginsDialog extends StatefulWidget {
       builder: (context) => PluginsDialog(
         registry: registry,
         onChanged: onChanged,
+        onInstallSample: onInstallSample,
+        onInvoke: onInvoke,
       ),
     );
   }
@@ -64,7 +72,11 @@ class _PluginsDialogState extends State<PluginsDialog> {
                   FilledButton(
                     key: const Key('plugins_install_sample'),
                     onPressed: () {
-                      widget.registry.installSampleEditPlugin(grantEdit: true);
+                      if (widget.onInstallSample != null) {
+                        widget.onInstallSample!(true);
+                      } else {
+                        widget.registry.installSampleEditPlugin(grantEdit: true);
+                      }
                       _refresh(
                         'Installed Sample Edit Plugin '
                         '(granted: document.read, document.edit)',
@@ -75,7 +87,11 @@ class _PluginsDialogState extends State<PluginsDialog> {
                   OutlinedButton(
                     key: const Key('plugins_install_sample_readonly'),
                     onPressed: () {
-                      widget.registry.installSampleEditPlugin(grantEdit: false);
+                      if (widget.onInstallSample != null) {
+                        widget.onInstallSample!(false);
+                      } else {
+                        widget.registry.installSampleEditPlugin(grantEdit: false);
+                      }
                       _refresh(
                         'Installed sample read-only '
                         '(document.edit not granted — Run will be denied)',
@@ -105,7 +121,9 @@ class _PluginsDialogState extends State<PluginsDialog> {
                         TextButton(
                           key: Key('plugin_invoke_${p.id}'),
                           onPressed: () {
-                            final result = widget.registry.invoke(p.id);
+                            final result = widget.onInvoke != null
+                                ? widget.onInvoke!(p.id)
+                                : widget.registry.invoke(p.id);
                             _refresh(result);
                           },
                           child: const Text('Run'),

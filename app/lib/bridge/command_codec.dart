@@ -166,6 +166,11 @@ class CommandCodec {
         'chart_data': chartData,
       };
 
+  static Map<String, dynamic> ensureShapeText({required String shapeId}) => {
+        'type': 'EnsureShapeText',
+        'shape_id': shapeId,
+      };
+
   static Map<String, dynamic> insertOfficeMath({
     required String runId,
     required int offset,

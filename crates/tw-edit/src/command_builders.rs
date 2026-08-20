@@ -403,12 +403,20 @@ pub fn insert_image_command(doc: &Document, width: f32, height: f32) -> Option<C
 }
 
 pub fn insert_shape_command(doc: &Document, shape_type: tw_model::ShapeKind) -> Option<Command> {
+    insert_shape_command_for_caret(doc, None, shape_type)
+}
+
+pub fn insert_shape_command_for_caret(
+    doc: &Document,
+    caret_run_id: Option<NodeId>,
+    shape_type: tw_model::ShapeKind,
+) -> Option<Command> {
     let (width, height) = match shape_type {
         tw_model::ShapeKind::Line => (120.0, 60.0),
         _ => (120.0, 80.0),
     };
     Some(Command::InsertShape {
-        after_block_id: block_id_from_caret(doc, None).or_else(|| last_block_id(doc))?,
+        after_block_id: block_id_from_caret(doc, caret_run_id).or_else(|| last_block_id(doc))?,
         shape_type,
         width,
         height,
@@ -417,8 +425,15 @@ pub fn insert_shape_command(doc: &Document, shape_type: tw_model::ShapeKind) -> 
 }
 
 pub fn insert_text_box_command(doc: &Document) -> Option<Command> {
+    insert_text_box_command_for_caret(doc, None)
+}
+
+pub fn insert_text_box_command_for_caret(
+    doc: &Document,
+    caret_run_id: Option<NodeId>,
+) -> Option<Command> {
     Some(Command::InsertTextBox {
-        after_block_id: block_id_from_caret(doc, None).or_else(|| last_block_id(doc))?,
+        after_block_id: block_id_from_caret(doc, caret_run_id).or_else(|| last_block_id(doc))?,
         width: 180.0,
         height: 90.0,
         style: tw_model::ShapeStyle::inserted_default(),
@@ -426,8 +441,16 @@ pub fn insert_text_box_command(doc: &Document) -> Option<Command> {
 }
 
 pub fn insert_word_art_command(doc: &Document, text: impl Into<String>) -> Option<Command> {
+    insert_word_art_command_for_caret(doc, None, text)
+}
+
+pub fn insert_word_art_command_for_caret(
+    doc: &Document,
+    caret_run_id: Option<NodeId>,
+    text: impl Into<String>,
+) -> Option<Command> {
     Some(Command::InsertWordArt {
-        after_block_id: block_id_from_caret(doc, None).or_else(|| last_block_id(doc))?,
+        after_block_id: block_id_from_caret(doc, caret_run_id).or_else(|| last_block_id(doc))?,
         text: text.into(),
         width: 220.0,
         height: 72.0,
@@ -442,8 +465,16 @@ pub fn insert_diagram_command_with_kind(
     doc: &Document,
     kind: tw_model::DiagramKind,
 ) -> Option<Command> {
+    insert_diagram_command_with_kind_for_caret(doc, None, kind)
+}
+
+pub fn insert_diagram_command_with_kind_for_caret(
+    doc: &Document,
+    caret_run_id: Option<NodeId>,
+    kind: tw_model::DiagramKind,
+) -> Option<Command> {
     Some(Command::InsertDiagram {
-        after_block_id: block_id_from_caret(doc, None).or_else(|| last_block_id(doc))?,
+        after_block_id: block_id_from_caret(doc, caret_run_id).or_else(|| last_block_id(doc))?,
         width: 432.0,
         height: 216.0,
         kind,
@@ -458,8 +489,16 @@ pub fn insert_chart_command_with_kind(
     doc: &Document,
     kind: tw_model::ChartKind,
 ) -> Option<Command> {
+    insert_chart_command_with_kind_for_caret(doc, None, kind)
+}
+
+pub fn insert_chart_command_with_kind_for_caret(
+    doc: &Document,
+    caret_run_id: Option<NodeId>,
+    kind: tw_model::ChartKind,
+) -> Option<Command> {
     Some(Command::InsertChart {
-        after_block_id: block_id_from_caret(doc, None).or_else(|| last_block_id(doc))?,
+        after_block_id: block_id_from_caret(doc, caret_run_id).or_else(|| last_block_id(doc))?,
         width: 432.0,
         height: 252.0,
         kind,

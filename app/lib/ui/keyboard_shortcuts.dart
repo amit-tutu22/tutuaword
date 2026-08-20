@@ -81,6 +81,7 @@ enum WordChord {
   ellipsis,
   spelling,
   printPreview,
+  keyboardHelp,
 }
 
 /// Dispatched by the `Shortcuts` map; `editor_screen.dart` holds the one
@@ -172,6 +173,13 @@ const kWordChordSpecs = <WordChordSpec>[
     label: 'Ctrl/Cmd+F2',
     action: 'Print preview',
     key: LogicalKeyboardKey.f2,
+  ),
+  WordChordSpec(
+    chord: WordChord.keyboardHelp,
+    label: 'F1',
+    action: 'Keyboard shortcuts help',
+    key: LogicalKeyboardKey.f1,
+    bare: true,
   ),
 
   // ── Undo / clipboard ────────────────────────────────────────────────────

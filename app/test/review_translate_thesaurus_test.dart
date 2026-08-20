@@ -42,6 +42,28 @@ void main() {
       expect(controller.proofingLanguage.translateName, 'Spanish');
     });
 
+    testWidgets('I-review-thesaurus-uses-word-at-caret', (tester) async {
+      final engine = MockDocumentEngine(initialText: 'I am happy today');
+      final controller = createTestEditorController(engine: engine);
+      addTearDown(controller.dispose);
+
+      // Caret inside "happy" with no selection — Word expands to the word.
+      controller.selectionController.setCaret(engine.defaultRunId, 7);
+      expect(controller.hasGlyphSelection, isFalse);
+
+      await pumpRibbonTab(tester, ReviewTab(controller: controller));
+      await tester.scrollUntilVisible(
+        find.byKey(const Key('review_thesaurus')),
+        120,
+        scrollable: find.byType(Scrollable),
+      );
+      await tester.tap(find.byKey(const Key('review_thesaurus')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('thesaurus_dialog')), findsOneWidget);
+      expect(find.textContaining('happy'), findsWidgets);
+    });
+
     testWidgets('I-review-thesaurus-replaces-word', (tester) async {
       final engine = MockDocumentEngine(initialText: 'I am happy today');
       final controller = createTestEditorController(engine: engine);

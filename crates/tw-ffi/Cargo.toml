@@ -19,6 +19,12 @@ parking_lot = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 
+# wasmtime (via tw-plugin) does not build for iOS (fiber asm). Desktop/Android
+# keep the real sandbox; iOS uses stub plugin FFI in plugin_host_stub.rs.
+[target.'cfg(not(target_os = "ios"))'.dependencies]
+tw-plugin = { path = "../tw-plugin" }
+
 [dev-dependencies]
 # Builds multi-page fixtures for the stale-page hit-test regression tests.
 tw-native = { path = "../tw-native" }
+tw-render = { path = "../tw-render" }

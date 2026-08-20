@@ -29,6 +29,9 @@ pub const COMMAND_QUEUE_CAPACITY: usize = 512;
 /// Bounded worker → session event channel; overflow uses drop-oldest backpressure.
 pub const EVENT_CHANNEL_CAPACITY: usize = 256;
 
+/// Bounded outbound event backlog before drop-oldest backpressure applies.
+pub const EVENT_BUFFER_CAPACITY: usize = 64;
+
 /// Outbound event queue with per-page `DisplayListReady` coalescing.
 ///
 /// Coalescing collapses redundant repaints, but the correlation id of every
@@ -62,6 +65,19 @@ impl EventPublisher {
             self.ack_page = *page;
             self.ack_version = *version;
             self.coalesce_display_ready(*page);
+        }
+        // Drop oldest non-coalesced events (especially large DocumentSaved payloads)
+        // so a slow consumer cannot grow worker memory without bound.
+        while self.buffer.len() >= EVENT_BUFFER_CAPACITY {
+            if let Some(idx) = self
+                .buffer
+                .iter()
+                .position(|e| !matches!(e, BridgeEvent::DisplayListReady { .. }))
+            {
+                self.buffer.remove(idx);
+            } else {
+                self.buffer.pop_front();
+            }
         }
         self.buffer.push_back(event);
         self.flush();
@@ -269,6 +285,8 @@ pub(crate) struct WorkerCore {
     version: u64,
     current_page: u32,
     cached_pages: Vec<Arc<SinglePageSnapshot>>,
+    cached_atlas_generation: u64,
+    cached_atlas_bytes: Arc<Vec<u8>>,
     /// Tenant policy (defaults permissive for local/dev).
     policy: PolicyEngine,
     /// A non-edit command pulled off the queue while batching consecutive edits;
@@ -302,6 +320,8 @@ impl WorkerCore {
             version: 0,
             current_page: 0,
             cached_pages: Vec::new(),
+            cached_atlas_generation: 0,
+            cached_atlas_bytes: Arc::new(Vec::new()),
             policy: PolicyEngine::permissive(),
             pending: None,
         };
@@ -376,7 +396,10 @@ impl WorkerCore {
         self.version += 1;
         let version = self.version;
         let current_page = self.current_page;
-        let text = document_plain_text(&self.session.document);
+        let text = match relayout {
+            Relayout::Forward => self.snapshot.read().document_text.clone(),
+            _ => document_plain_text(&self.session.document),
+        };
         let read_only = self.session.document.settings.read_only;
         let relayout_start = self.layout.relayout_start_page() as usize;
         let is_incremental = self.layout.last_pass_incremental();
@@ -446,7 +469,16 @@ impl WorkerCore {
         let atlas_generation = atlas.generation;
         let atlas_width = atlas.width;
         let atlas_height = atlas.height;
-        let atlas_bytes = Arc::new(DisplayListBuilder::atlas_to_bytes(atlas, atlas_generation));
+        let atlas_bytes = if atlas_generation == self.cached_atlas_generation
+            && !self.cached_atlas_bytes.is_empty()
+        {
+            Arc::clone(&self.cached_atlas_bytes)
+        } else {
+            let bytes = Arc::new(DisplayListBuilder::atlas_to_bytes(atlas, atlas_generation));
+            self.cached_atlas_generation = atlas_generation;
+            self.cached_atlas_bytes = Arc::clone(&bytes);
+            bytes
+        };
 
         let page_count = self.cached_pages.len().max(1) as u32;
         let props_json = document_properties_json(&self.session.document, page_count);
@@ -818,11 +850,19 @@ impl WorkerCore {
                 let mut apply_error = None;
                 let mut affected_nodes: Vec<NodeId> = Vec::new();
                 let mut tx = self.session.begin_transaction(None);
+                let mut force_full_relayout = false;
                 for command in commands {
                     let is_split = matches!(&command, Command::SplitParagraphAt { .. });
                     match tx.apply(command) {
                         Ok(result) => {
                             if is_split {
+                                force_full_relayout = true;
+                            }
+                            if let Some(run_id) = result.seed_run_id {
+                                self.layout_cache
+                                    .write()
+                                    .set_last_split_caret(run_id, 0);
+                            } else if is_split {
                                 if let Some(&run_id) = result.affected_nodes.first() {
                                     self.layout_cache
                                         .write()
@@ -846,32 +886,18 @@ impl WorkerCore {
                         });
                         return Flow::Continue;
                     }
-                    self.format_ctx.mark_document_modified();
-                    let outcome = self
-                        .rebuild(if affected_nodes.is_empty() {
-                            Relayout::Full
-                        } else {
-                            Relayout::Nodes(affected_nodes.as_slice())
-                        })
-                        .expect("edit rebuild always produces a layout");
-                    let version = outcome.version;
-                    let ready_page = outcome.ready_page;
+                    // Successful abort: document unchanged — do not mark dirty or relayout.
                     for batch_id in &request_ids {
                         self.events.send(BridgeEvent::Error {
                             request_id: *batch_id,
                             message: e.to_string(),
-                        });
-                        self.events.send(BridgeEvent::DisplayListReady {
-                            request_id: *batch_id,
-                            page: ready_page,
-                            version,
                         });
                     }
                 } else {
                     tx.commit();
                     self.format_ctx.mark_document_modified();
                     let outcome = self
-                        .rebuild(if affected_nodes.is_empty() {
+                        .rebuild(if force_full_relayout || affected_nodes.is_empty() {
                             Relayout::Full
                         } else {
                             Relayout::Nodes(affected_nodes.as_slice())

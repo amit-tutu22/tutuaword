@@ -15,6 +15,7 @@ class ViewController extends ChangeNotifier {
   bool _showNavigationPane = false;
   bool _showStyleInspector = false;
   bool _showAccessibilityChecker = false;
+  bool _showChangesPane = false;
   bool _showFormattingMarks = false;
   bool _preferOutlineTab = false;
   String _statusSuffix = '';
@@ -36,6 +37,7 @@ class ViewController extends ChangeNotifier {
   bool get showNavigationPane => _showNavigationPane;
   bool get showStyleInspector => _showStyleInspector;
   bool get showAccessibilityChecker => _showAccessibilityChecker;
+  bool get showChangesPane => _showChangesPane;
   bool get showFormattingMarks => _showFormattingMarks;
   String get statusSuffix => _statusSuffix;
   int? get scrollRequestPage => _scrollRequestPage;
@@ -194,6 +196,17 @@ class ViewController extends ChangeNotifier {
   void hideAccessibilityCheckerPane() {
     if (!_showAccessibilityChecker) return;
     _showAccessibilityChecker = false;
+    notifyListeners();
+  }
+
+  void showChangesPanePanel() {
+    _showChangesPane = true;
+    notifyListeners();
+  }
+
+  void hideChangesPanePanel() {
+    if (!_showChangesPane) return;
+    _showChangesPane = false;
     notifyListeners();
   }
 

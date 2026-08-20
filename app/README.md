@@ -74,8 +74,10 @@ Android, iOS, and web builds use injected fonts (no system font scan). On startu
 ## Cleanup
 
 ```bash
-scripts/cleanup.sh          # Flutter outputs + copied libs
-scripts/cleanup.sh --all      # also cargo target/ and platform caches
+scripts/cleanup.sh            # Flutter outputs + copied libs + scratch files
+scripts/cleanup.sh --all      # also cargo target/ (incl. CARGO_TARGET_DIR) and platform caches
+scripts/cleanup.sh --deep     # --all plus Xcode / simulator / Cursor sandbox caches
+scripts/cleanup.sh --dry-run  # print paths without deleting
 ```
 
 More detail: [docs/architecture/ffi-bridge.md](../docs/architecture/ffi-bridge.md)

@@ -4,20 +4,53 @@ import 'package:flutter/services.dart';
 ///
 /// [KeyDownEvent.character] is often null on Flutter web; fall back to
 /// [LogicalKeyboardKey.keyId] (USB usage) and shift maps.
+///
+/// Editing keys (Delete, Backspace, Tab, Enter, arrows, …) must never surface
+/// here — platforms often report Delete as U+007F and Enter as `\r`/`\n`,
+/// which must not be typed as text.
 String? printableCharacterFromKeyEvent(KeyEvent event) {
   if (event is! KeyDownEvent) return null;
+
+  if (_isNonPrintableEditingKey(event.logicalKey)) {
+    return null;
+  }
+
+  // Space is printable even when [character] is null or Shift is held
+  // (Ctrl/Cmd+Space is cleared by Shortcuts before this runs).
+  if (event.logicalKey == LogicalKeyboardKey.space) {
+    return ' ';
+  }
 
   final fromCharacter = event.character;
   if (fromCharacter != null && fromCharacter.isNotEmpty) {
     final ch = fromCharacter.substring(0, 1);
     final code = ch.codeUnitAt(0);
-    if (code == 0x09 || code >= 0x20) return ch;
+    // Printable BMP: space and above, excluding DEL (U+007F) which Delete emits.
+    // Also reject CR/LF if they arrive without an Enter logical key.
+    if (code >= 0x20 && code != 0x7f) return ch;
   }
 
   return _characterFromLogicalKey(
     event.logicalKey,
     shift: HardwareKeyboard.instance.isShiftPressed,
   );
+}
+
+bool _isNonPrintableEditingKey(LogicalKeyboardKey key) {
+  return key == LogicalKeyboardKey.delete ||
+      key == LogicalKeyboardKey.backspace ||
+      key == LogicalKeyboardKey.tab ||
+      key == LogicalKeyboardKey.enter ||
+      key == LogicalKeyboardKey.numpadEnter ||
+      key == LogicalKeyboardKey.escape ||
+      key == LogicalKeyboardKey.arrowLeft ||
+      key == LogicalKeyboardKey.arrowRight ||
+      key == LogicalKeyboardKey.arrowUp ||
+      key == LogicalKeyboardKey.arrowDown ||
+      key == LogicalKeyboardKey.home ||
+      key == LogicalKeyboardKey.end ||
+      key == LogicalKeyboardKey.pageUp ||
+      key == LogicalKeyboardKey.pageDown;
 }
 
 String? _characterFromLogicalKey(

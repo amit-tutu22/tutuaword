@@ -1,6 +1,8 @@
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:tutuaword/editor/formatting_marks.dart';
+
 /// Parsed display list from Rust tw-render binary format (v3/v4).
 class DisplayListSnapshot {
   DisplayListSnapshot({
@@ -27,6 +29,7 @@ class DisplayListSnapshot {
     required this.imageCropRects,
     required this.shapeIds,
     required this.shapeRects,
+    this.formattingMarks = const [],
   });
 
   final int version;
@@ -55,6 +58,10 @@ class DisplayListSnapshot {
   final Float32List imageCropRects;
   final List<String> shapeIds;
   final Float32List shapeRects;
+  final List<FormattingMark> formattingMarks;
+
+  /// Maximum glyphs we will parse from a single page payload (fail-soft beyond this).
+  static const int _maxGlyphCount = 500000;
 
   factory DisplayListSnapshot.fromBytes(Uint8List bytes) {
     if (bytes.length < 20) {
@@ -81,24 +88,43 @@ class DisplayListSnapshot {
       offset += 4;
       final atlasLen = _readU32(bytes, offset);
       offset += 4;
+      if (atlasLen > 256 * 1024 * 1024 || offset + atlasLen > bytes.length) {
+        return DisplayListSnapshot.empty();
+      }
       atlasPixels = bytes.sublist(offset, offset + atlasLen);
       offset += atlasLen;
     }
 
+    if (offset + 4 > bytes.length) {
+      return DisplayListSnapshot.empty();
+    }
     final glyphCount = _readU32(bytes, offset);
     offset += 4;
+    if (glyphCount > _maxGlyphCount ||
+        offset + glyphCount * 24 + 4 > bytes.length) {
+      return DisplayListSnapshot.empty();
+    }
     final glyphOffsets = Float32List(glyphCount * 2);
     for (var i = 0; i < glyphCount * 2; i++) {
+      if (offset + 4 > bytes.length) {
+        return DisplayListSnapshot.empty();
+      }
       glyphOffsets[i] = _readF32(bytes, offset);
       offset += 4;
     }
     final glyphSrcRects = Float32List(glyphCount * 4);
     for (var i = 0; i < glyphCount * 4; i++) {
+      if (offset + 4 > bytes.length) {
+        return DisplayListSnapshot.empty();
+      }
       glyphSrcRects[i] = _readF32(bytes, offset);
       offset += 4;
     }
     final glyphColors = Int32List(glyphCount);
     for (var i = 0; i < glyphCount; i++) {
+      if (offset + 4 > bytes.length) {
+        return DisplayListSnapshot.empty();
+      }
       glyphColors[i] = _readU32(bytes, offset);
       offset += 4;
     }
@@ -118,6 +144,7 @@ class DisplayListSnapshot {
     Float32List imageCropRects = Float32List(0);
     var shapeIds = <String>[];
     Float32List shapeRects = Float32List(0);
+    var formattingMarks = const <FormattingMark>[];
     if (fileVersion >= 2 && offset + 4 <= bytes.length) {
       final pathData = _readPathBatch(bytes, offset);
       pathPoints = pathData.$1;
@@ -140,6 +167,11 @@ class DisplayListSnapshot {
         shapeIds = shapeData.$1;
         shapeRects = shapeData.$2;
         offset = shapeData.$3;
+      }
+      if (fileVersion >= 8 && offset + 4 <= bytes.length) {
+        final markData = _readFormattingMarksBatch(bytes, offset);
+        formattingMarks = markData.$1;
+        offset = markData.$2;
       }
     }
 
@@ -167,6 +199,7 @@ class DisplayListSnapshot {
       imageCropRects: imageCropRects,
       shapeIds: shapeIds,
       shapeRects: shapeRects,
+      formattingMarks: formattingMarks,
     );
   }
 
@@ -195,6 +228,7 @@ class DisplayListSnapshot {
       imageCropRects: Float32List(0),
       shapeIds: [],
       shapeRects: Float32List(0),
+      formattingMarks: const [],
     );
   }
 
@@ -227,6 +261,7 @@ class DisplayListSnapshot {
   /// left alone so pages sharing an asset only decode it once.
   Future<Map<String, ui.Image>> decodeImages({
     Set<String> skip = const {},
+    Future<Uint8List?> Function(String assetId)? resolveAsset,
   }) async {
     final decoded = <String, ui.Image>{};
     for (var i = 0; i < imageAssetIds.length; i++) {
@@ -234,7 +269,10 @@ class DisplayListSnapshot {
       if (skip.contains(id) || decoded.containsKey(id) || i >= imagePayloads.length) {
         continue;
       }
-      final payload = imagePayloads[i];
+      var payload = imagePayloads[i];
+      if (payload.isEmpty && resolveAsset != null) {
+        payload = await resolveAsset(id) ?? Uint8List(0);
+      }
       if (payload.isEmpty) {
         continue;
       }
@@ -433,6 +471,37 @@ _readImageBatch(
     offset += len;
   }
   return (shapeIds, rects, offset);
+}
+
+(List<FormattingMark>, int) _readFormattingMarksBatch(Uint8List bytes, int offset) {
+  if (offset + 4 > bytes.length) {
+    return (const [], offset);
+  }
+  final markCount = _readU32(bytes, offset);
+  offset += 4;
+  const maxMarks = 200000;
+  if (markCount > maxMarks) {
+    return (const [], offset);
+  }
+  final positionsLen = markCount * 3;
+  if (offset + positionsLen * 4 + markCount > bytes.length) {
+    return (const [], offset);
+  }
+  final marks = <FormattingMark>[];
+  for (var i = 0; i < markCount; i++) {
+    final x = _readF32(bytes, offset + i * 12);
+    final y = _readF32(bytes, offset + i * 12 + 4);
+    final height = _readF32(bytes, offset + i * 12 + 8);
+    final kindByte = bytes[offset + positionsLen * 4 + i];
+    final kind = switch (kindByte) {
+      1 => FormattingMarkKind.tab,
+      2 => FormattingMarkKind.paragraph,
+      _ => FormattingMarkKind.space,
+    };
+    marks.add(FormattingMark(kind: kind, x: x, y: y, height: height));
+  }
+  offset += positionsLen * 4 + markCount;
+  return (marks, offset);
 }
 
 int _readU32(Uint8List bytes, int offset) {

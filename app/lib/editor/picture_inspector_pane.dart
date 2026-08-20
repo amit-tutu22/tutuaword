@@ -74,14 +74,16 @@ class _PictureInspectorPaneState extends State<PictureInspectorPane> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Padding(
-            padding: EdgeInsets.fromLTRB(12, 10, 12, 6),
-            child: Text(
-              'Picture',
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+          if (!widget.expanded) ...[
+            const Padding(
+              padding: EdgeInsets.fromLTRB(12, 10, 12, 6),
+              child: Text(
+                'Picture',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+              ),
             ),
-          ),
-          const Divider(height: 1),
+            const Divider(height: 1),
+          ],
           Expanded(
             child: Padding(
               padding: const EdgeInsets.all(12),

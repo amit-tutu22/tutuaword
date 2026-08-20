@@ -67,6 +67,9 @@ impl InlineExecutor {
     }
 }
 
+/// Maximum commands processed per inline `drive()` call (keeps wasm UI responsive).
+pub const INLINE_DRIVE_BUDGET: usize = 8;
+
 impl EngineExecutor for InlineExecutor {
     fn submit(&self, command: QueuedCommand) -> bool {
         if self.shutdown.load(Ordering::Acquire) {
@@ -103,11 +106,16 @@ impl EngineExecutor for InlineExecutor {
 
         let mut work = 0usize;
         let mut stopped = false;
+        let mut commands_run = 0usize;
         loop {
+            if commands_run >= INLINE_DRIVE_BUDGET {
+                break;
+            }
             let Some(queued) = core.take_pending().or_else(|| self.pop_command()) else {
                 break;
             };
             work += 1;
+            commands_run += 1;
             let mut next_command = || self.pop_command();
             if core.execute(queued, &mut next_command) == Flow::Shutdown {
                 stopped = true;

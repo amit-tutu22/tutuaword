@@ -3,10 +3,11 @@ import 'package:flutter/services.dart';
 import 'package:tutuaword/bridge/app_version.dart';
 import 'package:tutuaword/bridge/external_link.dart';
 import 'package:tutuaword/bridge/support_links.dart';
+import 'package:tutuaword/ui/keyboard_help_dialog.dart';
 import 'package:tutuaword/ui/privacy_policy_dialog.dart';
 import 'package:tutuaword/ui/word_theme.dart';
 
-/// About, help, support, and store feedback (View ribbon / Help menu).
+/// About, help, support, and store feedback (title-bar gear / Help menu).
 class TutuawordAboutDialog extends StatefulWidget {
   const TutuawordAboutDialog({super.key});
 
@@ -81,6 +82,17 @@ class _TutuawordAboutDialogState extends State<TutuawordAboutDialog> {
               ),
               const SizedBox(height: 16),
               _LinkTile(
+                key: const Key('about_keyboard_help'),
+                icon: Icons.keyboard_alt_outlined,
+                label: 'Keyboard shortcuts',
+                subtitle: 'Word-compatible chord map (F1)',
+                onTap: () {
+                  final navigator = Navigator.of(context, rootNavigator: true);
+                  navigator.pop();
+                  KeyboardHelpDialog.show(navigator.context);
+                },
+              ),
+              _LinkTile(
                 key: const Key('about_contact_support'),
                 icon: Icons.mail_outline,
                 label: 'Contact support',
@@ -98,9 +110,11 @@ class _TutuawordAboutDialogState extends State<TutuawordAboutDialog> {
                 key: const Key('about_privacy_policy'),
                 icon: Icons.privacy_tip_outlined,
                 label: 'Privacy Policy',
+                subtitle: 'Local copy · also online',
                 onTap: () {
-                  Navigator.pop(context);
-                  PrivacyPolicyDialog.show(context);
+                  final navigator = Navigator.of(context, rootNavigator: true);
+                  navigator.pop();
+                  PrivacyPolicyDialog.show(navigator.context);
                 },
               ),
               if (showGooglePlayFeedback)

@@ -52,8 +52,8 @@ pub struct TextLine {
     pub run_map: Vec<(f32, f32, NodeId, usize)>,
     /// Character count of each `run_map` segment, parallel to `run_map`.
     ///
-    /// Blank characters (spaces, tabs) rasterize to empty bitmaps and never
-    /// reach `glyphs`, so a caret offset cannot be recovered by counting glyphs.
+    /// Used with `run_map` to recover source text for PDF / accessibility when
+    /// ligatures or zero-bitmap glyphs (spaces) would otherwise lose characters.
     pub run_map_chars: Vec<usize>,
     pub list_marker: Option<String>,
     /// X positions immediately after a space character, used for justification.
@@ -183,7 +183,7 @@ impl LineMap {
 
         // Prefer an exact run/glyph hit across all Y-matching lines first.
         for line in &y_matches {
-            for &(x_start, x_end, run_id, char_offset) in &line.run_map {
+            for (index, &(x_start, x_end, run_id, seg_offset)) in line.run_map.iter().enumerate() {
                 // Empty runs have zero width; give them a clickable caret target.
                 let end = if x_end <= x_start {
                     x_start + 4.0
@@ -191,6 +191,8 @@ impl LineMap {
                     x_end
                 };
                 if x >= x_start && x <= end {
+                    let char_offset =
+                        hit_offset_in_segment(line, index, x, x_start, x_end, seg_offset);
                     return Some(HitTestResult {
                         page: 0,
                         run_id,
@@ -212,9 +214,44 @@ impl LineMap {
             }
         }
 
+        // Probe landed between line bands — snap to the nearest line instead of
+        // always jumping to the page's last line (which broke Up/Down mid-page).
+        let probe_lines: Vec<&TextLine> = if y_matches.is_empty() {
+            nearest_line_by_y(&self.lines, y).into_iter().collect()
+        } else {
+            y_matches
+        };
+
+        for line in &probe_lines {
+            for (index, &(x_start, x_end, run_id, seg_offset)) in line.run_map.iter().enumerate() {
+                let end = if x_end <= x_start {
+                    x_start + 4.0
+                } else {
+                    x_end
+                };
+                if x >= x_start && x <= end {
+                    let char_offset =
+                        hit_offset_in_segment(line, index, x, x_start, x_end, seg_offset);
+                    return Some(HitTestResult {
+                        page: 0,
+                        run_id,
+                        char_offset,
+                    });
+                }
+            }
+            if let Some(line) = pick_line_for_x(&probe_lines, x) {
+                if let Some((run_id, char_offset)) = line_end_offset(line) {
+                    return Some(HitTestResult {
+                        page: 0,
+                        run_id,
+                        char_offset,
+                    });
+                }
+            }
+        }
+
         // Outside every line band: land on the nearest edge so empty pages stay
-        // editable. Below content → last line (Enter-at-bottom / page growth);
-        // above content → first line.
+        // editable. Above content → first line; below → last line.
         let edge = if let Some(first) = self.lines.first() {
             let first_top = first.y - first.ascent;
             if y < first_top {
@@ -245,8 +282,6 @@ impl LineMap {
     /// Returns `None` when [run_id] is not laid out on this page so callers can
     /// search other pages (critical after Enter creates a paragraph on page N+1).
     pub fn caret_at(&self, run_id: NodeId, char_offset: usize) -> Option<(f32, f32, f32)> {
-        let mut best: Option<(f32, f32, f32)> = None;
-
         for line in &self.lines {
             for (index, &(x_start, x_end, rid, seg_offset)) in line.run_map.iter().enumerate() {
                 if rid != run_id {
@@ -258,26 +293,31 @@ impl LineMap {
                     continue;
                 }
                 let local = char_offset - seg_offset;
-                // Some characters (especially whitespace) may not rasterize into
-                // positioned glyphs, which can make `seg_char_count` too small.
-                // Don't skip; interpolate with a safe effective char count below.
+                if local > seg_chars {
+                    continue;
+                }
 
                 let x = caret_x_in_segment(line, x_start, x_end, local, seg_chars);
                 let height = line.ascent + line.descent;
-                best = Some((x, line.y, height));
+                return Some((x, line.y, height));
             }
         }
 
-        if best.is_some() {
-            return best;
-        }
-
-        // Position is past the last laid-out segment — snap to the run's end.
+        // Position is past the last laid-out segment on this page — snap only when
+        // it matches the run end here; otherwise the run may continue on page N+1.
         for line in self.lines.iter().rev() {
-            for &(x_start, x_end, rid, _) in line.run_map.iter().rev() {
-                if rid == run_id {
+            for (index, &(x_start, x_end, rid, seg_offset)) in line.run_map.iter().enumerate().rev() {
+                if rid != run_id {
+                    continue;
+                }
+                let seg_chars = segment_char_count(line, index, x_start, x_end);
+                let end_offset = seg_offset + seg_chars;
+                if char_offset == end_offset {
                     let x = if x_end > x_start { x_end } else { x_start };
                     return Some((x, line.y, line.ascent + line.descent));
+                }
+                if char_offset > end_offset {
+                    return None;
                 }
             }
         }
@@ -308,17 +348,100 @@ fn line_end_offset(line: &TextLine) -> Option<(NodeId, usize)> {
     Some((run_id, char_offset + seg_chars))
 }
 
+/// Resolve the character offset under horizontal position `x` inside a segment.
+fn hit_offset_in_segment(
+    line: &TextLine,
+    index: usize,
+    x: f32,
+    x_start: f32,
+    x_end: f32,
+    seg_offset: usize,
+) -> usize {
+    let seg_chars = segment_char_count(line, index, x_start, x_end);
+    if x_end <= x_start || seg_chars == 0 {
+        return seg_offset;
+    }
+    if x <= x_start {
+        return seg_offset;
+    }
+    if x >= x_end {
+        return seg_offset + seg_chars;
+    }
+
+    // Walk visible glyphs and pick the nearer edge (Word-style).
+    let mut glyphs_in_seg: Vec<&PositionedGlyph> = line
+        .glyphs
+        .iter()
+        .filter(|g| g.x >= x_start - 0.5 && g.x < x_end + 0.5)
+        .collect();
+    glyphs_in_seg.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
+
+    if !glyphs_in_seg.is_empty() {
+        let mut offset = seg_offset;
+        for g in glyphs_in_seg {
+            let mid = g.x + g.width * 0.5;
+            if x < mid {
+                return offset;
+            }
+            offset += 1;
+        }
+        return seg_offset + seg_chars;
+    }
+
+    // Whitespace-only segment: interpolate across the segment width.
+    let t = (x - x_start) / (x_end - x_start);
+    let local = (t * seg_chars as f32).round() as usize;
+    seg_offset + local.min(seg_chars)
+}
+
+fn distance_to_line_band(y: f32, line: &TextLine) -> f32 {
+    let top = line.y - line.ascent;
+    let bottom = line.y + line.descent;
+    if y < top {
+        top - y
+    } else if y > bottom {
+        y - bottom
+    } else {
+        0.0
+    }
+}
+
+fn nearest_line_by_y<'a>(lines: &'a [TextLine], y: f32) -> Option<&'a TextLine> {
+    lines
+        .iter()
+        .min_by(|a, b| {
+            distance_to_line_band(y, a)
+                .partial_cmp(&distance_to_line_band(y, b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+}
+
 /// Among lines sharing a Y band, choose the one that owns horizontal position `x`.
 ///
 /// Body paragraphs usually contribute a single Y match, so blank clicks anywhere
 /// on that band still resolve. Table cells on one row contribute several matches;
-/// ownership is the rightmost line whose left edge is at or left of `x`.
+/// prefer a line whose horizontal span contains `x`, else the rightmost line
+/// whose left edge is at or left of `x`.
 fn pick_line_for_x<'a>(lines: &[&'a TextLine], x: f32) -> Option<&'a TextLine> {
     if lines.is_empty() {
         return None;
     }
     if lines.len() == 1 {
         return Some(lines[0]);
+    }
+    let mut containing: Option<&TextLine> = None;
+    for line in lines {
+        let right = if line.width > 0.0 {
+            line.x + line.width
+        } else {
+            line.x + 4.0
+        };
+        if x >= line.x - 0.5 && x <= right + 0.5 {
+            containing = Some(*line);
+        }
+    }
+    if let Some(line) = containing {
+        return Some(line);
     }
     let mut best: Option<&TextLine> = None;
     for line in lines {
@@ -338,6 +461,11 @@ fn pick_line_for_x<'a>(lines: &[&'a TextLine], x: f32) -> Option<&'a TextLine> {
 }
 
 fn segment_char_count(line: &TextLine, index: usize, x_start: f32, x_end: f32) -> usize {
+    if let Some(&count) = line.run_map_chars.get(index) {
+        if count > 0 {
+            return count;
+        }
+    }
     let glyph_count = line
         .glyphs
         .iter()
@@ -367,10 +495,12 @@ fn caret_x_in_segment(
     if x_end <= x_start {
         return x_start;
     }
-    let effective_chars = seg_char_count.max(local_offset + 1).max(1);
+    if local_offset >= seg_char_count {
+        return x_end;
+    }
+    let effective_chars = seg_char_count.max(1);
     let t = (local_offset as f32) / (effective_chars as f32);
-    let t_clamped = t.clamp(0.0, 1.0);
-    x_start + (x_end - x_start) * t_clamped
+    x_start + (x_end - x_start) * t.clamp(0.0, 1.0)
 }
 
 #[derive(Debug, Clone, Default)]
